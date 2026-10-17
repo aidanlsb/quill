@@ -58,13 +58,16 @@ jobs:
           sudo xcode-select -s /Applications/Xcode_26.3.app
           xcodebuild -version
           swift --version
+      # Swift 6.2 rejects a nonisolated mutable static (`#MutableGlobalVariable`).
+      # Complete checking is the Swift 6.2 default; pass it explicitly so that
+      # stays a hard failure if a later toolchain loosens the default.
       - name: Test
-        run: swift test
+        run: swift test -Xswiftc -strict-concurrency=complete
       - name: Build the app
-        run: swift build -c release --product Quill
+        run: swift build -c release --product Quill -Xswiftc -strict-concurrency=complete
       - name: Launch the app
         run: |
-          bin="$(swift build -c release --product Quill --show-bin-path)/Quill"
+          bin="$(swift build -c release --product Quill -Xswiftc -strict-concurrency=complete --show-bin-path)/Quill"
           test -x "$bin"
           log="$(mktemp)"
           "$bin" >"$log" 2>&1 &
@@ -87,5 +90,5 @@ jobs:
           echo "Quill stayed up for 5 seconds"
       - name: Drive caret, scroll, and directory buffers
         run: |
-          bin="$(swift build -c release --product Quill --show-bin-path)/Quill"
+          bin="$(swift build -c release --product Quill -Xswiftc -strict-concurrency=complete --show-bin-path)/Quill"
           QUILL_SMOKE=1 "$bin"

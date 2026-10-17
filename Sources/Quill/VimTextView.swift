@@ -56,69 +56,102 @@ final class TextKit2Layout: TextLayout, @unchecked Sendable {
             )
         }
         let utf16 = min(max(0, offset), (tv.string as NSString).length)
-        lm.ensureLayout(for: lm.documentRange)
-        guard let location = lm.location(lm.documentRange.location, offsetBy: utf16) else {
+        let lines = enumerateVisualLines(layout: lm)
+        guard visualLinesAreUsable(lines, buffer: buffer) else {
+            // Viewport-only or non-monotonic layout cannot be trusted. A bad
+            // index here is what pinned `j` on line 1.
+            stickyColumn = -1
             return LogicalLineLayout.shared.position(
                 from: offset, displayLines: delta, preferredColumn: preferredColumn, in: buffer
             )
         }
-        guard let fragment = lm.textLayoutFragment(for: location) else {
-            return LogicalLineLayout.shared.position(
-                from: offset, displayLines: delta, preferredColumn: preferredColumn, in: buffer
-            )
-        }
-        let lines = visualLines(around: fragment, layout: lm, extra: abs(delta) + 1)
-        guard !lines.isEmpty else { return offset }
-        let local = utf16 - lines[0].documentLocation
-        var index = lines.firstIndex { line in
-            let start = line.fragmentRange.location
-            return local >= start && local < start + max(line.fragmentRange.length, 1)
-        } ?? 0
+        var index = lines.lastIndex { line in
+            utf16 >= line.start && utf16 < line.start + line.length
+        } ?? lines.count - 1
         if preferredColumn != stickyColumn {
             stickyColumn = preferredColumn
-            stickyX = lines[index].line.locationForCharacter(at: min(local - lines[index].fragmentRange.location, lines[index].fragmentRange.length)).x
+            let local = min(max(0, utf16 - lines[index].start), lines[index].length)
+            stickyX = lines[index].line.locationForCharacter(at: local).x
         }
         index = min(max(0, index + delta), lines.count - 1)
         let line = lines[index]
-        let hit = line.line.characterIndex(for: CGPoint(x: stickyX, y: line.line.typographicBounds.midY))
-        let dest = line.documentLocation + line.fragmentRange.location + hit
-        return buffer.clampedCursor(dest, normalMode: true)
+        let rawHit = line.line.characterIndex(for: CGPoint(x: stickyX, y: line.line.typographicBounds.midY))
+        // `characterIndex(for:)` is either 0-based in the line or absolute in the
+        // fragment. Stay on this visual line either way — landing on `length`
+        // would be the first character of the next line.
+        let relative: Int
+        if line.localLocation > 0, rawHit >= line.localLocation {
+            relative = rawHit - line.localLocation
+        } else {
+            relative = rawHit
+        }
+        let hit = min(max(0, relative), max(0, line.length - 1))
+        return buffer.clampedCursor(line.start + hit, normalMode: true)
     }
 
     private struct VisualLine {
         var line: NSTextLineFragment
-        var fragmentRange: NSRange
-        var documentLocation: Int
+        /// Document UTF-16 offset of the first character on this visual line.
+        var start: Int
+        var length: Int
+        /// `characterRange.location` inside the fragment. Zero for a paragraph's first visual line.
+        var localLocation: Int
     }
 
-    private func visualLines(around fragment: NSTextLayoutFragment, layout lm: NSTextLayoutManager, extra: Int) -> [VisualLine] {
-        var fragments: [NSTextLayoutFragment] = [fragment]
-        var backward: NSTextLayoutFragment? = fragment
-        for _ in 0..<extra {
-            guard let current = backward else { break }
-            let start = current.rangeInElement.location
-            guard let before = lm.location(start, offsetBy: -1),
-                  let previous = lm.textLayoutFragment(for: before),
-                  previous !== current else { break }
-            fragments.insert(previous, at: 0)
-            backward = previous
-        }
-        var forward: NSTextLayoutFragment? = fragment
-        for _ in 0..<extra {
-            guard let current = forward else { break }
-            let end = current.rangeInElement.endLocation
-            guard let after = lm.location(end, offsetBy: 0),
-                  let next = lm.textLayoutFragment(for: after),
-                  next !== current else { break }
-            fragments.append(next)
-            forward = next
-        }
-        return fragments.flatMap { piece in
-            let origin = lm.offset(from: lm.documentRange.location, to: piece.rangeInElement.location)
-            return piece.textLineFragments.map { line in
-                VisualLine(line: line, fragmentRange: line.characterRange, documentLocation: origin)
+    /// How many visual lines TextKit actually produced. Smoke prints this
+    /// when `j` does not land where the buffer says it should.
+    func laidOutLineCount() -> Int {
+        guard let lm = textView?.textLayoutManager else { return 0 }
+        return enumerateVisualLines(layout: lm).count
+    }
+
+    func ensureFullLayout() {
+        guard let lm = textView?.textLayoutManager else { return }
+        _ = enumerateVisualLines(layout: lm)
+    }
+
+    /// `characterRange` is relative to its layout fragment, not the document.
+    /// Comparing those local ranges to a document offset only matches the
+    /// first line, so every later `j` retargets line 1. `.ensuresLayout`
+    /// forces fragments past the viewport; without it TextKit 2 only
+    /// materializes what is on screen.
+    private func enumerateVisualLines(layout lm: NSTextLayoutManager) -> [VisualLine] {
+        var lines: [VisualLine] = []
+        lm.enumerateTextLayoutFragments(
+            from: lm.documentRange.location,
+            options: [.ensuresLayout]
+        ) { fragment in
+            let fragmentStart = lm.offset(from: lm.documentRange.location, to: fragment.rangeInElement.location)
+            if fragmentStart == NSNotFound { return true }
+            for line in fragment.textLineFragments {
+                let range = line.characterRange
+                if range.location == NSNotFound || range.length == 0 { continue }
+                lines.append(VisualLine(
+                    line: line,
+                    start: fragmentStart + range.location,
+                    length: range.length,
+                    localLocation: range.location
+                ))
             }
+            return true
         }
+        return lines
+    }
+
+    private func visualLinesAreUsable(_ lines: [VisualLine], buffer: TextBuffer) -> Bool {
+        guard let first = lines.first, first.start == 0 else { return false }
+        // Wrapping may produce more visual lines than buffer lines. Fewer
+        // means the layout is still a partial viewport.
+        if lines.count < buffer.lineCount { return false }
+        var previousStart = -1
+        var coveredThrough = 0
+        for line in lines {
+            if line.start <= previousStart { return false }
+            if line.start < coveredThrough { return false }
+            previousStart = line.start
+            coveredThrough = line.start + line.length
+        }
+        return true
     }
 }
 
@@ -425,7 +458,14 @@ final class VimTextView: NSTextView {
         noteContentSizeChanged()
         guard let scroll = enclosingScrollView else { return }
         let clip = scroll.contentView
-        let rect = caretLineRect() ?? caretCell(suggested: NSRect(x: 0, y: 0, width: 1, height: rowHeight()))
+        var rect = caretLineRect() ?? caretCell(suggested: NSRect(x: 0, y: 0, width: 1, height: rowHeight()))
+        let line = engine.buffer.lineIndex(containing: clampUTF16(engine.cursor))
+        let estimatedMinY = textContainerOrigin.y + CGFloat(line) * rowHeight()
+        // A fragment TextKit has not laid out comes back inside the viewport,
+        // so the clip never follows the cursor. Use the logical row instead.
+        if line > 1, rect.maxY < rowHeight() * 2, estimatedMinY > clip.bounds.height {
+            rect = NSRect(x: rect.minX, y: estimatedMinY, width: max(rect.width, 1), height: rowHeight())
+        }
         let visible = clip.bounds
         var origin = visible.origin
         let pad = rowHeight()
@@ -459,9 +499,9 @@ final class VimTextView: NSTextView {
         let rows = max(1, (string as NSString).components(separatedBy: "\n").count)
         let estimated = CGFloat(rows) * rowHeight() + inset
         var used: CGFloat = 0
-        if let lm = textLayoutManager {
-            lm.ensureLayout(for: lm.documentRange)
-            used = lm.usageBoundsForTextContainer.height + inset
+        if textLayoutManager != nil {
+            layoutAdapter.ensureFullLayout()
+            used = (textLayoutManager?.usageBoundsForTextContainer.height ?? 0) + inset
         }
         return max(clip, ceil(used), ceil(estimated))
     }
@@ -504,7 +544,7 @@ final class VimTextView: NSTextView {
     /// Baseline and leading edge of the glyph, in text-view coordinates.
     private func glyphPlacement(atUTF16 index: Int) -> (originX: CGFloat, baselineY: CGFloat)? {
         guard let lm = textLayoutManager else { return nil }
-        lm.ensureLayout(for: lm.documentRange)
+        layoutAdapter.ensureFullLayout()
         let doc = lm.documentRange.location
         guard let location = lm.location(doc, offsetBy: index),
               let fragment = lm.textLayoutFragment(for: location) else { return nil }
@@ -526,7 +566,7 @@ final class VimTextView: NSTextView {
 
     private func caretLineRect() -> NSRect? {
         guard let lm = textLayoutManager else { return nil }
-        lm.ensureLayout(for: lm.documentRange)
+        layoutAdapter.ensureFullLayout()
         let index = clampUTF16(selectedRange().location)
         let doc = lm.documentRange.location
         guard let location = lm.location(doc, offsetBy: index),

@@ -6,7 +6,7 @@ import QuillVim
 /// real scrolling, and oil-style directory buffers wired through `AppModel`.
 /// Run with `QUILL_SMOKE=1`. Exits the process.
 enum AppSmoke {
-    private static var started = false
+    @MainActor private static var started = false
 
     @MainActor
     static func runIfRequested(model: AppModel) {
@@ -128,22 +128,27 @@ enum AppSmoke {
             tv.applyResult(result)
         }
         let line = engine.buffer.lineIndex(containing: engine.cursor)
-        check(line == 40, "j stopped on line \(line)", failures: &failures)
+        let afterJ = motionDiag(engine: engine, tv: tv, scroll: scroll)
+        check(line == 40, "j stopped on line \(line) (\(afterJ))", failures: &failures)
         check(
             scroll.contentView.bounds.origin.y > 20,
-            "j did not scroll the viewport (origin \(scroll.contentView.bounds.origin.y))",
+            "j did not scroll the viewport (\(afterJ))",
             failures: &failures
         )
 
         _ = engine.type("G")
         tv.syncFromEngine()
         let atEnd = scroll.contentView.bounds.origin.y
-        check(atEnd > tv.frame.height * 0.3, "G left the viewport at \(atEnd) of \(tv.frame.height)", failures: &failures)
+        check(
+            atEnd > tv.frame.height * 0.3,
+            "G left the viewport at \(atEnd) of \(tv.frame.height) (\(motionDiag(engine: engine, tv: tv, scroll: scroll)))",
+            failures: &failures
+        )
         _ = engine.type("gg")
         tv.syncFromEngine()
         check(
             scroll.contentView.bounds.origin.y < 40,
-            "gg left the viewport at \(scroll.contentView.bounds.origin.y)",
+            "gg left the viewport (\(motionDiag(engine: engine, tv: tv, scroll: scroll)))",
             failures: &failures
         )
 
@@ -152,11 +157,32 @@ enum AppSmoke {
         _ = engine.type("<C-d>")
         tv.syncFromEngine()
         let after = engine.buffer.lineIndex(containing: engine.cursor)
-        check(after >= before + engine.scrollLineCount, "Ctrl-d moved \(before) -> \(after) scroll \(engine.scrollLineCount)", failures: &failures)
+        check(
+            after >= before + engine.scrollLineCount,
+            "Ctrl-d moved \(before) -> \(after) scroll \(engine.scrollLineCount) (\(motionDiag(engine: engine, tv: tv, scroll: scroll)))",
+            failures: &failures
+        )
         _ = engine.type("<C-u>")
         tv.syncFromEngine()
         let back = engine.buffer.lineIndex(containing: engine.cursor)
-        check(back <= before + 1, "Ctrl-u moved to \(back) from \(after)", failures: &failures)
+        check(
+            back <= before + 1,
+            "Ctrl-u moved to \(back) from \(after) (\(motionDiag(engine: engine, tv: tv, scroll: scroll)))",
+            failures: &failures
+        )
+    }
+
+    @MainActor
+    private static func motionDiag(engine: Engine, tv: VimTextView, scroll: NSScrollView) -> String {
+        let cursor = engine.cursor
+        let line = engine.buffer.lineIndex(containing: cursor)
+        let column = engine.buffer.column(of: cursor)
+        let textLines = tv.string.reduce(into: 1) { count, character in
+            if character == "\n" { count += 1 }
+        }
+        let origin = scroll.contentView.bounds.origin.y
+        let clip = scroll.contentView.bounds.height
+        return "line \(line) col \(column) cursor \(cursor) bufferLines \(engine.buffer.lineCount) textLines \(textLines) visualLines \(tv.layoutAdapter.laidOutLineCount()) doc \(tv.frame.height) clip \(clip) origin \(origin)"
     }
 
     @MainActor
