@@ -13,6 +13,7 @@ public final class Engine {
     /// Leader key in normal mode. Space by default; configurable by the host.
     public var leaderKey: Character = " "
     /// Sequence → action after the leader. Host loads this from config.
+    public var keymap = Keymap()
     public var leaderBindings: [String: HostAction] = [
         "sf": .findFiles,
         "sg": .liveGrep,
@@ -37,10 +38,15 @@ public final class Engine {
     var pendingFind: FindKind?
     var pendingTextObjectInner: Bool?
     var pendingLeader: String?
+    var pendingMarkSet = false
+    var pendingMarkJump: Character?
+    var mapPrefix = ""
 
     var lastFind: (FindKind, Character)?
     var searchPattern: String = ""
     var searchForward: Bool = true
+    var commandHistory: [String] = []
+    var historyCursor: Int = 0
 
     private struct UndoEntry {
         var forward: [TextEdit]
@@ -157,6 +163,14 @@ public final class Engine {
         ))
     }
 
+    /// Drag-select in the text view. The anchor stays put; the caret follows the mouse.
+    public func beginMouseSelection(anchor: Int, caret: Int) {
+        visualAnchor = min(anchor, buffer.count)
+        mode = .visual
+        buffer.cursor = buffer.clampedCursor(max(anchor, caret), normalMode: true)
+        buffer.preferredColumn = buffer.column(of: buffer.cursor)
+    }
+
     public func moveCursor(to offset: Int) {
         buffer.cursor = buffer.clampedCursor(offset, normalMode: mode != .insert)
         buffer.preferredColumn = buffer.column(of: buffer.cursor)
@@ -217,6 +231,9 @@ public final class Engine {
         pendingFind = nil
         pendingTextObjectInner = nil
         pendingLeader = nil
+        pendingMarkSet = false
+        pendingMarkJump = nil
+        mapPrefix = ""
         if mode == .operatorPending {
             mode = .normal
         }
@@ -275,6 +292,31 @@ public final class Engine {
     }
 
     private func handleNormalCharacter(_ ch: Character) -> EngineResult {
+        if pendingMarkSet {
+            pendingMarkSet = false
+            return setMark(ch)
+        }
+        if pendingMarkJump != nil {
+            pendingMarkJump = nil
+            return jumpToMark(ch)
+        }
+        if parserIsIdle {
+            let next = mapPrefix + String(ch)
+            switch keymap.lookup(next) {
+            case .command(let name):
+                mapPrefix = ""
+                resetParser()
+                return EngineResult(didChangeText: false, beep: false, actions: [.command(name)])
+            case .prefix:
+                mapPrefix = next
+                return .noop
+            case .none:
+                if !mapPrefix.isEmpty {
+                    mapPrefix = ""
+                    return beepResult()
+                }
+            }
+        }
         if let prefix = pendingLeader {
             return handleLeader(prefix, ch)
         }
@@ -349,6 +391,18 @@ public final class Engine {
         case "\"":
             pendingQuote = true
             return .noop
+        case "m":
+            if operatorKind == nil, !mode.isVisual {
+                pendingMarkSet = true
+                return .noop
+            }
+            return beepResult()
+        case "'", "`":
+            if operatorKind == nil, !mode.isVisual {
+                pendingMarkJump = ch
+                return .noop
+            }
+            return beepResult()
         case "g":
             pendingG = true
             return .noop
@@ -452,6 +506,7 @@ public final class Engine {
             if mode.isVisual { return beepResult() }
             mode = .commandLine
             commandLine = ":"
+            historyCursor = commandHistory.count
             return .noop
         case "-":
             if operatorKind == nil, !mode.isVisual {
@@ -625,6 +680,12 @@ public final class Engine {
             updatePreferredColumn(after: kind)
             resetParser()
             return .noop
+        }
+        switch kind {
+        case .gotoLine, .fileStart, .search:
+            recordJump(from: buffer.cursor)
+        default:
+            break
         }
         buffer.cursor = buffer.clampedCursor(resolved.position, normalMode: true)
         updatePreferredColumn(after: kind)
@@ -1438,21 +1499,24 @@ public final class Engine {
             let cmd = String(commandLine.dropFirst()).trimASCIISpaces()
             mode = .normal
             commandLine = ""
-            switch cmd {
-            case "w":
-                return EngineResult(didChangeText: false, beep: false, actions: [.write])
-            case "q":
-                if isModified {
-                    statusMessage = "No write since last change"
-                    return beepResult()
-                }
-                return EngineResult(didChangeText: false, beep: false, actions: [.quit])
-            case "wq", "x":
-                return EngineResult(didChangeText: false, beep: false, actions: [.writeQuit])
-            default:
-                statusMessage = "Not an editor command"
-                return beepResult()
+            if !cmd.isEmpty { commandHistory.append(cmd) }
+            return executeEx(cmd)
+        case .left:
+            return .noop
+        case .right:
+            return .noop
+        case .up:
+            guard !commandHistory.isEmpty else { return .noop }
+            historyCursor = max(0, historyCursor - 1)
+            if historyCursor >= commandHistory.count { historyCursor = commandHistory.count - 1 }
+            commandLine = ":" + commandHistory[historyCursor]
+            return .noop
+        case .down:
+            if historyCursor + 1 < commandHistory.count {
+                historyCursor += 1
+                commandLine = ":" + commandHistory[historyCursor]
             }
+            return .noop
         case .character(let ch):
             commandLine.append(ch)
             return .noop
@@ -1485,6 +1549,157 @@ public final class Engine {
             currentStamp = nextStamp
             nextStamp += 1
         }
+    }
+
+    private var parserIsIdle: Bool {
+        count == nil && operatorKind == nil && !pendingG && !pendingQuote && pendingLeader == nil
+            && !pendingMarkSet && pendingMarkJump == nil
+    }
+
+    private func setMark(_ ch: Character) -> EngineResult {
+        guard ch.isLetter || ch == "<" || ch == ">" else { return beepResult() }
+        let kind = AnchorKind.mark(String(ch))
+        buffer.removeAnchors { $0.kind == kind }
+        buffer.addAnchor(Anchor(
+            id: AnchorID(raw: UInt64(ch.asciiValue ?? 1)),
+            offset: buffer.cursor,
+            gravity: .right,
+            kind: kind
+        ))
+        return .noop
+    }
+
+    private func jumpToMark(_ ch: Character) -> EngineResult {
+        guard let anchor = buffer.anchors.first(where: {
+            if case .mark(let name) = $0.kind { return name == String(ch) }
+            return false
+        }) else { return beepResult() }
+        recordJump(from: buffer.cursor)
+        buffer.cursor = buffer.clampedCursor(anchor.offset, normalMode: true)
+        buffer.preferredColumn = buffer.column(of: buffer.cursor)
+        return .noop
+    }
+
+    private func executeEx(_ cmd: String) -> EngineResult {
+        let parsed = Ex.parse(cmd)
+        switch parsed.name {
+        case "w":
+            return EngineResult(didChangeText: false, beep: false, actions: [.write])
+        case "q":
+            if parsed.bang || !isModified {
+                return EngineResult(didChangeText: false, beep: false, actions: [.quit])
+            }
+            statusMessage = "No write since last change"
+            return beepResult()
+        case "wq", "x":
+            return EngineResult(didChangeText: false, beep: false, actions: [.writeQuit])
+        case "e":
+            let name = parsed.args.isEmpty ? "edit" : "edit:\(parsed.args)"
+            return EngineResult(didChangeText: false, beep: false, actions: [.command(name)])
+        case "sp":
+            return EngineResult(didChangeText: false, beep: false, actions: [.command("split")])
+        case "vs":
+            return EngineResult(didChangeText: false, beep: false, actions: [.command("vsplit")])
+        case "set":
+            return applySet(parsed.args)
+        case "s":
+            return substitute(parsed)
+        default:
+            statusMessage = "Not an editor command"
+            return beepResult()
+        }
+    }
+
+    private func applySet(_ args: String) -> EngineResult {
+        let parts = args.split(separator: "=", maxSplits: 1).map(String.init)
+        guard parts.count == 2, parts[0] == "shiftwidth" || parts[0] == "sw", let width = Int(parts[1]) else {
+            statusMessage = "Not an editor command"
+            return beepResult()
+        }
+        shiftWidth = max(1, width)
+        return .noop
+    }
+
+    private func substitute(_ parsed: ParsedEx) -> EngineResult {
+        guard let parts = Searcher.substituteParts(parsed.args), !parts.pattern.isEmpty else {
+            statusMessage = "Not an editor command"
+            return beepResult()
+        }
+        let last = max(0, buffer.lineCount - 1)
+        let current = buffer.lineIndex(containing: buffer.cursor)
+        let startLine: Int
+        let endLine: Int
+        if parsed.rangeStart == .all {
+            startLine = 0
+            endLine = last
+        } else {
+            startLine = resolveAddress(parsed.rangeStart, current: current, last: last)
+            endLine = resolveAddress(parsed.rangeEnd ?? parsed.rangeStart, current: current, last: last)
+        }
+        let lower = min(startLine, endLine)
+        let upper = max(startLine, endLine)
+        beginTransaction()
+        var changed = false
+        for line in stride(from: upper, through: lower, by: -1) {
+            let content = buffer.lineContentRange(at: line)
+            let text = buffer.substring(content)
+            let updated = replaceInLine(text, pattern: parts.pattern, with: parts.replacement, global: parts.global)
+            if updated != text {
+                replace(content, with: updated)
+                changed = true
+            }
+        }
+        if !changed {
+            abortTransaction()
+            return beepResult()
+        }
+        commitTransaction()
+        return EngineResult(didChangeText: true, beep: false, actions: [])
+    }
+
+    private func resolveAddress(_ address: ParsedEx.Address?, current: Int, last: Int) -> Int {
+        switch address {
+        case .none, .current?: return current
+        case .last, .all: return last
+        case .number(let n): return min(max(0, n - 1), last)
+        case .mark(let name):
+            if let anchor = buffer.anchors.first(where: {
+                if case .mark(let mark) = $0.kind { return mark == String(name) }
+                return false
+            }) {
+                return buffer.lineIndex(containing: anchor.offset)
+            }
+            return current
+        }
+    }
+
+    private func replaceInLine(_ text: String, pattern: String, with replacement: String, global: Bool) -> String {
+        let ignore = Searcher.ignoresCase(pattern)
+        let hay = Array(text.utf16)
+        let folded = Array((ignore ? text.lowercased() : text).utf16)
+        let needle = Array((ignore ? pattern.lowercased() : pattern).utf16)
+        guard !needle.isEmpty else { return text }
+        var out: [UInt16] = []
+        let rep = Array(replacement.utf16)
+        var index = 0
+        var did = false
+        while index < hay.count {
+            let fits = index + needle.count <= hay.count
+            let equal = fits && folded[index..<(index + needle.count)].elementsEqual(needle)
+            if (!did || global) && equal {
+                out.append(contentsOf: rep)
+                index += needle.count
+                did = true
+                if !global {
+                    out.append(contentsOf: hay[index...])
+                    break
+                }
+            } else {
+                out.append(hay[index])
+                index += 1
+            }
+        }
+        return String(decoding: out, as: UTF16.self)
     }
 
     private func beepResult() -> EngineResult {

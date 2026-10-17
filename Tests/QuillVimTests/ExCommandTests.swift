@@ -64,6 +64,41 @@ final class ExCommandTests: XCTestCase {
         XCTAssertTrue(r.beep)
     }
 
+    func testForceQuitSubstituteSetAndSearch() {
+        let dirty = vim("█hello", keys: "i!<Esc>")
+        XCTAssertEqual(dirty.type(":q!<CR>").actions, [.quit])
+        XCTAssertVim("█one two one", keys: ":%s/one/two/g<CR>", "█two two two")
+        let engine = Engine(text: "hello")
+        _ = engine.type(":set shiftwidth=4<CR>")
+        XCTAssertEqual(engine.shiftWidth, 4)
+        XCTAssertVim("█one two", keys: "/o.e<CR>", "█one two")
+        XCTAssertVim("█One two", keys: "/one<CR>", "█One two")
+        let missed = Engine(text: "one")
+        XCTAssertTrue(missed.type("/One<CR>").beep)
+    }
+
+    func testMarksAndJumplist() {
+        let engine = Engine(text: "hello\nworld")
+        _ = engine.type("ma")
+        _ = engine.type("j")
+        XCTAssertEqual(engine.buffer.lineIndex(containing: engine.cursor), 1)
+        _ = engine.type("'a")
+        XCTAssertEqual(engine.buffer.lineIndex(containing: engine.cursor), 0)
+        _ = engine.type("G")
+        _ = engine.type("<C-o>")
+        XCTAssertEqual(engine.buffer.lineIndex(containing: engine.cursor), 0)
+    }
+
+    func testKeymap() {
+        let engine = Engine(text: "hello")
+        engine.keymap.bind("Q", command: "format")
+        XCTAssertEqual(engine.type("Q").actions, [.command("format")])
+        XCTAssertEqual(Ex.parse("%s/a/b/g").name, "s")
+        XCTAssertEqual(Ex.parse("%s/a/b/g").rangeStart, .all)
+        XCTAssertEqual(Ex.parse("1,3d").name, "d")
+        XCTAssertEqual(Ex.parse("'<,'>s/a/b").rangeStart, .mark("<"))
+    }
+
     func testLeaderCustomBinding() {
         let e = Engine(text: "hello")
         e.leaderBindings["x"] = .command("custom")

@@ -93,6 +93,10 @@ public struct TextBuffer: Equatable {
         anchors.sort { $0.offset < $1.offset }
     }
 
+    public mutating func removeAnchors(where matches: (Anchor) -> Bool) {
+        anchors.removeAll(where: matches)
+    }
+
     /// Remove anchors whose offset lies in `range` and return them unchanged.
     @discardableResult
     public mutating func removeAnchors(in range: Range<Int>) -> [Anchor] {
