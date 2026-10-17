@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Launch Quill with zero or more files/directories.
+# Usage:
+#   quill
+#   quill path/to/note.md
+#   quill .
+set -euo pipefail
+
+resolve_app() {
+  local here
+  here="$(cd "$(dirname "$0")" && pwd)"
+  if [[ -d "/Applications/Quill.app" ]]; then
+    echo "/Applications/Quill.app"
+  elif [[ -d "$here/../dist/Quill.app" ]]; then
+    echo "$here/../dist/Quill.app"
+  elif [[ -d "$here/../.build/Quill.app" ]]; then
+    echo "$here/../.build/Quill.app"
+  else
+    echo "Quill"
+  fi
+}
+
+APP="$(resolve_app)"
+if [[ $# -eq 0 ]]; then
+  if [[ "$APP" == "Quill" ]]; then
+    open -a Quill
+  else
+    open -a "$APP"
+  fi
+  exit 0
+fi
+
+# Expand relative paths so Launch Services opens the right files.
+args=()
+for arg in "$@"; do
+  if [[ -e "$arg" ]]; then
+    args+=("$(cd "$(dirname "$arg")" && pwd)/$(basename "$arg")")
+  else
+    args+=("$arg")
+  fi
+done
+
+if [[ "$APP" == "Quill" ]]; then
+  open -a Quill -- "${args[@]}"
+else
+  open -a "$APP" -- "${args[@]}"
+fi

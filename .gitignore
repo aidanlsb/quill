@@ -1,0 +1,13 @@
+.build/
+agent-tools/
+.swiftpm/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+DerivedData/
+dist/
+Quill.app/
+.DS_Store
+*.swp
+*.orig
+xcuserdata/
+user.xcuserdatad/

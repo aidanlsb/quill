@@ -1,0 +1,249 @@
+import Foundation
+
+/// Generic Language Server Protocol 3.17 client over JSON-RPC stdio.
+/// Nothing here is server-specific: command, args, root markers, and
+/// initialization options come from `LSPServerConfig`.
+public final class LSPClient: @unchecked Sendable {
+    public let config: LSPServerConfig
+    public private(set) var isRunning = false
+    public var onDiagnostics: ((String, [Diagnostic]) -> Void)?
+    public var onLog: ((String) -> Void)?
+
+    private var session: JSONRPCSession?
+    private var process: Process?
+    private var rootURI: String = ""
+    private var workspaceFolders: [JSONValue] = []
+
+    public init(config: LSPServerConfig) {
+        self.config = config
+    }
+
+    /// Start using an already-connected transport (tests).
+    public func attach(session: JSONRPCSession, rootURI: String) throws {
+        self.session = session
+        self.rootURI = rootURI
+        self.workspaceFolders = [.object([
+            "uri": .string(rootURI),
+            "name": .string(URL(string: rootURI)?.lastPathComponent ?? "workspace"),
+        ])]
+        session.onNotification = { [weak self] method, params in
+            self?.handleNotification(method, params)
+        }
+        session.onServerRequest = { [weak self] _, method, params in
+            self?.handleServerRequest(method, params)
+        }
+        session.startReading()
+        try initialize()
+        isRunning = true
+    }
+
+    /// Spawn `config.command` and talk JSON-RPC over stdin/stdout.
+    /// Throws `JSONRPCError.serverUnavailable` if the executable is missing so
+    /// the host can keep editing without language features.
+    public func start(root: URL) throws {
+        let exe = resolveExecutable(config.command)
+        guard let exe else {
+            throw JSONRPCError.serverUnavailable(config.command)
+        }
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: exe)
+        proc.arguments = config.arguments
+        proc.currentDirectoryURL = root
+        if !config.env.isEmpty {
+            var env = ProcessInfo.processInfo.environment
+            for (k, v) in config.env { env[k] = v }
+            proc.environment = env
+        }
+        let stdin = Pipe()
+        let stdout = Pipe()
+        let stderr = Pipe()
+        proc.standardInput = stdin
+        proc.standardOutput = stdout
+        proc.standardError = stderr
+        do {
+            try proc.run()
+        } catch {
+            throw JSONRPCError.serverUnavailable(config.command)
+        }
+        self.process = proc
+        let transport = ProcessTransport(input: stdin.fileHandleForWriting, output: stdout.fileHandleForReading)
+        let session = JSONRPCSession(transport: transport)
+        try attach(session: session, rootURI: root.absoluteString)
+    }
+
+    public func stop() {
+        try? session?.notify(method: "exit")
+        session?.close()
+        process?.terminate()
+        isRunning = false
+    }
+
+    public func didOpen(uri: String, languageId: String, version: Int, text: String) {
+        try? session?.notify(method: "textDocument/didOpen", params: .object([
+            "textDocument": .object([
+                "uri": .string(uri),
+                "languageId": .string(languageId),
+                "version": .number(Double(version)),
+                "text": .string(text),
+            ]),
+        ]))
+    }
+
+    public func didChange(uri: String, version: Int, text: String) {
+        try? session?.notify(method: "textDocument/didChange", params: .object([
+            "textDocument": .object([
+                "uri": .string(uri),
+                "version": .number(Double(version)),
+            ]),
+            "contentChanges": .array([
+                .object(["text": .string(text)]),
+            ]),
+        ]))
+    }
+
+    public func didSave(uri: String, text: String? = nil) {
+        let doc: [String: JSONValue] = ["uri": .string(uri)]
+        var params: [String: JSONValue] = ["textDocument": .object(doc)]
+        if let text { params["text"] = .string(text) }
+        try? session?.notify(method: "textDocument/didSave", params: .object(params))
+    }
+
+    public func didClose(uri: String) {
+        try? session?.notify(method: "textDocument/didClose", params: .object([
+            "textDocument": .object(["uri": .string(uri)]),
+        ]))
+    }
+
+    public func completion(uri: String, position: LSPPosition) throws -> [CompletionItem] {
+        let result = try session?.request(method: "textDocument/completion", params: textDocumentPosition(uri, position))
+        return parseCompletion(result ?? .null)
+    }
+
+    public func definition(uri: String, position: LSPPosition) throws -> [Location] {
+        let result = try session?.request(method: "textDocument/definition", params: textDocumentPosition(uri, position))
+        return parseLocations(result ?? .null)
+    }
+
+    public func hover(uri: String, position: LSPPosition) throws -> Hover? {
+        let result = try session?.request(method: "textDocument/hover", params: textDocumentPosition(uri, position))
+        return Hover.from(result ?? .null)
+    }
+
+    private func initialize() throws {
+        let caps = JSONValue.object([
+            "textDocument": .object([
+                "synchronization": .object([
+                    "didSave": .bool(true),
+                    "dynamicRegistration": .bool(false),
+                ]),
+                "completion": .object(["dynamicRegistration": .bool(false)]),
+                "hover": .object(["contentFormat": .array([.string("plaintext"), .string("markdown")])]),
+                "definition": .object(["dynamicRegistration": .bool(false)]),
+                "publishDiagnostics": .object(["relatedInformation": .bool(false)]),
+            ]),
+            "workspace": .object([
+                "workspaceFolders": .bool(true),
+                "configuration": .bool(true),
+            ]),
+        ])
+        let params = JSONValue.object([
+            "processId": .number(Double(ProcessInfo.processInfo.processIdentifier)),
+            "rootUri": .string(rootURI),
+            "capabilities": caps,
+            "workspaceFolders": .array(workspaceFolders),
+            "clientInfo": .object(["name": .string("Quill"), "version": .string("0.1")]),
+        ])
+        _ = try session?.request(method: "initialize", params: params)
+        try session?.notify(method: "initialized", params: .object([:]))
+    }
+
+    private func handleNotification(_ method: String, _ params: JSONValue?) {
+        if method == "textDocument/publishDiagnostics", let params = params?.object {
+            let uri = params["uri"]?.string ?? ""
+            let diags = params["diagnostics"]?.array?.compactMap(Diagnostic.from) ?? []
+            onDiagnostics?(uri, diags)
+        }
+        if method == "window/logMessage", let msg = params?.object?["message"]?.string {
+            onLog?(msg)
+        }
+    }
+
+    private func handleServerRequest(_ method: String, _ params: JSONValue?) -> JSONValue {
+        switch method {
+        case "workspace/workspaceFolders":
+            return .array(workspaceFolders)
+        case "workspace/configuration":
+            let items = params?.object?["items"]?.array ?? []
+            return .array(Array(repeating: .object([:]), count: max(1, items.count)))
+        case "client/registerCapability", "client/unregisterCapability", "window/workDoneProgress/create":
+            return .null
+        default:
+            return .null
+        }
+    }
+
+    private func textDocumentPosition(_ uri: String, _ pos: LSPPosition) -> JSONValue {
+        .object([
+            "textDocument": .object(["uri": .string(uri)]),
+            "position": pos.json,
+        ])
+    }
+
+    private func parseCompletion(_ value: JSONValue) -> [CompletionItem] {
+        if let arr = value.array {
+            return arr.compactMap(CompletionItem.from)
+        }
+        if let items = value.object?["items"]?.array {
+            return items.compactMap(CompletionItem.from)
+        }
+        return []
+    }
+
+    private func parseLocations(_ value: JSONValue) -> [Location] {
+        if let loc = Location.from(value) { return [loc] }
+        if let arr = value.array { return arr.compactMap(Location.from) }
+        return []
+    }
+
+    private func resolveExecutable(_ command: String) -> String? {
+        if command.hasPrefix("/") {
+            return FileManager.default.isExecutableFile(atPath: command) ? command : nil
+        }
+        let path = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/usr/local/bin"
+        for dir in path.split(separator: ":") {
+            let candidate = String(dir) + "/" + command
+            if FileManager.default.isExecutableFile(atPath: candidate) {
+                return candidate
+            }
+        }
+        return nil
+    }
+}
+
+final class ProcessTransport: ByteTransport, @unchecked Sendable {
+    let input: FileHandle
+    let output: FileHandle
+    private var closed = false
+
+    init(input: FileHandle, output: FileHandle) {
+        self.input = input
+        self.output = output
+    }
+
+    func write(_ data: Data) throws {
+        try input.write(contentsOf: data)
+    }
+
+    func readSome() throws -> Data? {
+        if closed { return nil }
+        let data = try output.read(upToCount: 64 * 1024)
+        if data == nil || data?.isEmpty == true { return nil }
+        return data
+    }
+
+    func close() {
+        closed = true
+        try? input.close()
+        try? output.close()
+    }
+}

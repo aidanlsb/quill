@@ -1,0 +1,22 @@
+{
+  "leader": " ",
+  "leaderMaps": {
+    "sf": "findFiles",
+    "sg": "liveGrep"
+  },
+  "columnWidth": 76,
+  "shiftWidth": 2,
+  "lsp": {
+    "servers": [
+      {
+        "name": "marksman",
+        "command": "marksman",
+        "arguments": ["server"],
+        "extensions": [".md", ".markdown"],
+        "languages": ["markdown"],
+        "rootMarkers": [".git", ".marksman.toml"],
+        "env": {}
+      }
+    ]
+  }
+}
