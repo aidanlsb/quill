@@ -17,7 +17,9 @@ public final class ScriptedTransport: ByteTransport, @unchecked Sendable {
     public func write(_ data: Data) throws {
         for payload in inbound.append(data) {
             guard let value = try? JSONValue.decode(payload), let obj = value.object else { continue }
-            let method = obj["method"]?.string ?? ""
+            // A reply to a server-initiated request has an id and no method.
+            // Answering it again would loop.
+            guard let method = obj["method"]?.string else { continue }
             let params = obj["params"]
             if let idVal = obj["id"] {
                 let id = idVal.int ?? 0
@@ -62,6 +64,20 @@ public final class ScriptedTransport: ByteTransport, @unchecked Sendable {
         ]
         if let params { obj["params"] = params }
         let encoded = try JSONValue.encode(.object(obj))
+        condition.lock()
+        replies.append(outbound.encode(encoded))
+        condition.signal()
+        condition.unlock()
+    }
+
+    /// Inject a server-to-client request (`workspace/applyEdit`, …).
+    public func pushRequest(id: Int = 1, method: String, params: JSONValue) throws {
+        let encoded = try JSONValue.encode(.object([
+            "jsonrpc": .string("2.0"),
+            "id": .number(Double(id)),
+            "method": .string(method),
+            "params": params,
+        ]))
         condition.lock()
         replies.append(outbound.encode(encoded))
         condition.signal()

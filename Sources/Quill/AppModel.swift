@@ -32,8 +32,10 @@ final class AppModel {
     var completions: [String] = []
     var diagnostics: [Diagnostic] = []
     var showUnsaved = false
+    /// Bumped when the buffer changes outside `keyDown`, so the text view syncs.
+    var revision = 0
 
-    enum PickerKind { case files, grep }
+    enum PickerKind { case files, grep, references, codeAction }
     enum PendingNavigation {
         case open(URL)
         case newFile
@@ -58,6 +60,8 @@ final class AppModel {
     private var grepTask: Task<Void, Never>?
     private var hoverGeneration = 0
     private var lspURI: String?
+    private var pendingJumps: [String: (line: Int?, column: Int?)] = [:]
+    private var codeActions: [CodeAction] = []
     var pendingNavigation: PendingNavigation?
     var themeIdentity = 0
 
@@ -81,6 +85,33 @@ final class AppModel {
     var modeName: String { engine.mode.displayName }
 
     func open(url: URL) {
+        if let target = LaunchRequest.target(from: url) {
+            openTarget(target)
+            return
+        }
+        openTarget(LaunchTarget(path: url.path))
+    }
+
+    /// Last parsed launch argument wins. `open` delivers `quill://` URLs separately.
+    func consumeLaunchArguments(_ arguments: [String]) {
+        guard let target = LaunchRequest.parse(arguments).last else { return }
+        openTarget(target)
+    }
+
+    func openTarget(_ target: LaunchTarget) {
+        let path = LaunchRequest.standardized(target.path)
+        if LaunchRequest.sameFile(open: fileURL?.path, isDirectory: isDirectory, target: path) {
+            if let line = target.line {
+                jumpToLine(line, column: target.column)
+            }
+            return
+        }
+        if target.line != nil {
+            pendingJumps[path] = (line: target.line, column: target.column)
+        } else {
+            pendingJumps.removeValue(forKey: path)
+        }
+        let url = URL(fileURLWithPath: path)
         switch NavigationGuard.decide(isModified: engine.isModified, force: false) {
         case .prompt(let text):
             message = text
@@ -88,9 +119,8 @@ final class AppModel {
             showUnsaved = true
             return
         case .allow:
-            break
+            performOpen(url)
         }
-        performOpen(url)
     }
 
     func openDirectory(_ url: URL) {
@@ -142,6 +172,9 @@ final class AppModel {
         let pending = pendingNavigation
         showUnsaved = false
         pendingNavigation = nil
+        if case .open(let url) = pending {
+            pendingJumps.removeValue(forKey: url.standardizedFileURL.path)
+        }
         if case .terminate = pending {
             NSApp.reply(toApplicationShouldTerminate: false)
         }
@@ -179,6 +212,7 @@ final class AppModel {
     }
 
     func handleEngineResult(_ result: EngineResult) {
+        if result.didChangeText { revision += 1 }
         modified = engine.isModified
         status = engine.mode.displayName
         if !engine.statusMessage.isEmpty { message = engine.statusMessage }
@@ -212,6 +246,12 @@ final class AppModel {
             presentFilePicker()
         case .liveGrep:
             presentGrepPicker()
+        case .findReferences:
+            findReferences()
+        case .codeAction:
+            presentCodeActions()
+        case .shell(let command):
+            runShell(command)
         case .command(let name):
             if name == "split" || name == "vsplit" {
                 message = "Split the window from the view layer once a second EditorWindow is attached"
@@ -349,9 +389,11 @@ final class AppModel {
                 let clients = await serversForCurrentFile()
                 for client in clients where client.capabilities.definitionProvider || client.isRunning {
                     if let locs = try? await client.definition(uri: uri, position: pos), let first = locs.first, let dest = first.fileURL {
-                        self.open(url: dest)
-                        let offset = LSPPosition.utf16Offset(in: self.engine.text, position: first.range.start)
-                        self.engine.moveCursor(to: offset)
+                        self.openTarget(LaunchTarget(
+                            path: dest.path,
+                            line: first.range.start.line + 1,
+                            column: first.range.start.character + 1
+                        ))
                         return
                     }
                 }
@@ -398,29 +440,131 @@ final class AppModel {
             self.picker = nil
             pickerKind = nil
         case .confirm:
-            if let item = picker.selected { openPickerPayload(item.payload) }
+            let kind = pickerKind
+            let item = picker.selected
             self.picker = nil
             pickerKind = nil
+            guard let item else { break }
+            if kind == .codeAction, let index = Int(item.payload), codeActions.indices.contains(index) {
+                let action = codeActions[index]
+                codeActions = []
+                applyCodeAction(action)
+            } else {
+                codeActions = []
+                openPickerPayload(item.payload)
+            }
         }
     }
 
     func openPickerPayload(_ payload: String) {
-        let parts = payload.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
-        if parts.count >= 2, let line = Int(parts.last ?? "") {
-            let path = parts.dropLast().joined(separator: ":")
-            open(url: URL(fileURLWithPath: path))
-            jumpToLine(line)
-            return
-        }
-        open(url: URL(fileURLWithPath: payload))
+        let split = LaunchRequest.splitLocation(payload)
+        openTarget(LaunchTarget(path: split.path, line: split.line, column: split.column))
     }
 
-    func jumpToLine(_ line: Int) {
-        let target = max(0, line - 1)
-        if target < engine.buffer.lineCount {
-            engine.moveCursor(to: engine.buffer.lineStarts[target])
+    func jumpToLine(_ line: Int, column: Int? = nil) {
+        let index = max(0, line - 1)
+        guard index < engine.buffer.lineCount else { return }
+        let start = engine.buffer.lineStarts[index]
+        var offset = start
+        if let column, column > 1 {
+            offset = start + column - 1
         }
+        let content = engine.buffer.lineContentRange(at: index)
+        if offset > content.upperBound { offset = content.upperBound }
+        engine.moveCursor(to: offset)
+        revision += 1
         pickerTick += 1
+    }
+
+    func findReferences() {
+        guard let url = fileURL, !isDirectory else {
+            message = "No language server"
+            return
+        }
+        let position = LSPPosition.position(utf16Offset: engine.cursor, in: engine.text)
+        let uri = url.absoluteString
+        let text = engine.text
+        Task {
+            let clients = await serversForCurrentFile()
+            guard let client = clients.first(where: \.isRunning) else {
+                self.message = "No language server"
+                return
+            }
+            do {
+                let locations = try await client.references(uri: uri, position: position)
+                if locations.isEmpty {
+                    self.message = "No references"
+                    return
+                }
+                let items = locations.map { location -> PickerItem in
+                    let line = location.range.start.line + 1
+                    let column = location.range.start.character + 1
+                    let path = location.fileURL?.path ?? location.uri
+                    let name = location.fileURL?.lastPathComponent ?? location.uri
+                    return PickerItem(
+                        title: "\(name):\(line)",
+                        subtitle: path,
+                        payload: "\(path):\(line):\(column)",
+                        preview: self.referencePreview(location, currentURI: uri, text: text)
+                    )
+                }
+                self.codeActions = []
+                self.pickerKind = .references
+                self.picker = PickerEngine(source: items)
+                self.message = "gr"
+            } catch {
+                self.message = error.localizedDescription
+            }
+        }
+    }
+
+    func presentCodeActions() {
+        guard let url = fileURL, !isDirectory else {
+            message = "No language server"
+            return
+        }
+        let text = engine.text
+        let range: LSPRange
+        if let selection = engine.visualSelection {
+            range = LSPRange(
+                start: LSPPosition.position(utf16Offset: selection.lowerBound, in: text),
+                end: LSPPosition.position(utf16Offset: selection.upperBound, in: text)
+            )
+        } else {
+            let position = LSPPosition.position(utf16Offset: engine.cursor, in: text)
+            range = LSPRange(start: position, end: position)
+        }
+        let uri = url.absoluteString
+        let context = diagnostics
+        Task {
+            let clients = await serversForCurrentFile()
+            guard let client = clients.first(where: \.isRunning) else {
+                self.message = "No language server"
+                return
+            }
+            do {
+                let actions = try await client.codeAction(uri: uri, range: range, diagnostics: context)
+                    .sorted { $0.isPreferred && !$1.isPreferred }
+                if actions.isEmpty {
+                    self.message = "No code actions"
+                    return
+                }
+                self.codeActions = actions
+                let items = actions.enumerated().map { index, action in
+                    PickerItem(
+                        title: action.title,
+                        subtitle: action.kind ?? "",
+                        payload: String(index),
+                        preview: action.kind ?? action.title
+                    )
+                }
+                self.pickerKind = .codeAction
+                self.picker = PickerEngine(source: items)
+                self.message = "<leader>ca"
+            } catch {
+                self.message = error.localizedDescription
+            }
+        }
     }
 
     func toggleFocus() { focusMode.toggle() }
@@ -482,6 +626,7 @@ final class AppModel {
         sync = DocumentSync(text: decoded.text, version: 1)
         docVersion = 1
         startLSP(for: url, text: decoded.text)
+        applyPendingJump(for: url)
         refreshStatus()
     }
 
@@ -515,6 +660,7 @@ final class AppModel {
             rootURL = url
             title = url.lastPathComponent + "/"
             modified = false
+            applyPendingJump(for: url)
             refreshStatus()
         } catch {
             message = error.localizedDescription
@@ -648,6 +794,11 @@ final class AppModel {
                         self.diagnostics = diags
                     }
                 }
+                client.onApplyEdit = { [weak self] edit in
+                    Task { @MainActor [weak self] in
+                        self?.applyWorkspaceEdit(edit)
+                    }
+                }
                 if !already {
                     client.didOpen(uri: uri, languageId: language, version: docVersion, text: text)
                     await servers.trackOpen(key: key, uri: uri)
@@ -715,6 +866,100 @@ final class AppModel {
 
     private func modificationDate(_ url: URL) -> Date? {
         try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+    }
+
+    private func applyPendingJump(for url: URL) {
+        let path = url.standardizedFileURL.path
+        guard let jump = pendingJumps.removeValue(forKey: path), let line = jump.line else { return }
+        jumpToLine(line, column: jump.column)
+    }
+
+    private func referencePreview(_ location: Location, currentURI: String, text: String) -> String {
+        let same = location.uri == currentURI || location.fileURL?.path == fileURL?.path
+        guard same else { return location.fileURL?.path ?? location.uri }
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        let line = location.range.start.line
+        guard line >= 0, line < lines.count else { return "" }
+        return String(lines[line])
+    }
+
+    private func applyCodeAction(_ action: CodeAction) {
+        if let edit = action.edit {
+            applyWorkspaceEdit(edit)
+        }
+        guard let command = action.command else { return }
+        let name = command.command
+        let arguments = command.arguments
+        Task {
+            let clients = await serversForCurrentFile()
+            guard let client = clients.first(where: \.isRunning) else {
+                if action.edit == nil { self.message = "No language server" }
+                return
+            }
+            do {
+                _ = try await client.executeCommand(command: name, arguments: arguments)
+            } catch {
+                self.message = error.localizedDescription
+            }
+        }
+    }
+
+    private func applyWorkspaceEdit(_ edit: WorkspaceEdit) {
+        guard let url = fileURL else {
+            message = "Edit applies to another file"
+            return
+        }
+        let edits = edit.bufferEdits(in: engine.text, file: url).map {
+            TextEdit(range: $0.range, replacement: $0.replacement)
+        }
+        let foreign = edit.containsEdits(outside: url)
+        if edits.isEmpty {
+            if foreign { message = "Edit applies to another file" }
+            return
+        }
+        let result = engine.applyHostEdits(edits)
+        handleEngineResult(result)
+        if foreign { message = "Edit applies to another file" }
+    }
+
+    private func runShell(_ command: String) {
+        let root = rootURL
+        Task {
+            let result = await Task.detached(priority: .userInitiated) {
+                Self.runHookProcess(command: command, root: root)
+            }.value
+            switch result {
+            case .open(let path, let line, let column):
+                let absolute = path.hasPrefix("/") ? path : root.appendingPathComponent(path).path
+                self.openTarget(LaunchTarget(path: absolute, line: line, column: column))
+            case .status(let text):
+                self.message = text
+            }
+        }
+    }
+
+    nonisolated private static func runHookProcess(command: String, root: URL) -> HookResult {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/sh")
+        proc.arguments = ["-c", command]
+        proc.currentDirectoryURL = root
+        let stdout = Pipe()
+        let stderr = Pipe()
+        proc.standardOutput = stdout
+        proc.standardError = stderr
+        do {
+            try proc.run()
+        } catch {
+            return .status(error.localizedDescription)
+        }
+        let (out, err) = ContentSearch.drain(
+            stdout: stdout.fileHandleForReading,
+            stderr: stderr.fileHandleForReading,
+            process: proc
+        )
+        let outText = String(data: out, encoding: .utf8) ?? ""
+        let errText = String(data: err, encoding: .utf8) ?? ""
+        return ShellHook.interpret(stdout: outText, stderr: errText, status: proc.terminationStatus)
     }
 
     private func refreshStatus() {

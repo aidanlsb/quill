@@ -6,6 +6,7 @@ import QuillVim
 struct QuillConfig: Equatable {
     var leader: String
     var leaderMaps: [String: String]
+    var shellCommands: [String: String]
     var lsp: LSPSettings
     var columnWidth: Int
     var shiftWidth: Int
@@ -13,6 +14,7 @@ struct QuillConfig: Equatable {
     static let `default` = QuillConfig(
         leader: " ",
         leaderMaps: ["sf": "findFiles", "sg": "liveGrep"],
+        shellCommands: [:],
         lsp: LSPSettings(servers: []),
         columnWidth: 76,
         shiftWidth: 2
@@ -47,14 +49,22 @@ struct QuillConfig: Equatable {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             let leader = try c.decodeIfPresent(String.self, forKey: .leader) ?? QuillConfig.default.leader
             let maps = try c.decodeIfPresent([String: String].self, forKey: .leaderMaps) ?? QuillConfig.default.leaderMaps
+            let shells = try c.decodeIfPresent([String: String].self, forKey: .shellCommands) ?? [:]
             let lsp = try c.decodeIfPresent(LSPSettings.self, forKey: .lsp) ?? QuillConfig.default.lsp
             let column = try c.decodeIfPresent(Int.self, forKey: .columnWidth) ?? QuillConfig.default.columnWidth
             let shift = try c.decodeIfPresent(Int.self, forKey: .shiftWidth) ?? QuillConfig.default.shiftWidth
-            config = QuillConfig(leader: leader, leaderMaps: maps, lsp: lsp, columnWidth: column, shiftWidth: shift)
+            config = QuillConfig(
+                leader: leader,
+                leaderMaps: maps,
+                shellCommands: shells,
+                lsp: lsp,
+                columnWidth: column,
+                shiftWidth: shift
+            )
         }
 
         enum CodingKeys: String, CodingKey {
-            case leader, leaderMaps, lsp, columnWidth, shiftWidth
+            case leader, leaderMaps, shellCommands, lsp, columnWidth, shiftWidth
         }
     }
 
@@ -63,16 +73,25 @@ struct QuillConfig: Equatable {
             engine.leaderKey = ch
         }
         engine.shiftWidth = shiftWidth
-        var maps: [String: HostAction] = [:]
+        // Overlay config onto the engine defaults so `ca` survives a config that only lists sf/sg.
+        var maps = engine.leaderBindings
         for (seq, name) in leaderMaps {
-            switch name {
-            case "findFiles": maps[seq] = .findFiles
-            case "liveGrep": maps[seq] = .liveGrep
-            default: maps[seq] = .command(name)
-            }
+            maps[seq] = Self.action(named: name)
         }
-        if !maps.isEmpty {
-            engine.leaderBindings = maps
+        for (seq, command) in shellCommands where !seq.isEmpty && !command.isEmpty {
+            maps[seq] = .shell(command)
+        }
+        engine.leaderBindings = maps
+    }
+
+    private static func action(named name: String) -> HostAction {
+        switch name {
+        case "findFiles": return .findFiles
+        case "liveGrep": return .liveGrep
+        case "codeAction": return .codeAction
+        case "findReferences": return .findReferences
+        case "goToDefinition": return .goToDefinition
+        default: return .command(name)
         }
     }
 }

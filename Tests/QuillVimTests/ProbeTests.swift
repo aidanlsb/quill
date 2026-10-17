@@ -75,6 +75,24 @@ final class ProbeTests: XCTestCase {
         XCTAssertEqual(engine.text, "[[")
     }
 
+    func testHostEditsAreOneUndoGroup() {
+        let engine = Engine(text: "aaa\nbbb\nccc")
+        engine.markSaved()
+        let noop = engine.applyHostEdits([])
+        XCTAssertFalse(noop.didChangeText)
+        XCTAssertFalse(engine.isModified)
+        let result = engine.applyHostEdits([
+            TextEdit(range: 0..<3, replacement: "AA"),
+            TextEdit(range: 8..<11, replacement: "CCCC"),
+        ])
+        XCTAssertEqual(engine.text, "AA\nbbb\nCCCC")
+        XCTAssertEqual(result.edits.count, 2)
+        XCTAssertTrue(engine.isModified)
+        engine.type("u")
+        XCTAssertEqual(engine.text, "aaa\nbbb\nccc")
+        XCTAssertFalse(engine.isModified)
+    }
+
     func testBufferIsNotWritableFromOutside() {
         let engine = Engine(text: "abc", cursor: 0)
         XCTAssertEqual(engine.buffer.text, "abc")

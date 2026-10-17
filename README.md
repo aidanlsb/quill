@@ -39,13 +39,16 @@ The macOS app target is written for Xcode 16+ / Swift 6. It has **not** been com
 ## CLI
 
 ```bash
-quill                  # empty window
-quill path/to/note.md  # open a file
-quill .                # open this folder as a directory buffer
-quill some/dir         # same, for that directory
+quill                    # empty window
+quill path/to/note.md    # open a file
+quill path/to/note.md:12 # cursor on line 12 (1-based)
+quill note.md:12:3       # line 12, column 3 (1-based UTF-16)
+quill +12 path/to/note.md
+quill .                  # open this folder as a directory buffer
+quill some/dir           # same, for that directory
 ```
 
-The `quill` script resolves `/Applications/Quill.app` (or a local `dist/Quill.app`) and calls `open -a`. After `Scripts/install.sh`, `quill` lives in `/usr/local/bin`.
+The `quill` script resolves `/Applications/Quill.app` (or a local `dist/Quill.app`) and calls `open -a`. A line or column is passed as a `quill://open?path&line&column` URL. If that file is already the open buffer, Quill moves the cursor and leaves unsaved edits in place. After `Scripts/install.sh`, `quill` lives in `/usr/local/bin`.
 
 ## Writing feel
 
@@ -76,7 +79,7 @@ Own engine: parse **count → operator → motion or text object**. Motions retu
 
 **Ex:** `:w` `:q` `:wq` only. `:q` refuses a dirty buffer.
 
-**Other:** `gd` (definition / wikilink), `-` (parent directory), **leader** (Space by default).
+**Other:** `gd` (definition / wikilink), `gr` (references), `-` (parent directory), **leader** (Space by default).
 
 `j`/`k` as operators stay linewise (vim `dj`). In normal/visual they follow wrapped display lines.
 
@@ -105,6 +108,7 @@ Default leader is **Space**. Configurable in `~/.config/quill/config.json`.
 |---|---|
 | `<leader>sf` | fuzzy files in the opened root (gitignore + hidden/VCS skipped) |
 | `<leader>sg` | live grep; results are `file:line` plus snippet |
+| `<leader>ca` | code actions for the cursor or selection |
 | ⌘P | alias for find files |
 
 The picker is a native floating panel with a preview.
@@ -114,6 +118,18 @@ The picker is a native floating panel with a preview.
 **Picker normal mode:** `j`/`k` move, `gg`/`G` top/bottom, Enter opens, `i`/`a` back to insert, **Esc** or `q` closes.
 
 Search is native (fuzzy subsequence matcher + line scan). If `rg` is on `PATH`, grep uses it and falls back otherwise.
+
+`gr` uses the same picker: each row is `file:line` with the source line as the preview. Insert and normal mode are unchanged.
+
+## Shell hooks
+
+`shellCommands` binds a leader sequence to a shell command. Quill runs it in the workspace root, off the main thread. The last non-empty stdout line is a file path, optionally `path:line` or `path:line:col`, and Quill opens it. A non-zero exit prints the error on the status line. The command string is config; Quill has no built-in knowledge of it.
+
+```json
+"shellCommands": { "d": "rvn daily" }
+```
+
+`<leader>d` runs `rvn daily`.
 
 ## Language servers
 
@@ -125,6 +141,7 @@ Example `~/.config/quill/config.json` (also under `examples/config.json`):
 {
   "leader": " ",
   "leaderMaps": { "sf": "findFiles", "sg": "liveGrep" },
+  "shellCommands": { "d": "rvn daily" },
   "columnWidth": 76,
   "shiftWidth": 2,
   "lsp": {
@@ -137,19 +154,28 @@ Example `~/.config/quill/config.json` (also under `examples/config.json`):
         "languages": ["markdown"],
         "rootMarkers": [".git", ".marksman.toml"],
         "env": {}
+      },
+      {
+        "name": "rvn",
+        "command": "rvn",
+        "arguments": ["lsp"],
+        "extensions": [".md", ".markdown"],
+        "languages": ["markdown"],
+        "rootMarkers": [".git"],
+        "env": {}
       }
     ]
   }
 }
 ```
 
-Other markdown/prose servers (harper-ls, `rvn lsp`, …) are the same shape: set `command`, `arguments`, `extensions`, and `rootMarkers`.
+`marksman` and `rvn lsp` are example command lines. Any other server is the same shape: set `command`, `arguments`, `extensions`, and `rootMarkers`.
 
-Wired: `initialize`, `initialized`, `textDocument/didOpen|didChange|didSave|didClose`, completion, definition (`gd` / ⌘-click), hover, `publishDiagnostics`. Server requests `workspace/configuration`, `workspace/workspaceFolders`, and capability registration are answered so generic servers can start.
+Wired: `initialize`, `initialized`, `textDocument/didOpen|didChange|didSave|didClose`, completion, definition (`gd` / ⌘-click), references (`gr`), code action (`<leader>ca`), hover, `publishDiagnostics`, `workspace/executeCommand`. A chosen code action applies its `WorkspaceEdit` or runs its command. Server `workspace/applyEdit` is applied too. Those edits go through the engine and undo as one group. Server requests `workspace/configuration`, `workspace/workspaceFolders`, and capability registration are answered so generic servers can start. Edits for a file that is not the open buffer are left alone and reported on the status line.
 
 ## What is verified vs not
 
-**Verified on Linux (`swift test`):** QuillVim (motions, operators, text objects, visual, `.` / undo, ex, leader, `-`), QuillLSP JSON-RPC framing and a mock-server lifecycle (initialize, document sync, completion, definition, hover, diagnostics, missing-server), QuillFS diffs (create/rename/delete/move), QuillSearch fuzzy + grep + picker insert/normal.
+**Verified on Linux (`swift test`):** QuillVim (motions, operators, text objects, visual, `.` / undo, ex, leader, `-`, `gr`, `<leader>ca`), QuillLSP JSON-RPC framing and a mock-server lifecycle (initialize, document sync, completion, definition, references, code action, executeCommand, applyEdit, hover, diagnostics, missing-server), launch-argument and shell-hook parsing, QuillFS diffs (create/rename/delete/move), QuillSearch fuzzy + grep + picker insert/normal.
 
 **Unverified:** compiling or running the macOS app (no macOS toolchain here). TextKit 2 display-line `j`/`k`, the confirmation sheet, Trash deletes, and a live language server should be checked in Xcode.
 

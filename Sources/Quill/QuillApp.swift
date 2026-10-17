@@ -14,7 +14,7 @@ struct QuillApp: App {
                 .onAppear {
                     appDelegate.attach(model)
                     NSApp.setActivationPolicy(.regular)
-                    consumeLaunchURLs()
+                    model.consumeLaunchArguments(Array(CommandLine.arguments.dropFirst()))
                     NSApp.windows.forEach { $0.delegate = appDelegate }
                 }
                 .onOpenURL { url in
@@ -43,14 +43,6 @@ struct QuillApp: App {
                 Button("Go to Definition") { model.goToDefinition() }
                     .keyboardShortcut("d", modifiers: .command)
             }
-        }
-    }
-
-    private func consumeLaunchURLs() {
-        let extras = CommandLine.arguments.dropFirst()
-        if let first = extras.first {
-            let url = URL(fileURLWithPath: first)
-            model.open(url: url)
         }
     }
 }

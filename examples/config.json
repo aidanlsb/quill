@@ -4,6 +4,9 @@
     "sf": "findFiles",
     "sg": "liveGrep"
   },
+  "shellCommands": {
+    "d": "rvn daily"
+  },
   "columnWidth": 76,
   "shiftWidth": 2,
   "lsp": {
@@ -15,6 +18,15 @@
         "extensions": [".md", ".markdown"],
         "languages": ["markdown"],
         "rootMarkers": [".git", ".marksman.toml"],
+        "env": {}
+      },
+      {
+        "name": "rvn",
+        "command": "rvn",
+        "arguments": ["lsp"],
+        "extensions": [".md", ".markdown"],
+        "languages": ["markdown"],
+        "rootMarkers": [".git"],
         "env": {}
       }
     ]

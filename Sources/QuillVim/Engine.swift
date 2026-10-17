@@ -17,6 +17,7 @@ public final class Engine {
     public var leaderBindings: [String: HostAction] = [
         "sf": .findFiles,
         "sg": .liveGrep,
+        "ca": .codeAction,
     ]
     public private(set) var isModified: Bool = false
     public private(set) var statusMessage: String = ""
@@ -147,6 +148,36 @@ public final class Engine {
         let width = buffer.measure(text)
         buffer.cursor = buffer.clampedCursor(range.lowerBound + width, normalMode: mode != .insert)
         buffer.preferredColumn = buffer.column(of: buffer.cursor)
+        if !nested { commitTransaction() }
+        return finishStroke(EngineResult(didChangeText: true, beep: false, actions: []), cursorBefore: before)
+    }
+
+    /// Several host edits (a code action, `workspace/applyEdit`) as one undo group.
+    /// Ranges are against the original text. They are applied end-to-start.
+    /// An empty list does not mark the buffer modified.
+    @discardableResult
+    public func applyHostEdits(_ edits: [TextEdit]) -> EngineResult {
+        strokeEdits.removeAll(keepingCapacity: true)
+        let before = buffer.cursor
+        if edits.isEmpty {
+            return finishStroke(.noop, cursorBefore: before)
+        }
+        let applyOrder = edits.sorted { lhs, rhs in
+            if lhs.range.lowerBound != rhs.range.lowerBound {
+                return lhs.range.lowerBound > rhs.range.lowerBound
+            }
+            return lhs.range.upperBound > rhs.range.upperBound
+        }
+        let nested = groupDepth > 0
+        if !nested { beginTransaction() }
+        for edit in applyOrder {
+            replace(edit.range, with: edit.replacement)
+        }
+        if let earliest = applyOrder.last {
+            let width = buffer.measure(earliest.replacement)
+            buffer.cursor = buffer.clampedCursor(earliest.range.lowerBound + width, normalMode: mode != .insert)
+            buffer.preferredColumn = buffer.column(of: buffer.cursor)
+        }
         if !nested { commitTransaction() }
         return finishStroke(EngineResult(didChangeText: true, beep: false, actions: []), cursorBefore: before)
     }
@@ -357,6 +388,10 @@ public final class Engine {
             if ch == "d", operatorKind == nil, !mode.isVisual {
                 resetParser()
                 return EngineResult(didChangeText: false, beep: false, actions: [.goToDefinition])
+            }
+            if ch == "r", operatorKind == nil, !mode.isVisual {
+                resetParser()
+                return EngineResult(didChangeText: false, beep: false, actions: [.findReferences])
             }
             return beepResult()
         }

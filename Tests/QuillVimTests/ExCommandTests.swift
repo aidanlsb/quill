@@ -40,6 +40,14 @@ final class ExCommandTests: XCTestCase {
         XCTAssertEqual(r.actions, [.goToDefinition])
     }
 
+    func testReferencesAndCodeActionKeys() {
+        let refs = Engine(text: "hello").type("gr")
+        XCTAssertEqual(refs.actions, [.findReferences])
+        XCTAssertFalse(refs.beep)
+        XCTAssertEqual(Engine(text: "hello").type(" ca").actions, [.codeAction])
+        XCTAssertVim("█hello", keys: "rx", "█xello")
+    }
+
     func testMinusOpensParentDirectory() {
         let r = Engine(text: "hello").type("-")
         XCTAssertEqual(r.actions, [.openParentDirectory])
