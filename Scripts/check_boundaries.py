@@ -10,6 +10,10 @@ Bare `NSApp` traps when the singleton is nil during SwiftUI init. The
 historical line was `NSApp.effectiveAppearance` in QuillTheme.current. Use
 `NSApp?` while the application object may be nil, or `NSApplication.shared`
 after launch.
+
+macOS /bin/bash is 3.2. `"${array[@]}"` with `set -u` is an unbound variable
+when the array is empty. The historical lines were `open ${wait_flag[@]}` and
+`open_app "${urls[@]}"` in Scripts/quill. Write `${name[@]+"${name[@]}"}`.
 """
 
 from __future__ import annotations
@@ -28,6 +32,14 @@ HISTORICAL = {
 }
 HISTORICAL_NSAPP = "        let appearance = NSApp.effectiveAppearance\n"
 BARE_NSAPP = re.compile(r"(?<![A-Za-z0-9_])NSApp(?![A-Za-z0-9_?])")
+SAFE_ARRAY = re.compile(
+    r"\$\{[A-Za-z_][A-Za-z0-9_]*\[@\]\+\"\$\{[A-Za-z_][A-Za-z0-9_]*\[@\]\}\"\}"
+)
+ANY_ARRAY = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*\[@\]\}")
+HISTORICAL_BASH = """
+open ${wait_flag[@]} -a Quill "$@"
+open_app "${urls[@]}"
+"""
 
 
 def code_only(line: str) -> str:
@@ -100,6 +112,37 @@ def scan_nsapp(text: str, path: str) -> list[str]:
     return errors
 
 
+def scan_bash(text: str, path: str) -> list[str]:
+    errors: list[str] = []
+    for index, line in enumerate(text.splitlines()):
+        code = line.split("#", 1)[0]
+        if ANY_ARRAY.search(SAFE_ARRAY.sub("", code)):
+            errors.append(
+                f"{path}:{index + 1}: unguarded array expansion breaks bash 3.2 under set -u "
+                f"when the array is empty. Write ${{name[@]+\"${{name[@]}}\"}}. "
+                f"Offending line: {line.strip()}"
+            )
+    return errors
+
+
+def shell_files() -> list[Path]:
+    found: list[Path] = []
+    scripts = ROOT / "Scripts"
+    for path in sorted(scripts.iterdir()):
+        if not path.is_file():
+            continue
+        if path.suffix == ".sh" or path.name in {"quill", "verify-quill"}:
+            found.append(path)
+    return found
+
+
+def scan_shell_tree() -> list[str]:
+    errors: list[str] = []
+    for path in shell_files():
+        errors.extend(scan_bash(path.read_text(), str(path.relative_to(ROOT))))
+    return errors
+
+
 def scan_tree() -> list[str]:
     errors: list[str] = []
     for folder in ("Sources", "Tests"):
@@ -116,6 +159,7 @@ def workflow_passes_complete_checking() -> list[str]:
     needed = (
         "swift test -Xswiftc -strict-concurrency=complete",
         "swift build -c release --product Quill -Xswiftc -strict-concurrency=complete",
+        "shellcheck -s bash",
     )
     return [f"ci.yml is missing `{item}`" for item in needed if item not in text]
 
@@ -152,7 +196,17 @@ def self_test() -> int:
     if scan_nsapp("/// `NSApp` is not required; the URL is queued.\n", "comment.swift"):
         print("self-test: a comment mentioning NSApp was rejected", file=sys.stderr)
         failed = True
-    repo = scan_tree()
+    historical_bash = scan_bash(HISTORICAL_BASH, "Scripts/quill")
+    if len(historical_bash) < 2:
+        print("self-test: historical bash 3.2 array expansions were accepted", file=sys.stderr)
+        failed = True
+    else:
+        print("self-test: rejected historical Scripts/quill array expansions")
+    safe_bash = 'open ${wait_flag[@]+"${wait_flag[@]}"} -a Quill "$@"\n'
+    if scan_bash(safe_bash, "Scripts/quill"):
+        print("self-test: the guarded array expansion was rejected", file=sys.stderr)
+        failed = True
+    repo = scan_tree() + scan_shell_tree()
     workflow = workflow_passes_complete_checking()
     if repo or workflow:
         print("self-test: repository failed the boundary check", file=sys.stderr)
@@ -161,14 +215,17 @@ def self_test() -> int:
         failed = True
     if failed:
         return 1
-    print("check_boundaries: concurrency escapes are justified, bare NSApp is rejected, and CI passes -strict-concurrency=complete")
+    print(
+        "check_boundaries: concurrency escapes are justified, bare NSApp is rejected, "
+        "bash 3.2 array expansions are guarded, and CI runs shellcheck plus -strict-concurrency=complete"
+    )
     return 0
 
 
 def main() -> int:
     if "--self-test" in sys.argv:
         return self_test()
-    errors = scan_tree() + workflow_passes_complete_checking()
+    errors = scan_tree() + scan_shell_tree() + workflow_passes_complete_checking()
     for error in errors:
         print(error, file=sys.stderr)
     if errors:
