@@ -83,6 +83,17 @@ final class LaunchRequestTests: XCTestCase {
         XCTAssertEqual(LaunchRequest.parse(["+12"]), [])
         XCTAssertEqual(LaunchRequest.parse(["--wait", "+4", "a.md"]), [LaunchTarget(path: "a.md", line: 4)])
         XCTAssertEqual(
+            LaunchRequest.parse(["quill://open?path=/tmp/notes&line=4&column=2"]),
+            [LaunchTarget(path: "/tmp/notes", line: 4, column: 2)]
+        )
+        XCTAssertEqual(
+            LaunchRequest.parse(["note.md:12", "quill://open?path=/tmp/dir"]),
+            [
+                LaunchTarget(path: "note.md", line: 12, column: nil),
+                LaunchTarget(path: "/tmp/dir", line: nil, column: nil),
+            ]
+        )
+        XCTAssertEqual(
             LaunchRequest.parse(["foo:bar"]),
             [LaunchTarget(path: "foo:bar", line: nil, column: nil)]
         )

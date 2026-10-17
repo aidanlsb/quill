@@ -29,6 +29,35 @@ final class MotionTests: XCTestCase {
         XCTAssertVim("█hello", keys: "$", "hell█o")
     }
 
+    func testHalfPageScroll() {
+        let lines = (0..<30).map { "l\($0)" }.joined(separator: "\n")
+        let engine = Engine(text: lines)
+        engine.scrollLineCount = 5
+        _ = engine.type("<C-d>")
+        XCTAssertEqual(engine.buffer.lineIndex(containing: engine.cursor), 5)
+        _ = engine.type("<C-u>")
+        XCTAssertEqual(engine.buffer.lineIndex(containing: engine.cursor), 0)
+        _ = engine.type("3<C-d>")
+        XCTAssertEqual(engine.scrollLineCount, 3)
+        XCTAssertEqual(engine.buffer.lineIndex(containing: engine.cursor), 3)
+        engine.openOnEnter = true
+        _ = engine.type("<C-d>")
+        XCTAssertTrue(engine.openOnEnter)
+    }
+
+    func testDirectoryRenameKeepsAnchorAndEnter() {
+        let engine = Engine(text: "notes.md\nsub/\n")
+        engine.setDirectoryAnchor(line: 0, id: 7, sourcePath: "/tmp/notes.md", isDirectory: false)
+        engine.setDirectoryAnchor(line: 1, id: 8, sourcePath: "/tmp/sub", isDirectory: true)
+        engine.openOnEnter = true
+        XCTAssertEqual(engine.type("<CR>").actions, [.openUnderCursor])
+        engine.type("0c$renamed.md<Esc>")
+        XCTAssertEqual(engine.lineTextUnderCursor(), "renamed.md")
+        XCTAssertEqual(engine.buffer.anchors.first?.id.raw, 7)
+        XCTAssertTrue(engine.openOnEnter)
+        XCTAssertEqual(engine.type("-").actions, [.openParentDirectory])
+    }
+
     func testGGAndG() {
         XCTAssertVim("aa\nbb\nc█c", keys: "gg", "█aa\nbb\ncc")
         XCTAssertVim("█aa\nbb\ncc", keys: "G", "aa\nbb\n█cc")

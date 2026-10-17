@@ -85,3 +85,7 @@ jobs:
             i=$((i + 1))
           done
           echo "Quill stayed up for 5 seconds"
+      - name: Drive caret, scroll, and directory buffers
+        run: |
+          bin="$(swift build -c release --product Quill --show-bin-path)/Quill"
+          QUILL_SMOKE=1 "$bin"

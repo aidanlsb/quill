@@ -21,6 +21,11 @@ public enum LaunchRequest {
         var pendingLine: Int?
         for arg in arguments {
             if arg == "--wait" || arg == "--" { continue }
+            if let url = URL(string: arg), url.scheme == "quill", let target = target(from: url) {
+                pendingLine = nil
+                targets.append(target)
+                continue
+            }
             if let line = plusLine(arg) {
                 pendingLine = line
                 continue

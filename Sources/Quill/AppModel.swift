@@ -587,10 +587,16 @@ final class AppModel {
 
     private func performOpen(_ url: URL) {
         var isDir: ObjCBool = false
-        FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
-        if isDir.boolValue {
+        let exists = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
+        if exists, isDir.boolValue {
             loadDirectory(url)
             rootURL = url
+            return
+        }
+        if !exists {
+            if let decoded = try? TextCodec.decode(Data()) {
+                installFile(decoded, url: url)
+            }
             return
         }
         Task {
@@ -627,6 +633,7 @@ final class AppModel {
         docVersion = 1
         startLSP(for: url, text: decoded.text)
         applyPendingJump(for: url)
+        revision += 1
         refreshStatus()
     }
 
@@ -638,6 +645,7 @@ final class AppModel {
         title = "Untitled"
         modified = false
         sync = DocumentSync()
+        revision += 1
         refreshStatus()
     }
 
@@ -661,6 +669,7 @@ final class AppModel {
             title = url.lastPathComponent + "/"
             modified = false
             applyPendingJump(for: url)
+            revision += 1
             refreshStatus()
         } catch {
             message = error.localizedDescription
