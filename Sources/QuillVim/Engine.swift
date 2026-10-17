@@ -10,6 +10,9 @@ public final class Engine {
     /// When true, Enter in normal mode asks the host to open the current line
     /// (directory listings) instead of moving down.
     public var openOnEnter: Bool = false
+    /// Lines Ctrl-d / Ctrl-u move when the user did not type a count.
+    /// The host sets this to half the visible window. A count updates it, matching vim's `scroll`.
+    public var scrollLineCount: Int = 10
     /// Leader key in normal mode. Space by default; configurable by the host.
     public var leaderKey: Character = " "
     /// Sequence → action after the leader. Host loads this from config.
@@ -312,6 +315,13 @@ public final class Engine {
             }
             if c == "i" {
                 return jumpList(older: false)
+            }
+            if c == "d" || c == "u" {
+                if let explicit = count {
+                    scrollLineCount = max(1, explicit)
+                }
+                count = max(1, scrollLineCount)
+                return applyMotion(c == "d" ? .down : .up, find: nil)
             }
             return beepResult()
         case .character(let ch):

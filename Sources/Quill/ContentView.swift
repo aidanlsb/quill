@@ -9,7 +9,7 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            EditorView(model: model)
+            EditorView(model: model, revision: model.revision)
                 .background(Color(model.theme.backgroundColor))
             if model.picker != nil {
                 PickerPanel(model: model)
@@ -163,9 +163,11 @@ struct ConfirmSheet: View {
             Text(warning.isEmpty ? "Deletes go to the Trash." : warning)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
-            List(ops.map(\.summary), id: \.self) { line in
-                Text(line)
-                    .font(.system(.body, design: .monospaced))
+            List {
+                ForEach(Array(ops.enumerated()), id: \.offset) { _, op in
+                    Text(op.summary)
+                        .font(.system(.body, design: .monospaced))
+                }
             }
             .frame(minHeight: 120)
             HStack {

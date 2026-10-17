@@ -16,6 +16,7 @@ struct QuillApp: App {
                     NSApp.setActivationPolicy(.regular)
                     model.consumeLaunchArguments(Array(CommandLine.arguments.dropFirst()))
                     NSApp.windows.forEach { $0.delegate = appDelegate }
+                    AppSmoke.runIfRequested(model: model)
                 }
                 .onOpenURL { url in
                     model.open(url: url)
@@ -57,11 +58,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         drainPending()
     }
 
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        NSAppleEventManager.shared().setEventHandler(
+            self,
+            andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)),
+            forEventClass: AEEventClass(kInternetEventClass),
+            andEventID: AEEventID(kAEGetURL)
+        )
+    }
+
+    /// Apple events arrive on the main thread, sometimes before SwiftUI has
+    /// attached the model. `NSApp` is not required; the URL is queued.
+    @objc nonisolated func handleGetURLEvent(
+        _ event: NSAppleEventDescriptor,
+        withReplyEvent reply: NSAppleEventDescriptor
+    ) {
+        guard let urlString = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
+              let url = URL(string: urlString) else { return }
+        nonisolated(unsafe) let delegate = self
+        MainActor.assumeIsolated {
+            delegate.accept(url)
+        }
+    }
+
     func application(_ application: NSApplication, open urls: [URL]) {
+        urls.forEach { accept($0) }
+    }
+
+    private func accept(_ url: URL) {
         if let model {
-            urls.forEach { model.open(url: $0) }
+            model.open(url: url)
         } else {
-            pending.append(contentsOf: urls)
+            pending.append(url)
         }
     }
 
