@@ -11,7 +11,8 @@ public protocol TextLayout: AnyObject {
 }
 
 /// One display line per buffer line. Used by tests and as a fallback.
-public final class LogicalLineLayout: TextLayout, @unchecked Sendable {
+/// Immutable, so the shared instance is safe to use from any isolation domain.
+public final class LogicalLineLayout: TextLayout, Sendable {
     public static let shared = LogicalLineLayout()
     public init() {}
 
@@ -39,7 +40,7 @@ public final class LogicalLineLayout: TextLayout, @unchecked Sendable {
 }
 
 /// Wraps a buffer line every `width` characters. Lets tests cover display-line j/k.
-public final class WrapLayout: TextLayout, @unchecked Sendable {
+public final class WrapLayout: TextLayout {
     public var width: Int
 
     public init(width: Int) {
