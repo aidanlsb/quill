@@ -16,64 +16,125 @@ public struct GrepHit: Equatable, Sendable {
     }
 }
 
+struct CompiledIgnore: Sendable {
+    var regex: NSRegularExpression
+    var negation: Bool
+    var directoryOnly: Bool
+}
+
 public struct IgnoreRules: Equatable, Sendable {
     public var patterns: [String]
+    public var includeHidden: Bool
+    private var compiled: [CompiledIgnore]
 
-    public init(patterns: [String] = []) {
+    public init(patterns: [String] = [], includeHidden: Bool = false) {
         self.patterns = patterns
+        self.includeHidden = includeHidden
+        self.compiled = Self.compile(patterns)
+    }
+
+    public static func == (lhs: IgnoreRules, rhs: IgnoreRules) -> Bool {
+        lhs.patterns == rhs.patterns && lhs.includeHidden == rhs.includeHidden
     }
 
     public static func load(from root: URL, fileManager: FileManager = .default) -> IgnoreRules {
-        let gitignore = root.appendingPathComponent(".gitignore")
-        guard let data = try? String(contentsOf: gitignore, encoding: .utf8) else {
-            return IgnoreRules()
+        var patterns: [String] = []
+        func absorb(_ url: URL, prefix: String) {
+            guard let data = try? String(contentsOf: url, encoding: .utf8) else { return }
+            for line in data.split(separator: "\n", omittingEmptySubsequences: false) {
+                var trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+                if !prefix.isEmpty, !trimmed.hasPrefix("!") {
+                    trimmed = prefix + trimmed
+                } else if !prefix.isEmpty, trimmed.hasPrefix("!") {
+                    trimmed = "!" + prefix + trimmed.dropFirst()
+                }
+                patterns.append(String(trimmed))
+            }
         }
-        let patterns = data.split(separator: "\n").compactMap { line -> String? in
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.isEmpty || trimmed.hasPrefix("#") { return nil }
-            return String(trimmed)
+        absorb(root.appendingPathComponent(".gitignore"), prefix: "")
+        if let enumerator = fileManager.enumerator(at: root, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
+            while let item = enumerator.nextObject() as? URL {
+                if item.lastPathComponent == ".gitignore" {
+                    let dir = item.deletingLastPathComponent().path
+                    let rootPath = root.path.hasSuffix("/") ? root.path : root.path + "/"
+                    let relative = dir.hasPrefix(rootPath) ? String(dir.dropFirst(rootPath.count)) : ""
+                    let prefix = relative.isEmpty ? "" : relative + "/"
+                    absorb(item, prefix: prefix)
+                }
+            }
         }
         return IgnoreRules(patterns: patterns)
     }
 
     public func ignores(relativePath: String, isDirectory: Bool) -> Bool {
         let parts = relativePath.split(separator: "/").map(String.init)
-        if let first = parts.first, first.hasPrefix("."), first != "." { return true }
+        if !includeHidden, let first = parts.first, first.hasPrefix("."), first != "." { return true }
         if parts.contains(where: { $0 == ".git" || $0 == ".svn" || $0 == ".hg" }) { return true }
-        for pattern in patterns {
-            if match(pattern: pattern, path: relativePath, isDirectory: isDirectory) {
-                return true
+        var ignored = false
+        let path = isDirectory && !relativePath.hasSuffix("/") ? relativePath + "/" : relativePath
+        for pattern in compiled {
+            if pattern.directoryOnly && !isDirectory && !relativePath.hasSuffix("/") {
+                // A directory-only rule still ignores children when the pattern matches a parent.
+            }
+            let range = NSRange(path.startIndex..<path.endIndex, in: path)
+            if pattern.regex.firstMatch(in: path, range: range) != nil {
+                ignored = !pattern.negation
             }
         }
-        return false
+        return ignored
     }
 
-    private func match(pattern: String, path: String, isDirectory: Bool) -> Bool {
-        var pat = pattern
-        if pat.hasPrefix("/") { pat.removeFirst() }
-        let dirOnly = pat.hasSuffix("/")
-        if dirOnly {
-            pat.removeLast()
-            if !isDirectory && !path.hasSuffix("/") { /* files inside ignored dirs handled by walk */ }
+    private static func compile(_ patterns: [String]) -> [CompiledIgnore] {
+        patterns.compactMap { raw in
+            var pattern = raw
+            var negation = false
+            if pattern.hasPrefix("!") {
+                negation = true
+                pattern.removeFirst()
+            }
+            var directoryOnly = false
+            if pattern.hasSuffix("/") {
+                directoryOnly = true
+                pattern.removeLast()
+            }
+            let anchored = pattern.hasPrefix("/")
+            if anchored { pattern.removeFirst() }
+            let body = globToRegex(pattern, anchored: anchored)
+            guard let regex = try? NSRegularExpression(pattern: body) else { return nil }
+            return CompiledIgnore(regex: regex, negation: negation, directoryOnly: directoryOnly)
         }
-        if pat.contains("*") {
-            return glob(pat, path) || glob(pat, (path as NSString).lastPathComponent)
-        }
-        if path == pat { return true }
-        if path.hasPrefix(pat + "/") { return true }
-        if (path as NSString).lastPathComponent == pat { return true }
-        if dirOnly, isDirectory, (path as NSString).lastPathComponent == pat { return true }
-        return false
     }
 
-    private func glob(_ pattern: String, _ value: String) -> Bool {
-        let escaped = NSRegularExpression.escapedPattern(for: pattern)
-            .replacingOccurrences(of: "\\*", with: ".*")
-            .replacingOccurrences(of: "\\?", with: ".")
-        let regex = (try? NSRegularExpression(pattern: "^\(escaped)$")) ?? (try? NSRegularExpression(pattern: "^$"))
-        guard let regex else { return false }
-        let range = NSRange(value.startIndex..<value.endIndex, in: value)
-        return regex.firstMatch(in: value, range: range) != nil
+    /// `*` stays inside one path segment. `**` crosses separators.
+    static func globToRegex(_ pattern: String, anchored: Bool) -> String {
+        var regex = ""
+        let chars = Array(pattern)
+        var index = 0
+        while index < chars.count {
+            let ch = chars[index]
+            if ch == "*", index + 1 < chars.count, chars[index + 1] == "*" {
+                regex += ".*"
+                index += 2
+                if index < chars.count, chars[index] == "/" { index += 1 }
+                continue
+            }
+            if ch == "*" {
+                regex += "[^/]*"
+            } else if ch == "?" {
+                regex += "[^/]"
+            } else if ".+()|[]{}^$\\".contains(ch) {
+                regex += "\\"
+                regex.append(ch)
+            } else {
+                regex.append(ch)
+            }
+            index += 1
+        }
+        if anchored {
+            return "^(?:\(regex))(?:/.*)?$"
+        }
+        return "^(?:.*/)?(?:\(regex))(?:/.*)?$"
     }
 }
 
@@ -85,17 +146,18 @@ public enum FileWalk {
         fileManager: FileManager = .default
     ) -> [URL] {
         var results: [URL] = []
+        let options: FileManager.DirectoryEnumerationOptions = ignore.includeHidden ? [] : [.skipsHiddenFiles]
         guard let enumerator = fileManager.enumerator(
             at: root,
             includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
+            options: options
         ) else { return [] }
         while let item = enumerator.nextObject() as? URL {
-            let rel = item.path.replacingOccurrences(of: root.path.hasSuffix("/") ? root.path : root.path + "/", with: "")
+            let rel = relative(item, root: root)
             let isDir = (try? item.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
             if isDir {
                 let name = item.lastPathComponent
-                if name.hasPrefix(".") || name == ".git" || ignore.ignores(relativePath: rel, isDirectory: true) {
+                if ignore.ignores(relativePath: rel, isDirectory: true) || name == ".git" {
                     enumerator.skipDescendants()
                 }
                 continue
@@ -109,14 +171,24 @@ public enum FileWalk {
         }
         return results
     }
+
+    static func relative(_ url: URL, root: URL) -> String {
+        let rootPath = root.path.hasSuffix("/") ? String(root.path.dropLast()) : root.path
+        if url.path == rootPath { return "" }
+        let prefix = rootPath + "/"
+        if url.path.hasPrefix(prefix) { return String(url.path.dropFirst(prefix.count)) }
+        return url.lastPathComponent
+    }
 }
 
 public enum ContentSearch {
+    public static let defaultLimit = 200
+
     /// Built-in line scan. `relativePath` is stored on hits.
     public static func grep(
         query: String,
         files: [(path: String, contents: String)],
-        limit: Int = 200
+        limit: Int = defaultLimit
     ) -> [GrepHit] {
         if query.isEmpty { return [] }
         var hits: [GrepHit] = []
@@ -134,21 +206,100 @@ public enum ContentSearch {
     }
 
     /// Prefer ripgrep when `rg` is on PATH; fall back to a native walk + scan.
+    /// The pipe is drained on background queues before `waitUntilExit`, so a large
+    /// hit list cannot fill the 64 KB pipe and deadlock.
     public static func search(
         root: URL,
         query: String,
         ignore: IgnoreRules = IgnoreRules(),
-        fileManager: FileManager = .default
+        limit: Int = defaultLimit,
+        fileManager: FileManager = .default,
+        process: CancellableProcess? = nil
     ) -> [GrepHit] {
         if query.isEmpty { return [] }
-        if ripgrepAvailable(), let rg = ripgrep(root: root, query: query) { return rg }
+        if ripgrepAvailable(), let rg = ripgrep(
+            root: root,
+            query: query,
+            limit: limit,
+            includeHidden: ignore.includeHidden,
+            process: process
+        ) {
+            return rg
+        }
         let urls = FileWalk.files(in: root, ignore: ignore, fileManager: fileManager)
         let files: [(String, String)] = urls.compactMap { url in
             guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
-            let rel = url.path.replacingOccurrences(of: root.path + "/", with: "")
-            return (rel, text)
+            return (FileWalk.relative(url, root: root), text)
         }
-        return grep(query: query, files: files)
+        return grep(query: query, files: files, limit: limit)
+    }
+
+    public static func arguments(query: String, root: String, limit: Int, includeHidden: Bool) -> [String] {
+        var args = ["rg", "--vimgrep", "--path-separator", "/", "--glob", "!.git", "-S", "--max-count", String(max(1, limit))]
+        if includeHidden { args.append("--hidden") }
+        args.append(contentsOf: ["-e", query, "--", root])
+        return args
+    }
+
+    /// `rg --vimgrep` lines are `path:line:column:text`. Paths are made relative to `root`.
+    public static func parseVimgrep(_ text: String, root: String, limit: Int) -> [GrepHit] {
+        var hits: [GrepHit] = []
+        for raw in text.split(separator: "\n", omittingEmptySubsequences: true) {
+            guard let hit = parseVimgrepLine(String(raw), root: root) else { continue }
+            hits.append(hit)
+            if hits.count >= limit { break }
+        }
+        return hits
+    }
+
+    public static func normalize(path: String, root: String) -> String {
+        let rootPath = root.hasSuffix("/") ? String(root.dropLast()) : root
+        if path == rootPath { return "" }
+        let prefix = rootPath + "/"
+        if path.hasPrefix(prefix) { return String(path.dropFirst(prefix.count)) }
+        return path
+    }
+
+    /// Read both pipes to completion on dedicated threads, then wait.
+    /// Waiting before the reads deadlock once output exceeds the ~64 KB pipe buffer.
+    public static func drain(stdout: FileHandle, stderr: FileHandle, process: Process) -> (Data, Data) {
+        let outBox = LockedData()
+        let errBox = LockedData()
+        let gate = DrainGate(remaining: 2)
+        let outThread = Thread {
+            outBox.set(stdout.readDataToEndOfFile())
+            gate.leave()
+        }
+        let errThread = Thread {
+            errBox.set(stderr.readDataToEndOfFile())
+            gate.leave()
+        }
+        outThread.name = "quill.search.stdout"
+        errThread.name = "quill.search.stderr"
+        outThread.start()
+        errThread.start()
+        gate.waitUntilEmpty()
+        process.waitUntilExit()
+        return (outBox.get(), errBox.get())
+    }
+
+    static func parseVimgrepLine(_ raw: String, root: String) -> GrepHit? {
+        // Split from the right so a path may contain colons: path, line, column, text.
+        let parts = raw.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
+        guard parts.count >= 3 else { return nil }
+        // Find the line number by scanning from the left only when the path has no extra colons
+        // is ambiguous. rg --vimgrep emits path:line:column:text. Column and line are integers,
+        // so take the last three numeric-or-text fields when possible.
+        guard let lineIndex = parts.firstIndex(where: { Int($0) != nil }),
+              lineIndex > 0,
+              lineIndex + 1 < parts.count,
+              let line = Int(parts[lineIndex]) else { return nil }
+        let path = normalize(path: parts[..<lineIndex].joined(separator: ":"), root: root)
+        let snippetStart = lineIndex + 2
+        let snippet = snippetStart < parts.count
+            ? parts[snippetStart...].joined(separator: ":").trimmingCharacters(in: .whitespaces)
+            : ""
+        return GrepHit(path: path, line: line, snippet: snippet)
     }
 
     private static func ripgrepAvailable() -> Bool {
@@ -158,35 +309,127 @@ public enum ContentSearch {
         }
     }
 
-    private static func ripgrep(root: URL, query: String) -> [GrepHit]? {
-        let exe = "/usr/bin/env"
+    private static func ripgrep(
+        root: URL,
+        query: String,
+        limit: Int,
+        includeHidden: Bool,
+        process: CancellableProcess? = nil
+    ) -> [GrepHit]? {
         let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: exe)
-        proc.arguments = ["rg", "--vimgrep", "--hidden", "--glob", "!.git", "-S", "-n", query, root.path]
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        proc.arguments = arguments(query: query, root: root.path, limit: limit, includeHidden: includeHidden)
         let out = Pipe()
         let err = Pipe()
         proc.standardOutput = out
         proc.standardError = err
+        process?.attach(proc)
         do {
             try proc.run()
         } catch {
             return nil
         }
-        proc.waitUntilExit()
-        if proc.terminationStatus == 127 || proc.terminationStatus == 1 && out.fileHandleForReading.availableData.isEmpty {
-            // 127 = not found via env; status 1 with no output may be no matches
-        }
+        let (data, _) = drain(stdout: out.fileHandleForReading, stderr: err.fileHandleForReading, process: proc)
+        if proc.terminationStatus == 127 { return nil }
         if proc.terminationStatus > 1 { return nil }
-        let data = out.fileHandleForReading.readDataToEndOfFile()
         guard let text = String(data: data, encoding: .utf8) else { return nil }
-        if text.isEmpty, proc.terminationStatus == 127 { return nil }
-        var hits: [GrepHit] = []
-        for raw in text.split(separator: "\n") {
-            let parts = raw.split(separator: ":", maxSplits: 3, omittingEmptySubsequences: false)
-            guard parts.count >= 3, let line = Int(parts[1]) else { continue }
-            let snippet = parts.count >= 4 ? String(parts[3]) : String(parts.dropFirst(2).joined(separator: ":"))
-            hits.append(GrepHit(path: String(parts[0]), line: line, snippet: snippet.trimmingCharacters(in: .whitespaces)))
+        return parseVimgrep(text, root: root.path, limit: limit)
+    }
+}
+
+/// Holds the live `rg` process so a newer query can terminate it.
+public final class CancellableProcess: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: Process?
+
+    public init() {}
+
+    func attach(_ process: Process) {
+        lock.lock()
+        self.process = process
+        lock.unlock()
+    }
+
+    public func terminate() {
+        lock.lock()
+        process?.terminate()
+        lock.unlock()
+    }
+}
+
+/// One in-flight search. A newer query terminates the previous `rg` and task.
+public actor SearchSession {
+    private var current: Task<[GrepHit], Never>?
+    private var process: CancellableProcess?
+
+    public init() {}
+
+    public func search(
+        root: URL,
+        query: String,
+        ignore: IgnoreRules = IgnoreRules(),
+        limit: Int = ContentSearch.defaultLimit
+    ) async -> [GrepHit] {
+        process?.terminate()
+        current?.cancel()
+        let handle = CancellableProcess()
+        process = handle
+        let task = Task<[GrepHit], Never> {
+            if Task.isCancelled || query.isEmpty { return [] }
+            return ContentSearch.search(root: root, query: query, ignore: ignore, limit: limit, process: handle)
         }
+        current = task
+        let hits = await task.value
         return hits
+    }
+}
+
+private final class DrainGate: @unchecked Sendable {
+    private let condition = NSCondition()
+    private var remaining: Int
+    init(remaining: Int) { self.remaining = remaining }
+    func leave() {
+        condition.lock()
+        remaining -= 1
+        condition.broadcast()
+        condition.unlock()
+    }
+    func waitUntilEmpty() {
+        condition.lock()
+        while remaining > 0 { condition.wait() }
+        condition.unlock()
+    }
+}
+
+private final class LockedData: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+    func set(_ data: Data) {
+        lock.lock()
+        self.data = data
+        lock.unlock()
+    }
+    func get() -> Data {
+        lock.lock()
+        defer { lock.unlock() }
+        return data
+    }
+}
+
+/// Background file list shared by the picker, wikilink completion, and `gd`.
+public actor FileIndex {
+    public private(set) var files: [URL] = []
+    public private(set) var root: URL?
+
+    public init() {}
+
+    public func rebuild(root: URL, ignore: IgnoreRules = IgnoreRules()) {
+        self.root = root
+        files = FileWalk.files(in: root, ignore: ignore)
+    }
+
+    public func relativePaths() -> [String] {
+        guard let root else { return [] }
+        return files.map { FileWalk.relative($0, root: root) }
     }
 }

@@ -2,6 +2,11 @@ import XCTest
 import Foundation
 @testable import QuillSearch
 
+private final class DrainResult: @unchecked Sendable {
+    var stdout = Data()
+    var stderr = Data()
+}
+
 final class FuzzyTests: XCTestCase {
     func testSubsequence() {
         XCTAssertNotNil(Fuzzy.score(query: "ql", candidate: "Quill.md"))
@@ -67,5 +72,60 @@ final class IgnoreAndGrepTests: XCTestCase {
         let hits = ContentSearch.search(root: root, query: "target", ignore: ignore)
         XCTAssertTrue(hits.contains { $0.path.hasSuffix("keep.md") })
         XCTAssertFalse(hits.contains { $0.path.contains(".git") })
+    }
+
+    func testDashQueryIsPassedWithE() {
+        let args = ContentSearch.arguments(query: "-foo", root: "/notes", limit: 50, includeHidden: false)
+        XCTAssertTrue(args.contains("-e"))
+        XCTAssertEqual(args[args.firstIndex(of: "-e")! + 1], "-foo")
+        XCTAssertTrue(args.contains("--"))
+        XCTAssertFalse(args.contains("--hidden"))
+        let hidden = ContentSearch.arguments(query: "a", root: "/notes", limit: 1, includeHidden: true)
+        XCTAssertTrue(hidden.contains("--hidden"))
+    }
+
+    func testNormalizeAbsoluteVimgrepPaths() {
+        let root = "/tmp/rgprobe"
+        let text = "\(root)/sub/a.md:1:7:hello needle\n/other:name.md:4:1:needle\n"
+        let hits = ContentSearch.parseVimgrep(text, root: root, limit: 10)
+        XCTAssertEqual(hits.map(\.path), ["sub/a.md", "/other:name.md"])
+        XCTAssertEqual(hits[0].line, 1)
+        XCTAssertEqual(hits[0].snippet, "hello needle")
+        XCTAssertEqual(hits[1].line, 4)
+    }
+
+    func testIgnoreNegationAndDoubleStar() {
+        let rules = IgnoreRules(patterns: ["**/*.tmp", "*.md", "!keep.md", "secret/"])
+        XCTAssertTrue(rules.ignores(relativePath: "nested/dir/file.tmp", isDirectory: false))
+        XCTAssertTrue(rules.ignores(relativePath: "notes.md", isDirectory: false))
+        XCTAssertFalse(rules.ignores(relativePath: "keep.md", isDirectory: false))
+        XCTAssertTrue(rules.ignores(relativePath: "secret/note.txt", isDirectory: false))
+    }
+
+    func testDrainDoesNotDeadlockOnLargeOutput() throws {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/sh")
+        proc.arguments = ["-c", "dd if=/dev/zero bs=1024 count=200 2>/dev/null; echo stderr-ok >&2"]
+        let out = Pipe()
+        let err = Pipe()
+        proc.standardOutput = out
+        proc.standardError = err
+        try proc.run()
+        let done = expectation(description: "drained")
+        let box = DrainResult()
+        Thread {
+            let pair = ContentSearch.drain(
+                stdout: out.fileHandleForReading,
+                stderr: err.fileHandleForReading,
+                process: proc
+            )
+            box.stdout = pair.0
+            box.stderr = pair.1
+            done.fulfill()
+        }.start()
+        wait(for: [done], timeout: 5)
+        XCTAssertGreaterThan(box.stdout.count, 64 * 1024)
+        XCTAssertTrue(String(data: box.stderr, encoding: .utf8)?.contains("stderr-ok") == true)
+        XCTAssertEqual(proc.terminationStatus, 0)
     }
 }

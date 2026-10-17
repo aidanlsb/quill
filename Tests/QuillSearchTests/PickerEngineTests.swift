@@ -97,6 +97,28 @@ final class PickerEngineTests: XCTestCase {
         XCTAssertEqual(p.handle(.enter), .none)
     }
 
+    func testDuplicateTitlesStayDistinct() {
+        let p = PickerEngine(source: [
+            PickerItem(title: "note.md", payload: "/a/note.md"),
+            PickerItem(title: "note.md", payload: "/b/note.md"),
+        ])
+        _ = p.handle(.character("n"))
+        XCTAssertEqual(p.items.map(\.payload), ["/a/note.md", "/b/note.md"])
+    }
+
+    func testQueryChangeDoesNotBlockInsideTheEngine() {
+        let p = PickerEngine()
+        var seen: [String] = []
+        p.onQueryChange = { seen.append($0) }
+        _ = p.handle(.character("a"))
+        XCTAssertEqual(seen, ["a"])
+        XCTAssertTrue(p.items.isEmpty)
+        p.replaceItems([PickerItem(title: "a.md", payload: "a.md", preview: "")])
+        XCTAssertEqual(p.items.count, 1)
+        p.updatePreview(payload: "a.md", text: "body")
+        XCTAssertEqual(p.selected?.preview, "body")
+    }
+
     func testLiveGrepQuery() {
         let p = PickerEngine(liveSearch: { q in
             if q.isEmpty { return [] }
