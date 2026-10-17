@@ -139,7 +139,26 @@ enum MotionResolver {
         let line = buffer.lineIndex(containing: buffer.cursor)
         let content = buffer.lineContentRange(at: line)
         if content.isEmpty { return .fail(buffer.cursor) }
-        let dest = min(max(content.lowerBound, buffer.cursor + delta), content.upperBound - 1)
+        var dest = buffer.cursor
+        if delta > 0 {
+            for _ in 0..<delta {
+                let next = buffer.graphemeSpan(containing: dest).upperBound
+                if next >= content.upperBound {
+                    let last = content.upperBound == content.lowerBound
+                        ? content.lowerBound
+                        : buffer.graphemeStart(before: content.upperBound)
+                    if last == dest { return .fail(buffer.cursor) }
+                    dest = last
+                    break
+                }
+                dest = next
+            }
+        } else if delta < 0 {
+            for _ in 0..<(-delta) {
+                if dest <= content.lowerBound { break }
+                dest = buffer.graphemeStart(before: dest)
+            }
+        }
         if dest == buffer.cursor { return .fail(buffer.cursor) }
         return .move(dest, inclusive: inclusive)
     }

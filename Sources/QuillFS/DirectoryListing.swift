@@ -5,11 +5,14 @@ public struct DirEntry: Equatable, Sendable {
     public var originalURL: URL?
     public var name: String
     public var isDirectory: Bool
+    /// Stable identity assigned when the listing is captured. Edits keep this id.
+    public var entryID: UInt64?
 
-    public init(originalURL: URL? = nil, name: String, isDirectory: Bool) {
+    public init(originalURL: URL? = nil, name: String, isDirectory: Bool, entryID: UInt64? = nil) {
         self.originalURL = originalURL
         self.name = name
         self.isDirectory = isDirectory
+        self.entryID = entryID
     }
 
     public var displayName: String {
@@ -35,6 +38,7 @@ public enum FSOperation: Equatable, Sendable {
     case create(parent: URL, name: String, isDirectory: Bool)
     case delete(URL)
     case rename(from: URL, to: URL)
+    case copy(from: URL, to: URL)
 
     public var summary: String {
         switch self {
@@ -43,11 +47,42 @@ public enum FSOperation: Equatable, Sendable {
         case .delete(let url):
             return "Delete \(url.lastPathComponent)"
         case .rename(let from, let to):
-            if from.deletingLastPathComponent() == to.deletingLastPathComponent() {
+            if from.deletingLastPathComponent().path == to.deletingLastPathComponent().path {
                 return "Rename \(from.lastPathComponent) → \(to.lastPathComponent)"
             }
             return "Move \(from.lastPathComponent) → \(to.path)"
+        case .copy(let from, let to):
+            return "Copy \(from.lastPathComponent) → \(to.lastPathComponent)"
         }
+    }
+}
+
+public enum LineTransfer: Equatable, Sendable {
+    case identity
+    case move
+    case copy
+}
+
+/// One edited listing line plus the anchor identity that traveled with it.
+public struct ListingLine: Equatable, Sendable {
+    public var name: String
+    public var isDirectory: Bool
+    public var entryID: UInt64?
+    public var sourcePath: String?
+    public var transfer: LineTransfer
+
+    public init(
+        name: String,
+        isDirectory: Bool,
+        entryID: UInt64? = nil,
+        sourcePath: String? = nil,
+        transfer: LineTransfer = .identity
+    ) {
+        self.name = name
+        self.isDirectory = isDirectory
+        self.entryID = entryID
+        self.sourcePath = sourcePath
+        self.transfer = transfer
     }
 }
 
@@ -82,68 +117,94 @@ public enum DirectoryListing {
             .filter { !$0.name.isEmpty }
     }
 
-    /// Diff an edited listing against the original snapshot.
-    /// `incomingMoves` are entries yanked (dd) from another directory and pasted here.
+    public static func stableID(for path: String) -> UInt64 {
+        var hash: UInt64 = 14695981039346656037
+        for byte in path.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1099511628211
+        }
+        return hash == 0 ? 1 : hash
+    }
+
+    /// True when a save both creates and deletes, which is worth a louder confirmation.
+    public static func mixesDeletesAndCreates(_ ops: [FSOperation]) -> Bool {
+        let deletes = ops.contains { if case .delete = $0 { return true } else { return false } }
+        let creates = ops.contains { if case .create = $0 { return true } else { return false } }
+        return deletes && creates
+    }
+
+    /// Diff edited lines against the snapshot using anchor identity.
+    /// A line keeps its id across a rename. `dd`+`p` arrives as `.move`. `yy`+`p` arrives as `.copy`.
+    /// A line with no id is a create. Unmentioned originals are deletes. Nothing is paired by position.
+    public static func plan(original: DirectorySnapshot, lines: [ListingLine]) -> [FSOperation] {
+        var used = Set<Int>()
+        var ops: [FSOperation] = []
+
+        func take(_ matches: (DirEntry) -> Bool) -> (Int, DirEntry)? {
+            for (index, entry) in original.entries.enumerated() where !used.contains(index) && matches(entry) {
+                used.insert(index)
+                return (index, entry)
+            }
+            return nil
+        }
+
+        for line in lines {
+            if line.name.isEmpty { continue }
+            if line.transfer == .copy, let source = line.sourcePath {
+                let from = URL(fileURLWithPath: source)
+                ops.append(.copy(from: from, to: original.directory.appendingPathComponent(line.name)))
+                continue
+            }
+            if line.transfer == .move, let source = line.sourcePath {
+                let from = URL(fileURLWithPath: source)
+                let dest = original.directory.appendingPathComponent(line.name)
+                if let id = line.entryID {
+                    _ = take { $0.entryID == id }
+                }
+                if from.standardizedFileURL.path != dest.standardizedFileURL.path {
+                    ops.append(.rename(from: from, to: dest))
+                }
+                continue
+            }
+            if let id = line.entryID, let (_, entry) = take({ $0.entryID == id }) {
+                appendIdentityChange(entry, line: line, directory: original.directory, ops: &ops)
+                continue
+            }
+            if line.entryID == nil,
+               let (_, entry) = take({ $0.name == line.name && $0.isDirectory == line.isDirectory }) {
+                continue
+            }
+            ops.append(.create(parent: original.directory, name: line.name, isDirectory: line.isDirectory))
+        }
+
+        for (index, entry) in original.entries.enumerated() where !used.contains(index) {
+            if let url = entry.originalURL {
+                ops.append(.delete(url))
+            }
+        }
+        return ops
+    }
+
+    /// Text-only diff. Exact-name incoming moves are honored; leftover creates are not paired with leftover deletes.
     public static func plan(
         original: DirectorySnapshot,
         editedText: String,
         incomingMoves: [DirEntry] = []
     ) -> [FSOperation] {
-        let lines = parse(editedText)
-        var unusedOriginal = original.entries
-        var leftoverLines: [ParsedDirLine] = []
-        var ops: [FSOperation] = []
-        var consumedMoves: [DirEntry] = []
-
-        for line in lines {
-            if let idx = unusedOriginal.firstIndex(where: { $0.name == line.name && $0.isDirectory == line.isDirectory }) {
-                unusedOriginal.remove(at: idx)
-                continue
-            }
-            leftoverLines.append(line)
+        var lines = parse(editedText).map {
+            ListingLine(name: $0.name, isDirectory: $0.isDirectory)
         }
-
-        var leftoverCreates = leftoverLines
-        var leftoverDeletes = unusedOriginal
-
-        // Pasted entries from another directory become moves/renames.
-        for move in incomingMoves {
-            if let idx = leftoverCreates.firstIndex(where: { $0.name == move.name || $0.name == move.displayName }) {
-                let line = leftoverCreates.remove(at: idx)
-                if let from = move.originalURL {
-                    let dest = original.directory.appendingPathComponent(line.name)
-                    ops.append(.rename(from: from, to: dest))
-                }
-                consumedMoves.append(move)
-                continue
-            }
-            if let idx = leftoverCreates.firstIndex(where: { !$0.isDirectory && !move.isDirectory }) {
-                let line = leftoverCreates.remove(at: idx)
-                if let from = move.originalURL {
-                    ops.append(.rename(from: from, to: original.directory.appendingPathComponent(line.name)))
-                }
-                consumedMoves.append(move)
-            }
+        var moves = incomingMoves
+        for index in lines.indices {
+            guard let found = moves.firstIndex(where: {
+                $0.name == lines[index].name && $0.isDirectory == lines[index].isDirectory
+            }) else { continue }
+            let move = moves.remove(at: found)
+            lines[index].transfer = .move
+            lines[index].sourcePath = move.originalURL?.path
+            lines[index].entryID = move.entryID
         }
-
-        // Pair remaining deletes with remaining creates as in-place renames.
-        while let del = leftoverDeletes.first, let add = leftoverCreates.first {
-            leftoverDeletes.removeFirst()
-            leftoverCreates.removeFirst()
-            if let from = del.originalURL {
-                ops.append(.rename(from: from, to: original.directory.appendingPathComponent(add.name)))
-            }
-        }
-
-        for del in leftoverDeletes {
-            if let url = del.originalURL {
-                ops.append(.delete(url))
-            }
-        }
-        for add in leftoverCreates {
-            ops.append(.create(parent: original.directory, name: add.name, isDirectory: add.isDirectory))
-        }
-        return ops
+        return plan(original: original, lines: lines)
     }
 
     /// Read a directory from the real filesystem (skips `.` and `..`).
@@ -157,11 +218,34 @@ public enum DirectoryListing {
             let name = item.lastPathComponent
             if name == "." || name == ".." { return nil }
             let isDir = (try? item.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
-            return DirEntry(originalURL: item, name: name, isDirectory: isDir)
+            return DirEntry(
+                originalURL: item,
+                name: name,
+                isDirectory: isDir,
+                entryID: stableID(for: item.path)
+            )
         }
         .sorted { a, b in
             a.name.localizedStandardCompare(b.name) == .orderedAscending
         }
         return DirectorySnapshot(directory: url, entries: entries)
+    }
+
+    private static func appendIdentityChange(
+        _ entry: DirEntry,
+        line: ListingLine,
+        directory: URL,
+        ops: inout [FSOperation]
+    ) {
+        if entry.isDirectory != line.isDirectory {
+            if let url = entry.originalURL {
+                ops.append(.delete(url))
+            }
+            ops.append(.create(parent: directory, name: line.name, isDirectory: line.isDirectory))
+            return
+        }
+        if entry.name != line.name, let from = entry.originalURL {
+            ops.append(.rename(from: from, to: directory.appendingPathComponent(line.name)))
+        }
     }
 }
