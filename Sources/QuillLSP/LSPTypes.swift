@@ -31,6 +31,34 @@ public struct LSPPosition: Equatable, Sendable {
         return LSPPosition(line: line, character: utf16)
     }
 
+    /// Engine and TextKit offsets are UTF-16. This does not walk grapheme clusters.
+    public static func position(utf16Offset: Int, in text: String) -> LSPPosition {
+        let units = Array(text.utf16)
+        let clamped = min(max(0, utf16Offset), units.count)
+        var line = 0
+        var lineStart = 0
+        var i = 0
+        while i < clamped {
+            if units[i] == 10 {
+                line += 1
+                lineStart = i + 1
+            }
+            i += 1
+        }
+        return LSPPosition(line: line, character: clamped - lineStart)
+    }
+
+    public static func utf16Offset(in text: String, position: LSPPosition) -> Int {
+        let units = Array(text.utf16)
+        var line = 0
+        var i = 0
+        while i < units.count, line < position.line {
+            if units[i] == 10 { line += 1 }
+            i += 1
+        }
+        return min(units.count, i + max(0, position.character))
+    }
+
     public static func characterOffset(in text: String, position: LSPPosition) -> Int {
         var line = 0
         var i = text.startIndex
@@ -164,6 +192,64 @@ public struct Diagnostic: Equatable, Sendable {
     }
 }
 
+public struct LSPContentChange: Equatable, Sendable {
+    public var range: LSPRange?
+    public var text: String
+
+    public init(range: LSPRange? = nil, text: String) {
+        self.range = range
+        self.text = text
+    }
+}
+
+public struct ServerCapabilities: Equatable, Sendable {
+    public var incrementalSync: Bool
+    public var hoverProvider: Bool
+    public var completionProvider: Bool
+    public var definitionProvider: Bool
+    public var positionEncoding: String
+
+    public init(
+        incrementalSync: Bool = false,
+        hoverProvider: Bool = false,
+        completionProvider: Bool = false,
+        definitionProvider: Bool = false,
+        positionEncoding: String = "utf-16"
+    ) {
+        self.incrementalSync = incrementalSync
+        self.hoverProvider = hoverProvider
+        self.completionProvider = completionProvider
+        self.definitionProvider = definitionProvider
+        self.positionEncoding = positionEncoding
+    }
+
+    public static func parse(_ value: JSONValue?) -> ServerCapabilities {
+        let caps = value?.object?["capabilities"]?.object ?? [:]
+        let sync = caps["textDocumentSync"]
+        let incremental: Bool
+        if sync?.int == 2 {
+            incremental = true
+        } else if sync?.object?["change"]?.int == 2 {
+            incremental = true
+        } else {
+            incremental = false
+        }
+        let hover = caps["hoverProvider"]
+        let hoverOn = hover?.bool == true || hover?.object != nil
+        let completion = caps["completionProvider"] != nil && caps["completionProvider"] != .null
+        let definition = caps["definitionProvider"]
+        let definitionOn = definition?.bool == true || definition?.object != nil
+        let encoding = caps["positionEncoding"]?.string ?? "utf-16"
+        return ServerCapabilities(
+            incrementalSync: incremental,
+            hoverProvider: hoverOn,
+            completionProvider: completion,
+            definitionProvider: definitionOn,
+            positionEncoding: encoding
+        )
+    }
+}
+
 public struct LSPServerConfig: Equatable, Sendable, Codable {
     public var name: String
     public var command: String
@@ -195,6 +281,32 @@ public struct LSPServerConfig: Equatable, Sendable, Codable {
         let ext = "." + file.pathExtension.lowercased()
         return extensions.contains(where: { $0.lowercased() == ext })
     }
+
+    enum CodingKeys: String, CodingKey {
+        case name, command, arguments, extensions, languages, rootMarkers, env
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        command = try c.decode(String.self, forKey: .command)
+        arguments = try c.decodeIfPresent([String].self, forKey: .arguments) ?? []
+        extensions = try c.decodeIfPresent([String].self, forKey: .extensions) ?? [".md", ".markdown"]
+        languages = try c.decodeIfPresent([String].self, forKey: .languages) ?? ["markdown"]
+        rootMarkers = try c.decodeIfPresent([String].self, forKey: .rootMarkers) ?? [".git"]
+        env = try c.decodeIfPresent([String: String].self, forKey: .env) ?? [:]
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(name, forKey: .name)
+        try c.encode(command, forKey: .command)
+        try c.encode(arguments, forKey: .arguments)
+        try c.encode(extensions, forKey: .extensions)
+        try c.encode(languages, forKey: .languages)
+        try c.encode(rootMarkers, forKey: .rootMarkers)
+        try c.encode(env, forKey: .env)
+    }
 }
 
 public struct LSPSettings: Equatable, Sendable, Codable {
@@ -205,15 +317,28 @@ public struct LSPSettings: Equatable, Sendable, Codable {
     }
 
     public static func load(from url: URL) -> LSPSettings {
-        guard let data = try? Data(contentsOf: url),
-              let decoded = try? JSONDecoder().decode(LSPSettings.self, from: data) else {
-            return LSPSettings()
+        loadReporting(from: url).settings
+    }
+
+    public static func loadReporting(from url: URL) -> (settings: LSPSettings, error: String?) {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return (LSPSettings(), nil)
         }
-        return decoded
+        do {
+            let data = try Data(contentsOf: url)
+            let decoded = try JSONDecoder().decode(LSPSettings.self, from: data)
+            return (decoded, nil)
+        } catch {
+            return (LSPSettings(), "config: \(error.localizedDescription)")
+        }
     }
 
     public func server(for file: URL) -> LSPServerConfig? {
         servers.first { $0.matches(file: file) }
+    }
+
+    public func servers(for file: URL) -> [LSPServerConfig] {
+        servers.filter { $0.matches(file: file) }
     }
 }
 

@@ -6,6 +6,7 @@ import Foundation
 public final class LSPClient: @unchecked Sendable {
     public let config: LSPServerConfig
     public private(set) var isRunning = false
+    public private(set) var capabilities = ServerCapabilities()
     public var onDiagnostics: ((String, [Diagnostic]) -> Void)?
     public var onLog: ((String) -> Void)?
 
@@ -66,13 +67,19 @@ public final class LSPClient: @unchecked Sendable {
             throw JSONRPCError.serverUnavailable(config.command)
         }
         self.process = proc
+        drainStderr(stderr.fileHandleForReading)
         let transport = ProcessTransport(input: stdin.fileHandleForWriting, output: stdout.fileHandleForReading)
         let session = JSONRPCSession(transport: transport)
         try attach(session: session, rootURI: root.absoluteString)
+        watchExit(proc)
     }
 
+    /// `shutdown`, then `exit`. A missing server still closes the transport.
     public func stop() {
-        try? session?.notify(method: "exit")
+        if isRunning, session != nil {
+            _ = try? session?.request(method: "shutdown", params: .null, timeout: 1)
+            try? session?.notify(method: "exit")
+        }
         session?.close()
         process?.terminate()
         isRunning = false
@@ -90,14 +97,26 @@ public final class LSPClient: @unchecked Sendable {
     }
 
     public func didChange(uri: String, version: Int, text: String) {
+        didChange(uri: uri, version: version, changes: [LSPContentChange(text: text)])
+    }
+
+    public func didChange(uri: String, version: Int, changes: [LSPContentChange]) {
+        let encoded: [JSONValue] = changes.map { change in
+            var obj: [String: JSONValue] = ["text": .string(change.text)]
+            if let range = change.range {
+                obj["range"] = .object([
+                    "start": range.start.json,
+                    "end": range.end.json,
+                ])
+            }
+            return .object(obj)
+        }
         try? session?.notify(method: "textDocument/didChange", params: .object([
             "textDocument": .object([
                 "uri": .string(uri),
                 "version": .number(Double(version)),
             ]),
-            "contentChanges": .array([
-                .object(["text": .string(text)]),
-            ]),
+            "contentChanges": .array(encoded),
         ]))
     }
 
@@ -129,6 +148,21 @@ public final class LSPClient: @unchecked Sendable {
         return Hover.from(result ?? .null)
     }
 
+    public func completion(uri: String, position: LSPPosition) async throws -> [CompletionItem] {
+        let result = try await session?.request(method: "textDocument/completion", params: textDocumentPosition(uri, position))
+        return parseCompletion(result ?? .null)
+    }
+
+    public func definition(uri: String, position: LSPPosition) async throws -> [Location] {
+        let result = try await session?.request(method: "textDocument/definition", params: textDocumentPosition(uri, position))
+        return parseLocations(result ?? .null)
+    }
+
+    public func hover(uri: String, position: LSPPosition) async throws -> Hover? {
+        let result = try await session?.request(method: "textDocument/hover", params: textDocumentPosition(uri, position))
+        return Hover.from(result ?? .null)
+    }
+
     private func initialize() throws {
         let caps = JSONValue.object([
             "textDocument": .object([
@@ -153,7 +187,8 @@ public final class LSPClient: @unchecked Sendable {
             "workspaceFolders": .array(workspaceFolders),
             "clientInfo": .object(["name": .string("Quill"), "version": .string("0.1")]),
         ])
-        _ = try session?.request(method: "initialize", params: params)
+        let result = try session?.request(method: "initialize", params: params)
+        capabilities = ServerCapabilities.parse(result)
         try session?.notify(method: "initialized", params: .object([:]))
     }
 
@@ -168,7 +203,7 @@ public final class LSPClient: @unchecked Sendable {
         }
     }
 
-    private func handleServerRequest(_ method: String, _ params: JSONValue?) -> JSONValue {
+    private func handleServerRequest(_ method: String, _ params: JSONValue?) -> JSONValue? {
         switch method {
         case "workspace/workspaceFolders":
             return .array(workspaceFolders)
@@ -178,7 +213,31 @@ public final class LSPClient: @unchecked Sendable {
         case "client/registerCapability", "client/unregisterCapability", "window/workDoneProgress/create":
             return .null
         default:
-            return .null
+            return nil
+        }
+    }
+
+    private func drainStderr(_ handle: FileHandle) {
+        let thread = Thread {
+            while true {
+                let data = try? handle.read(upToCount: 64 * 1024)
+                if data == nil || data?.isEmpty == true { return }
+                if let text = String(data: data ?? Data(), encoding: .utf8), !text.isEmpty {
+                    self.onLog?(text)
+                }
+            }
+        }
+        thread.name = "quill.lsp.stderr"
+        thread.start()
+    }
+
+    private func watchExit(_ proc: Process) {
+        proc.terminationHandler = { [weak self] process in
+            guard let self else { return }
+            if self.isRunning {
+                self.onLog?("language server exited (\(process.terminationStatus))")
+                self.isRunning = false
+            }
         }
     }
 
@@ -223,6 +282,7 @@ public final class LSPClient: @unchecked Sendable {
 final class ProcessTransport: ByteTransport, @unchecked Sendable {
     let input: FileHandle
     let output: FileHandle
+    private let writeLock = NSLock()
     private var closed = false
 
     init(input: FileHandle, output: FileHandle) {
@@ -231,6 +291,9 @@ final class ProcessTransport: ByteTransport, @unchecked Sendable {
     }
 
     func write(_ data: Data) throws {
+        writeLock.lock()
+        defer { writeLock.unlock() }
+        if closed { throw JSONRPCError.closed }
         try input.write(contentsOf: data)
     }
 
