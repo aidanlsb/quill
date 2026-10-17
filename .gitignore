@@ -1,4 +1,5 @@
 .build/
+artifacts/
 agent-tools/
 .swiftpm/
 *.xcodeproj/xcuserdata/

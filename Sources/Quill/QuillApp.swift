@@ -13,9 +13,9 @@ struct QuillApp: App {
                 .frame(minWidth: 720, minHeight: 480)
                 .onAppear {
                     appDelegate.attach(model)
-                    NSApp.setActivationPolicy(.regular)
+                    NSApplication.shared.setActivationPolicy(.regular)
                     model.consumeLaunchArguments(Array(CommandLine.arguments.dropFirst()))
-                    NSApp.windows.forEach { $0.delegate = appDelegate }
+                    NSApplication.shared.windows.forEach { $0.delegate = appDelegate }
                     AppSmoke.runIfRequested(model: model)
                 }
                 .onOpenURL { url in
@@ -75,6 +75,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     ) {
         guard let urlString = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
               let url = URL(string: urlString) else { return }
+        // quill-concurrency: The Apple event arrives on the main thread; assumeIsolated hops without capturing self.
         nonisolated(unsafe) let delegate = self
         MainActor.assumeIsolated {
             delegate.accept(url)

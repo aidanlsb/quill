@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# Doctor and drive the Quill macOS app. See .cursor/skills/verify-quill/SKILL.md.
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$root"
+
+mode="drive"
+bin=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    doctor)
+      mode="doctor"
+      shift
+      ;;
+    --bin)
+      bin="${2:-}"
+      if [[ -z "$bin" ]]; then
+        echo "verify-quill: --bin needs a path" >&2
+        exit 2
+      fi
+      shift 2
+      ;;
+    *)
+      echo "usage: Scripts/verify-quill [doctor] [--bin PATH]" >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ "$(uname -s)" != "Darwin" ]]; then
+  echo "verify-quill: Quill is an AppKit app. This host ($(uname -s)) cannot launch it." >&2
+  echo "verify-quill: run Scripts/verify-quill on macOS. The macos CI job is the harness." >&2
+  exit 1
+fi
+
+if ! command -v swift >/dev/null 2>&1; then
+  echo "verify-quill: swift is not on PATH" >&2
+  exit 1
+fi
+
+swift_line="$(swift --version | head -n 1)"
+echo "verify-quill: $swift_line"
+
+if [[ -z "$bin" ]]; then
+  bin="$(swift build -c release --product Quill -Xswiftc -strict-concurrency=complete --show-bin-path)/Quill"
+fi
+
+if [[ ! -x "$bin" ]]; then
+  echo "verify-quill: binary is not executable: $bin" >&2
+  exit 1
+fi
+
+echo "verify-quill: binary $bin"
+
+if [[ "$mode" == "doctor" ]]; then
+  exit 0
+fi
+
+mkdir -p "$root/artifacts/verify-quill"
+log="$root/artifacts/verify-quill/smoke.log"
+: > "$log"
+
+QUILL_SMOKE=1 "$bin" >"$log" 2>&1 &
+pid=$!
+status=0
+finished=0
+i=0
+while [[ "$i" -lt 30 ]]; do
+  if ! kill -0 "$pid" 2>/dev/null; then
+    set +e
+    wait "$pid"
+    status=$?
+    set -e
+    finished=1
+    break
+  fi
+  sleep 1
+  i=$((i + 1))
+done
+
+if [[ "$finished" -eq 0 ]]; then
+  echo "verify-quill: smoke still running after 30s; killing pid $pid" >&2
+  kill "$pid" 2>/dev/null || true
+  sleep 1
+  kill -9 "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  exit 1
+fi
+
+if [[ "$status" -ne 0 ]]; then
+  echo "verify-quill: smoke failed (status $status). Log: $log" >&2
+  cat "$log" >&2 || true
+  exit "$status"
+fi
+
+if ! grep -F -q "quill smoke passed" "$log"; then
+  echo "verify-quill: smoke exited 0 without 'quill smoke passed'. Log: $log" >&2
+  cat "$log" >&2 || true
+  exit 1
+fi
+
+if grep -F -q "FAIL " "$log"; then
+  echo "verify-quill: smoke log contains FAIL. Log: $log" >&2
+  cat "$log" >&2 || true
+  exit 1
+fi
+
+echo "verify-quill: quill smoke passed"
+echo "verify-quill: evidence $log"

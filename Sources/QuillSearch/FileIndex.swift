@@ -338,6 +338,7 @@ public enum ContentSearch {
 }
 
 /// Holds the live `rg` process so a newer query can terminate it.
+// quill-concurrency: NSLock guards the live Process handle.
 public final class CancellableProcess: @unchecked Sendable {
     private let lock = NSLock()
     private var process: Process?
@@ -384,6 +385,7 @@ public actor SearchSession {
     }
 }
 
+// quill-concurrency: NSCondition counts in-flight drain callbacks.
 private final class DrainGate: @unchecked Sendable {
     private let condition = NSCondition()
     private var remaining: Int
@@ -401,6 +403,7 @@ private final class DrainGate: @unchecked Sendable {
     }
 }
 
+// quill-concurrency: NSLock guards the accumulated bytes.
 private final class LockedData: @unchecked Sendable {
     private let lock = NSLock()
     private var data = Data()

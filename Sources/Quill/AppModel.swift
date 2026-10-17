@@ -162,7 +162,7 @@ final class AppModel {
         case .close(let window):
             window.close()
         case .terminate:
-            NSApp.reply(toApplicationShouldTerminate: true)
+            NSApplication.shared.reply(toApplicationShouldTerminate: true)
         case nil:
             break
         }
@@ -176,7 +176,7 @@ final class AppModel {
             pendingJumps.removeValue(forKey: url.standardizedFileURL.path)
         }
         if case .terminate = pending {
-            NSApp.reply(toApplicationShouldTerminate: false)
+            NSApplication.shared.reply(toApplicationShouldTerminate: false)
         }
     }
 
@@ -232,10 +232,10 @@ final class AppModel {
         case .write:
             save()
         case .quit:
-            NSApp.keyWindow?.close()
+            NSApplication.shared.keyWindow?.close()
         case .writeQuit:
             save()
-            if !engine.isModified { NSApp.keyWindow?.close() }
+            if !engine.isModified { NSApplication.shared.keyWindow?.close() }
         case .goToDefinition:
             goToDefinition()
         case .openParentDirectory:
