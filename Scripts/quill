@@ -4,6 +4,7 @@
 #   quill
 #   quill path/to/note.md
 #   quill .
+#   quill --wait new-note.md
 set -euo pipefail
 
 resolve_app() {
@@ -21,27 +22,34 @@ resolve_app() {
 }
 
 APP="$(resolve_app)"
+wait_flag=()
+if [[ "${1:-}" == "--wait" ]]; then
+  wait_flag=(-W -n)
+  shift
+fi
 if [[ $# -eq 0 ]]; then
   if [[ "$APP" == "Quill" ]]; then
-    open -a Quill
+    open "${wait_flag[@]}" -a Quill
   else
-    open -a "$APP"
+    open "${wait_flag[@]}" -a "$APP"
   fi
   exit 0
 fi
 
-# Expand relative paths so Launch Services opens the right files.
+# Expand relative paths and create files that do not exist yet.
 args=()
 for arg in "$@"; do
   if [[ -e "$arg" ]]; then
     args+=("$(cd "$(dirname "$arg")" && pwd)/$(basename "$arg")")
   else
-    args+=("$arg")
+    mkdir -p "$(dirname "$arg")"
+    : > "$arg"
+    args+=("$(cd "$(dirname "$arg")" && pwd)/$(basename "$arg")")
   fi
 done
 
 if [[ "$APP" == "Quill" ]]; then
-  open -a Quill -- "${args[@]}"
+  open "${wait_flag[@]}" -a Quill -- "${args[@]}"
 else
-  open -a "$APP" -- "${args[@]}"
+  open "${wait_flag[@]}" -a "$APP" -- "${args[@]}"
 fi

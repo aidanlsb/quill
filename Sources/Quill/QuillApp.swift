@@ -5,16 +5,17 @@ import UniformTypeIdentifiers
 @main
 struct QuillApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    @StateObject private var model = AppModel()
+    @State private var model = AppModel()
 
     var body: some Scene {
         WindowGroup {
             ContentView(model: model)
                 .frame(minWidth: 720, minHeight: 480)
                 .onAppear {
-                    appDelegate.model = model
+                    appDelegate.attach(model)
                     NSApp.setActivationPolicy(.regular)
                     consumeLaunchURLs()
+                    NSApp.windows.forEach { $0.delegate = appDelegate }
                 }
                 .onOpenURL { url in
                     model.open(url: url)
@@ -55,9 +56,14 @@ struct QuillApp: App {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var model: AppModel?
     private var pending: [URL] = []
+
+    func attach(_ model: AppModel) {
+        self.model = model
+        drainPending()
+    }
 
     func application(_ application: NSApplication, open urls: [URL]) {
         if let model {
@@ -68,13 +74,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        if let model, let url = pending.first {
-            model.open(url: url)
-            pending.removeAll()
-        }
+        drainPending()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        model?.requestTerminate() ?? .terminateNow
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        model?.requestClose(sender) ?? true
+    }
+
+    private func drainPending() {
+        guard let model, !pending.isEmpty else { return }
+        let urls = pending
+        pending.removeAll()
+        urls.forEach { model.open(url: $0) }
     }
 }

@@ -2,10 +2,10 @@ import AppKit
 import SwiftUI
 import QuillFS
 import QuillSearch
+import QuillWorkspace
 
 struct ContentView: View {
-    @ObservedObject var model: AppModel
-    @Environment(\.colorScheme) var colorScheme
+    @Bindable var model: AppModel
 
     var body: some View {
         ZStack {
@@ -31,21 +31,28 @@ struct ContentView: View {
                 StatusBar(model: model)
             }
         }
-        .onChange(of: colorScheme) { _, _ in
-            model.theme = QuillTheme.current(columnCharacters: model.config.columnWidth)
-        }
         .sheet(isPresented: $model.showConfirm) {
-            ConfirmSheet(ops: model.pendingOps, onConfirm: model.applyPendingOps, onCancel: {
-                model.showConfirm = false
-            })
+            ConfirmSheet(
+                ops: model.pendingOps,
+                warning: model.confirmWarning,
+                onConfirm: model.applyPendingOps,
+                onCancel: { model.showConfirm = false }
+            )
         }
-        .background(KeyCatcher(model: model))
+        .sheet(isPresented: $model.showUnsaved) {
+            UnsavedSheet(
+                message: model.message,
+                onSave: model.saveAndContinue,
+                onDiscard: model.discardAndContinue,
+                onCancel: model.cancelNavigation
+            )
+        }
         .navigationTitle(model.title + (model.modified ? " —" : ""))
     }
 }
 
 struct StatusBar: View {
-    @ObservedObject var model: AppModel
+    var model: AppModel
 
     var body: some View {
         HStack(spacing: 12) {
@@ -120,8 +127,32 @@ struct CompletionList: View {
     }
 }
 
+struct UnsavedSheet: View {
+    var message: String
+    var onSave: () -> Void
+    var onDiscard: () -> Void
+    var onCancel: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(message.isEmpty ? NavigationGuard.unsavedMessage : message)
+                .font(.headline)
+            HStack {
+                Spacer()
+                Button("Cancel", action: onCancel)
+                Button("Don't Save", action: onDiscard)
+                Button("Save", action: onSave)
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 420)
+    }
+}
+
 struct ConfirmSheet: View {
     var ops: [FSOperation]
+    var warning: String
     var onConfirm: () -> Void
     var onCancel: () -> Void
 
@@ -129,7 +160,7 @@ struct ConfirmSheet: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Apply filesystem changes?")
                 .font(.headline)
-            Text("Deletes go to the Trash. This cannot be quietly undone.")
+            Text(warning.isEmpty ? "Deletes go to the Trash." : warning)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             List(ops.map(\.summary), id: \.self) { line in
@@ -152,13 +183,16 @@ struct ConfirmSheet: View {
 }
 
 struct PickerPanel: View {
-    @ObservedObject var model: AppModel
+    var model: AppModel
 
     var body: some View {
         ZStack {
             Color.black.opacity(0.28)
                 .ignoresSafeArea()
-                .onTapGesture { model.picker = nil }
+                .onTapGesture {
+                    model.picker = nil
+                    model.pickerKind = nil
+                }
             VStack(spacing: 0) {
                 if let picker = model.picker {
                     HStack(alignment: .firstTextBaseline, spacing: 10) {
@@ -221,6 +255,7 @@ struct PickerPanel: View {
                         }
                         .frame(minWidth: 240)
                     }
+                    .id(model.pickerTick)
                 }
             }
             .frame(minWidth: 640, minHeight: 420)
@@ -249,7 +284,9 @@ struct PickerKeyCatcher: NSViewRepresentable {
     func updateNSView(_ nsView: PickerKeyView, context: Context) {
         nsView.model = model
         Task { @MainActor in
-            nsView.window?.makeFirstResponder(nsView)
+            if nsView.window?.firstResponder !== nsView {
+                nsView.window?.makeFirstResponder(nsView)
+            }
         }
     }
 }
@@ -282,8 +319,3 @@ final class PickerKeyView: NSView {
     }
 }
 
-struct KeyCatcher: NSViewRepresentable {
-    var model: AppModel
-    func makeNSView(context: Context) -> NSView { NSView() }
-    func updateNSView(_ nsView: NSView, context: Context) {}
-}
