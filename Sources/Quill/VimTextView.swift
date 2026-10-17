@@ -3,8 +3,9 @@ import SwiftUI
 import QuillMarkdown
 import QuillVim
 
-/// TextKit 2 display-line layout. `@unchecked Sendable` because the vim engine
-/// only invokes this from the app's main-actor event loop (keyDown / sync).
+/// TextKit 2 display-line layout. The vim engine only invokes this from the
+/// app's main-actor event loop (keyDown / sync).
+// quill-concurrency: TextLayout is nonisolated and the main-actor key loop is the only caller.
 @MainActor
 final class TextKit2Layout: TextLayout, @unchecked Sendable {
     weak var textView: NSTextView?
@@ -29,7 +30,7 @@ final class TextKit2Layout: TextLayout, @unchecked Sendable {
                 in: buffer
             )
         }
-        // TextBuffer is not Sendable; the engine calls this synchronously on the main thread.
+        // quill-concurrency: TextBuffer is not Sendable; the engine calls this synchronously on the main thread.
         nonisolated(unsafe) let buffer = buffer
         return MainActor.assumeIsolated {
             positionUsingTextKit(

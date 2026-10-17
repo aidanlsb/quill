@@ -75,6 +75,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     ) {
         guard let urlString = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
               let url = URL(string: urlString) else { return }
+        // quill-concurrency: The Apple event arrives on the main thread; assumeIsolated hops without capturing self.
         nonisolated(unsafe) let delegate = self
         MainActor.assumeIsolated {
             delegate.accept(url)

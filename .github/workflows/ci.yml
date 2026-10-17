@@ -18,6 +18,10 @@ jobs:
           echo "/opt/swift-6.0.3-RELEASE-ubuntu24.04/usr/bin" >> "$GITHUB_PATH"
       - name: Test
         run: swift test
+      - name: Check concurrency escapes
+        run: |
+          Scripts/check-concurrency-fixture.sh
+          python3 Scripts/check_boundaries.py --self-test
 
   # Xcode 16.4 (Swift 6.1) on macos-15 rejects the app, and Xcode 26
   # binaries do not run on macOS 15. macos-26 compiles and tests with Swift 6.2.
@@ -58,6 +62,10 @@ jobs:
           sudo xcode-select -s /Applications/Xcode_26.3.app
           xcodebuild -version
           swift --version
+      - name: Check concurrency escapes
+        run: |
+          Scripts/check-concurrency-fixture.sh
+          python3 Scripts/check_boundaries.py --self-test
       # Swift 6.2 rejects a nonisolated mutable static (`#MutableGlobalVariable`).
       # Complete checking is the Swift 6.2 default; pass it explicitly so that
       # stays a hard failure if a later toolchain loosens the default.

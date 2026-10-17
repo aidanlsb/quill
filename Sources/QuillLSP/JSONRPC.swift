@@ -9,6 +9,7 @@ public enum JSONRPCError: Error, Equatable {
 }
 
 /// LSP / JSON-RPC 2.0 header framing (`Content-Length: N\r\n\r\n{json}`).
+// quill-concurrency: The decode buffer is only used on the session read thread.
 public final class JSONRPCFramer: @unchecked Sendable {
     private var buffer = Data()
 
@@ -62,6 +63,7 @@ public protocol ByteTransport: AnyObject {
 }
 
 /// In-memory duplex used by tests. Pair two ends with `makePair()`.
+// quill-concurrency: NSCondition guards the chunk queue shared by the pair.
 public final class MemoryTransport: ByteTransport, @unchecked Sendable {
     private let condition = NSCondition()
     private var chunks: [Data] = []
@@ -132,6 +134,7 @@ public enum JSONRPCID: Hashable, Sendable {
     }
 }
 
+// quill-concurrency: NSLock guards pending requests; writeLock guards the transport write.
 public final class JSONRPCSession: @unchecked Sendable {
     private let transport: ByteTransport
     private let framer = JSONRPCFramer()
@@ -321,11 +324,13 @@ public final class JSONRPCSession: @unchecked Sendable {
     }
 }
 
+// quill-concurrency: NSCondition guards the single waiter and the stored result.
 private final class ResponseBox: @unchecked Sendable {
     let condition = NSCondition()
     var result: Result<JSONValue, Error>?
 }
 
+// quill-concurrency: NSLock makes resume happen once across threads.
 private final class OnceResume: @unchecked Sendable {
     private let lock = NSLock()
     private var done = false

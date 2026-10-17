@@ -3,6 +3,7 @@ import Foundation
 /// Generic Language Server Protocol 3.17 client over JSON-RPC stdio.
 /// Nothing here is server-specific: command, args, root markers, and
 /// initialization options come from `LSPServerConfig`.
+// quill-concurrency: One host-owned session; reader-thread callbacks must hop before touching UI state.
 public final class LSPClient: @unchecked Sendable {
     public let config: LSPServerConfig
     public private(set) var isRunning = false
@@ -331,6 +332,7 @@ public final class LSPClient: @unchecked Sendable {
     }
 }
 
+// quill-concurrency: writeLock guards writes; the pipes are the process boundary.
 final class ProcessTransport: ByteTransport, @unchecked Sendable {
     let input: FileHandle
     let output: FileHandle

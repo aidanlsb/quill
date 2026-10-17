@@ -2,6 +2,7 @@ import Foundation
 
 /// Same-process JSON-RPC endpoint: writes are answered on the same object,
 /// so tests do not need a second thread talking through a pipe pair.
+// quill-concurrency: Test double; reads and writes stay on the calling thread.
 public final class ScriptedTransport: ByteTransport, @unchecked Sendable {
     public var onRequest: (String, JSONValue?) -> JSONValue = { _, _ in .null }
     public var onNotify: (String, JSONValue?) -> Void = { _, _ in }

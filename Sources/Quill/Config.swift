@@ -96,10 +96,10 @@ struct QuillConfig: Equatable {
     }
 }
 
-/// System pasteboard adapter. `@unchecked Sendable` because the engine only
-/// reads/writes this from the app's main-actor event loop (key handlers / host
-/// actions). The assumeIsolated hop uses static helpers so it does not capture
-/// a non-Sendable `self`.
+/// System pasteboard adapter. The engine only reads and writes this from the
+/// app's main-actor event loop. The assumeIsolated hop uses static helpers so
+/// it does not capture a non-Sendable `self`.
+// quill-concurrency: Clipboard methods hop with assumeIsolated and run on the main actor only.
 final class PasteboardClipboard: Clipboard, @unchecked Sendable {
     var text: String {
         get {

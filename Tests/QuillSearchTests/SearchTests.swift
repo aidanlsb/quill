@@ -2,6 +2,7 @@ import XCTest
 import Foundation
 @testable import QuillSearch
 
+// quill-concurrency: Test box filled from drain callbacks and read only after the process exits.
 private final class DrainResult: @unchecked Sendable {
     var stdout = Data()
     var stderr = Data()
