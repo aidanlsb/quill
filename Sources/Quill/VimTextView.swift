@@ -2,20 +2,23 @@ import AppKit
 import SwiftUI
 import QuillVim
 
-final class TextKit2Layout: TextLayout {
+/// TextKit 2 display-line layout. `@unchecked Sendable` because the vim engine
+/// only invokes this from the app's main-actor event loop (keyDown / sync).
+@MainActor
+final class TextKit2Layout: TextLayout, @unchecked Sendable {
     weak var textView: NSTextView?
 
-    func displayColumn(of offset: Int, in buffer: TextBuffer) -> Int {
+    nonisolated func displayColumn(of offset: Int, in buffer: TextBuffer) -> Int {
         LogicalLineLayout.shared.displayColumn(of: offset, in: buffer)
     }
 
-    func position(
+    nonisolated func position(
         from offset: Int,
         displayLines delta: Int,
         preferredColumn: Int,
         in buffer: TextBuffer
     ) -> Int {
-        guard textView != nil, delta != 0 else {
+        guard delta != 0 else {
             return LogicalLineLayout.shared.position(
                 from: offset,
                 displayLines: delta,
@@ -23,7 +26,6 @@ final class TextKit2Layout: TextLayout {
                 in: buffer
             )
         }
-        // Engine calls layout from the app's main-actor event loop (keyDown / sync).
         return MainActor.assumeIsolated {
             positionUsingTextKit(
                 from: offset,
@@ -34,7 +36,6 @@ final class TextKit2Layout: TextLayout {
         }
     }
 
-    @MainActor
     private func positionUsingTextKit(
         from offset: Int,
         displayLines delta: Int,

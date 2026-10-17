@@ -53,20 +53,33 @@ struct QuillConfig: Codable, Equatable {
     }
 }
 
-/// System pasteboard adapter. Engine only reads/writes this from the app's
-/// main-actor event loop (key handlers and host actions).
-final class PasteboardClipboard: Clipboard {
+/// System pasteboard adapter. `@unchecked Sendable` because the engine only
+/// reads/writes this from the app's main-actor event loop (key handlers / host
+/// actions). The assumeIsolated hop uses static helpers so it does not capture
+/// a non-Sendable `self`.
+final class PasteboardClipboard: Clipboard, @unchecked Sendable {
     var text: String {
         get {
             MainActor.assumeIsolated {
-                NSPasteboard.general.string(forType: .string) ?? ""
+                Self.readPasteboard()
             }
         }
         set {
+            let value = newValue
             MainActor.assumeIsolated {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(newValue, forType: .string)
+                Self.writePasteboard(value)
             }
         }
+    }
+
+    @MainActor
+    private static func readPasteboard() -> String {
+        NSPasteboard.general.string(forType: .string) ?? ""
+    }
+
+    @MainActor
+    private static func writePasteboard(_ value: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
     }
 }
