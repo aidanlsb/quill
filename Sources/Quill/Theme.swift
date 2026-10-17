@@ -1,4 +1,5 @@
 import AppKit
+import QuillMarkdown
 
 struct QuillTheme {
     var bodyFont: NSFont
@@ -69,7 +70,79 @@ struct QuillTheme {
 
 @MainActor
 enum MarkdownStyler {
-    static func restyle(_ storage: NSTextStorage, theme: QuillTheme, diagnostics: [(NSRange, Int)] = []) {
+    static func restyle(
+        _ storage: NSTextStorage,
+        theme: QuillTheme,
+        spans: [TokenSpan] = [],
+        dirtyUTF16: Int? = nil,
+        focus: Bool = false,
+        caret: Int = 0,
+        diagnostics: [(NSRange, Int)] = []
+    ) {
+        let ns = storage.string as NSString
+        let full = NSRange(location: 0, length: ns.length)
+        let limit: NSRange
+        if let dirtyUTF16 {
+            let paragraph = Paragraphs.range(in: storage.string, utf16: dirtyUTF16)
+            let loc = min(paragraph.lowerBound, ns.length)
+            let end = min(paragraph.upperBound, ns.length)
+            limit = NSRange(location: loc, length: max(0, end - loc))
+        } else {
+            limit = full
+        }
+        storage.beginEditing()
+        if limit.length > 0 {
+            storage.setAttributes(theme.bodyAttributes, range: limit)
+        }
+        let focusRange = focus ? Paragraphs.range(in: storage.string, utf16: caret) : 0..<ns.length
+        for span in spans where NSIntersectionRange(nsRange(span.range, length: ns.length), limit).length > 0 {
+            let range = nsRange(span.range, length: ns.length)
+            guard range.location != NSNotFound, range.length > 0, NSMaxRange(range) <= ns.length else { continue }
+            let dimmed = focus && (range.location >= focusRange.upperBound || NSMaxRange(range) <= focusRange.lowerBound)
+            apply(span.token, range: range, theme: theme, storage: storage, dimmed: dimmed)
+        }
+        for (range, severity) in diagnostics {
+            guard NSMaxRange(range) <= storage.length else { continue }
+            let color: NSColor = severity <= 1 ? .systemRed : .systemOrange
+            storage.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: range)
+            storage.addAttribute(.underlineColor, value: color, range: range)
+        }
+        storage.endEditing()
+    }
+
+    private static func nsRange(_ range: Range<Int>, length: Int) -> NSRange {
+        let loc = min(max(0, range.lowerBound), length)
+        let end = min(max(loc, range.upperBound), length)
+        return NSRange(location: loc, length: end - loc)
+    }
+
+    private static func apply(_ token: MarkdownToken, range: NSRange, theme: QuillTheme, storage: NSTextStorage, dimmed: Bool) {
+        if dimmed {
+            storage.addAttribute(.foregroundColor, value: theme.dimColor, range: range)
+            return
+        }
+        switch MarkdownThemeMap.style(for: token) {
+        case .heading(let level):
+            let font = theme.headingFonts[min(max(0, level - 1), theme.headingFonts.count - 1)]
+            storage.addAttribute(.font, value: font, range: range)
+        case .strong:
+            storage.addAttribute(.font, value: NSFontManager.shared.convert(theme.bodyFont, toHaveTrait: .boldFontMask), range: range)
+        case .emphasis:
+            let italic = NSFontManager.shared.convert(theme.bodyFont, toHaveTrait: .italicFontMask)
+            storage.addAttribute(.font, value: italic, range: range)
+        case .code:
+            storage.addAttribute(.font, value: theme.monoFont, range: range)
+            storage.addAttribute(.foregroundColor, value: theme.codeColor, range: range)
+        case .link:
+            storage.addAttribute(.foregroundColor, value: theme.linkColor, range: range)
+        case .syntax, .dim:
+            storage.addAttribute(.foregroundColor, value: theme.syntaxColor, range: range)
+        case .body:
+            break
+        }
+    }
+
+    static func restyleLegacy(_ storage: NSTextStorage, theme: QuillTheme, diagnostics: [(NSRange, Int)] = []) {
         let text = storage.string
         let full = NSRange(location: 0, length: (text as NSString).length)
         storage.beginEditing()

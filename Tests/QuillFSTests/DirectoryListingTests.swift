@@ -5,10 +5,17 @@ import Foundation
 final class DirectoryListingTests: XCTestCase {
     let parent = URL(fileURLWithPath: "/notes")
 
-    func original(_ names: [(String, Bool)]) -> DirectorySnapshot {
+    func original(_ names: [(String, Bool)], ids: [UInt64]? = nil) -> DirectorySnapshot {
         DirectorySnapshot(
             directory: parent,
-            entries: names.map { DirEntry(originalURL: parent.appendingPathComponent($0.0), name: $0.0, isDirectory: $0.1) }
+            entries: names.enumerated().map { index, item in
+                DirEntry(
+                    originalURL: parent.appendingPathComponent(item.0),
+                    name: item.0,
+                    isDirectory: item.1,
+                    entryID: ids?[index]
+                )
+            }
         )
     }
 
@@ -30,8 +37,10 @@ final class DirectoryListingTests: XCTestCase {
     }
 
     func testRename() {
-        let snap = original([("old.md", false)])
-        let ops = DirectoryListing.plan(original: snap, editedText: "new.md\n")
+        let snap = original([("old.md", false)], ids: [7])
+        let ops = DirectoryListing.plan(original: snap, lines: [
+            ListingLine(name: "new.md", isDirectory: false, entryID: 7, sourcePath: parent.appendingPathComponent("old.md").path),
+        ])
         XCTAssertEqual(ops, [
             .rename(from: parent.appendingPathComponent("old.md"), to: parent.appendingPathComponent("new.md")),
         ])
@@ -69,11 +78,65 @@ final class DirectoryListingTests: XCTestCase {
     }
 
     func testRenameAndCreateTogether() {
-        let snap = original([("a.md", false)])
-        let ops = DirectoryListing.plan(original: snap, editedText: "b.md\nc.md\n")
+        let snap = original([("a.md", false)], ids: [4])
+        let ops = DirectoryListing.plan(original: snap, lines: [
+            ListingLine(name: "b.md", isDirectory: false, entryID: 4),
+            ListingLine(name: "c.md", isDirectory: false),
+        ])
         XCTAssertEqual(ops.count, 2)
         XCTAssertTrue(ops.contains { if case .rename = $0 { return true } else { return false } })
         XCTAssertTrue(ops.contains { if case .create = $0 { return true } else { return false } })
+    }
+
+    func testProbeDoesNotRenameTheWrongFile() {
+        let snap = original([("a.md", false), ("b.md", false), ("c.md", false)], ids: [1, 2, 3])
+        let ops = DirectoryListing.plan(original: snap, lines: [
+            ListingLine(name: "b.md", isDirectory: false, entryID: 2),
+            ListingLine(name: "z.md", isDirectory: false, entryID: 3, sourcePath: parent.appendingPathComponent("c.md").path),
+        ])
+        XCTAssertEqual(ops, [
+            .rename(from: parent.appendingPathComponent("c.md"), to: parent.appendingPathComponent("z.md")),
+            .delete(parent.appendingPathComponent("a.md")),
+        ])
+    }
+
+    func testProbeTypedLineIsCreateNotStaleYank() {
+        let snap = original([("keep.md", false)], ids: [1])
+        let ops = DirectoryListing.plan(original: snap, editedText: "keep.md\nbrand-new.md\n", incomingMoves: [
+            DirEntry(originalURL: URL(fileURLWithPath: "/other/x.md"), name: "x.md", isDirectory: false, entryID: 9),
+        ])
+        XCTAssertEqual(ops, [
+            .create(parent: parent, name: "brand-new.md", isDirectory: false),
+        ])
+    }
+
+    func testProbeFileToDirectoryIsNotASelfRename() {
+        let snap = original([("foo", false)], ids: [5])
+        let ops = DirectoryListing.plan(original: snap, lines: [
+            ListingLine(name: "foo", isDirectory: true, entryID: 5, sourcePath: parent.appendingPathComponent("foo").path),
+        ])
+        XCTAssertEqual(ops, [
+            .delete(parent.appendingPathComponent("foo")),
+            .create(parent: parent, name: "foo", isDirectory: true),
+        ])
+        XCTAssertFalse(ops.contains { if case .rename = $0 { return true } else { return false } })
+    }
+
+    func testYankPasteIsCopy() {
+        let snap = original([("a.md", false)], ids: [1])
+        let ops = DirectoryListing.plan(original: snap, lines: [
+            ListingLine(name: "a.md", isDirectory: false, entryID: 1, sourcePath: parent.appendingPathComponent("a.md").path),
+            ListingLine(
+                name: "a-copy.md",
+                isDirectory: false,
+                entryID: 1,
+                sourcePath: parent.appendingPathComponent("a.md").path,
+                transfer: .copy
+            ),
+        ])
+        XCTAssertEqual(ops, [
+            .copy(from: parent.appendingPathComponent("a.md"), to: parent.appendingPathComponent("a-copy.md")),
+        ])
     }
 
     func testSnapshotReadsFilesystem() throws {

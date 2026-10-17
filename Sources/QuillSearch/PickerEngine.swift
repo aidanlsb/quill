@@ -38,17 +38,23 @@ public enum PickerKey: Equatable, Sendable {
 }
 
 /// Prompt + result list with insert/normal modes, matching Telescope's feel.
-public final class PickerEngine: @unchecked Sendable {
+public final class PickerEngine {
     public var mode: PickerMode = .insert
     public var query: String = ""
     public var queryCursor: Int = 0
     public private(set) var selectedIndex: Int = 0
     public private(set) var items: [PickerItem] = []
     public var source: [PickerItem] = [] {
-        didSet { refilter() }
+        didSet {
+            prepare()
+            refilter()
+        }
     }
     /// When set, the query is handed to a live search (grep) instead of fuzzy-filtering `source`.
     public var liveSearch: ((String) -> [PickerItem])?
+    /// Preferred over `liveSearch`: the host debounces and pushes results with `replaceItems`.
+    public var onQueryChange: ((String) -> Void)?
+    private var prepared: [(index: Int, bytes: [UInt8])] = []
     public var status: String {
         let n = items.count
         let sel = n == 0 ? 0 : selectedIndex + 1
@@ -61,6 +67,7 @@ public final class PickerEngine: @unchecked Sendable {
     public init(source: [PickerItem] = [], liveSearch: ((String) -> [PickerItem])? = nil) {
         self.source = source
         self.liveSearch = liveSearch
+        prepare()
         refilter()
     }
 
@@ -181,15 +188,49 @@ public final class PickerEngine: @unchecked Sendable {
         selectedIndex = min(max(0, selectedIndex + delta), items.count - 1)
     }
 
+    /// Selected-item preview loaded off the main thread.
+    public func updatePreview(payload: String, text: String) {
+        if let index = items.firstIndex(where: { $0.payload == payload }) {
+            items[index].preview = text
+        }
+    }
+
+    /// Async results land here. Filtering stays on the caller so a keystroke never blocks.
+    public func replaceItems(_ newItems: [PickerItem]) {
+        items = newItems
+        if items.isEmpty {
+            selectedIndex = 0
+        } else {
+            selectedIndex = min(selectedIndex, items.count - 1)
+        }
+    }
+
+    private func prepare() {
+        prepared = source.enumerated().map { index, item in
+            (index, Array(item.title.lowercased().utf8))
+        }
+    }
+
     private func refilter() {
+        if let onQueryChange {
+            onQueryChange(query)
+            return
+        }
         if let liveSearch {
             items = liveSearch(query)
         } else if query.isEmpty {
             items = source
         } else {
-            let ranked = Fuzzy.rank(query: query, candidates: source.map(\.title))
-            let byTitle = Dictionary(grouping: source, by: \.title)
-            items = ranked.compactMap { byTitle[$0.value]?.first }
+            let queryBytes = Array(query.lowercased().utf8)
+            let ranked = prepared.compactMap { item -> (Int, Int)? in
+                guard let score = Fuzzy.scoreUTF8(query: queryBytes, candidate: item.bytes) else { return nil }
+                return (item.index, score)
+            }
+            .sorted { lhs, rhs in
+                if lhs.1 != rhs.1 { return lhs.1 > rhs.1 }
+                return source[lhs.0].title.localizedStandardCompare(source[rhs.0].title) == .orderedAscending
+            }
+            items = ranked.map { source[$0.0] }
         }
         if items.isEmpty {
             selectedIndex = 0
@@ -197,4 +238,9 @@ public final class PickerEngine: @unchecked Sendable {
             selectedIndex = min(selectedIndex, items.count - 1)
         }
     }
+}
+
+/// A picker source that can be cancelled and debounced by the host.
+public protocol PickerSource: Sendable {
+    func items(matching query: String) async -> [PickerItem]
 }

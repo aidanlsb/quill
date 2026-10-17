@@ -53,11 +53,23 @@ public struct EngineResult: Equatable, Sendable {
     public var didChangeText: Bool
     public var beep: Bool
     public var actions: [HostAction]
+    /// Edits produced by this keystroke, each in the coordinates left by the previous one.
+    public var edits: [TextEdit] = []
+    public var cursorBefore: Int = 0
+    public var cursorAfter: Int = 0
 
     public static let noop = EngineResult(didChangeText: false, beep: false, actions: [])
 }
 
+/// One keystroke (or one committed insert session's worth of undo). `handle` returns this.
+public typealias Transaction = EngineResult
+
 public struct TextEdit: Equatable, Sendable {
     public var range: Range<Int>
     public var replacement: String
+
+    public init(range: Range<Int>, replacement: String) {
+        self.range = range
+        self.replacement = replacement
+    }
 }

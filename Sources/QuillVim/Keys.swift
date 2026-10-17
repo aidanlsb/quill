@@ -10,6 +10,8 @@ extension String {
 /// Keys the engine understands. No AppKit types — the host maps native events in.
 public enum Key: Equatable, Sendable {
     case character(Character)
+    /// Committed text from IME, a dead key, the emoji picker, or dictation.
+    case text(String)
     case escape
     case enter
     case backspace

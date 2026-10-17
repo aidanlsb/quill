@@ -1,23 +1,27 @@
-/// Character-offset buffer with a line-start index.
-/// Offsets count Swift `Character` (grapheme) units so h/l match what a writer sees.
-public struct TextBuffer: Equatable, Sendable {
-    public private(set) var text: String
+/// UTF-16 buffer backed by a rope. Offsets count UTF-16 code units so they
+/// match NSString, TextKit, and LSP. `h` / `l` / `x` still step by grapheme.
+public struct TextBuffer: Equatable {
+    private var rope: Rope
     public var cursor: Int
-    /// Preferred display column for j/k (and `$` which sets a huge value).
+    /// Preferred display column for j/k (and `$`, which sets a huge value).
     public var preferredColumn: Int
     public private(set) var lineStarts: [Int]
+    public private(set) var anchors: [Anchor]
 
     public init(text: String = "", cursor: Int = 0) {
-        self.text = text
+        self.rope = Rope(text)
         self.cursor = max(0, cursor)
         self.preferredColumn = 0
         self.lineStarts = [0]
+        self.anchors = []
         rebuildLines()
         self.cursor = clampedCursor(self.cursor, normalMode: true)
     }
 
-    public var count: Int { text.count }
-    public var isEmpty: Bool { text.isEmpty }
+    public var text: String { rope.content }
+    /// UTF-16 length. O(1).
+    public var count: Int { rope.utf16Count }
+    public var isEmpty: Bool { rope.isEmpty }
     public var lineCount: Int { lineStarts.count }
 
     public subscript(offset: Int) -> Character {
@@ -26,26 +30,54 @@ public struct TextBuffer: Equatable, Sendable {
 
     public func character(at offset: Int) -> Character {
         precondition(offset >= 0 && offset < count)
-        let i = text.index(text.startIndex, offsetBy: offset)
-        return text[i]
+        return rope.character(at: offset)
+    }
+
+    /// UTF-16 width of `string` in this buffer's coordinate space.
+    public func measure(_ string: String) -> Int {
+        string.utf16.count
+    }
+
+    /// Span of the grapheme cluster containing `offset`.
+    public func graphemeSpan(containing offset: Int) -> Range<Int> {
+        rope.graphemeSpan(containing: offset)
+    }
+
+    /// Start of the grapheme immediately before `offset`.
+    public func graphemeStart(before offset: Int) -> Int {
+        if offset <= 0 { return 0 }
+        return graphemeSpan(containing: offset - 1).lowerBound
+    }
+
+    /// Advance `count` graphemes from `offset`, never past `limit`.
+    public func endOfGraphemes(from offset: Int, count graphemes: Int, limit: Int) -> Int {
+        var pos = offset
+        var left = graphemes
+        while left > 0, pos < limit, pos < count {
+            let next = graphemeSpan(containing: pos).upperBound
+            if next > limit || next == pos { break }
+            pos = next
+            left -= 1
+        }
+        return pos
     }
 
     public func substring(_ range: Range<Int>) -> String {
         if range.isEmpty { return "" }
         let lower = min(max(0, range.lowerBound), count)
         let upper = min(max(lower, range.upperBound), count)
-        let start = text.index(text.startIndex, offsetBy: lower)
-        let end = text.index(text.startIndex, offsetBy: upper)
-        return String(text[start..<end])
+        return rope.substring(lower..<upper)
     }
 
-    public mutating func replace(_ range: Range<Int>, with new: String) {
+    @discardableResult
+    public mutating func replace(_ range: Range<Int>, with new: String) -> [Anchor] {
         let lower = min(max(0, range.lowerBound), count)
         let upper = min(max(lower, range.upperBound), count)
-        let start = text.index(text.startIndex, offsetBy: lower)
-        let end = text.index(text.startIndex, offsetBy: upper)
-        text.replaceSubrange(start..<end, with: new)
-        rebuildLines()
+        let span = lower..<upper
+        rope.replace(span, with: new)
+        updateLineStarts(replacing: span, with: new)
+        adjustAnchors(replacing: span, withUTF16: new.utf16.count)
+        return []
     }
 
     public mutating func insert(_ string: String, at offset: Int) {
@@ -54,6 +86,35 @@ public struct TextBuffer: Equatable, Sendable {
 
     public mutating func remove(_ range: Range<Int>) {
         replace(range, with: "")
+    }
+
+    public mutating func addAnchor(_ anchor: Anchor) {
+        anchors.append(anchor)
+        anchors.sort { $0.offset < $1.offset }
+    }
+
+    public mutating func removeAnchors(where matches: (Anchor) -> Bool) {
+        anchors.removeAll(where: matches)
+    }
+
+    /// Remove anchors whose offset lies in `range` and return them unchanged.
+    @discardableResult
+    public mutating func removeAnchors(in range: Range<Int>) -> [Anchor] {
+        var kept: [Anchor] = []
+        var removed: [Anchor] = []
+        for anchor in anchors {
+            if range.contains(anchor.offset) {
+                removed.append(anchor)
+            } else {
+                kept.append(anchor)
+            }
+        }
+        anchors = kept
+        return removed
+    }
+
+    public func anchors(in range: Range<Int>) -> [Anchor] {
+        anchors.filter { range.contains($0.offset) }
     }
 
     // MARK: Lines
@@ -117,11 +178,12 @@ public struct TextBuffer: Equatable, Sendable {
         let range = lineContentRange(at: line)
         var i = range.lowerBound
         while i < range.upperBound {
-            let ch = character(at: i)
+            let span = graphemeSpan(containing: i)
+            let ch = character(at: span.lowerBound)
             if ch != " " && ch != "\t" {
-                return i
+                return span.lowerBound
             }
-            i += 1
+            i = span.upperBound
         }
         return range.lowerBound
     }
@@ -133,7 +195,7 @@ public struct TextBuffer: Equatable, Sendable {
     public func lastCharacterOffset(onLine line: Int) -> Int {
         let range = lineContentRange(at: line)
         if range.isEmpty { return range.lowerBound }
-        return range.upperBound - 1
+        return graphemeStart(before: range.upperBound)
     }
 
     /// Normal-mode cursor sits on a character, never on a trailing newline of a non-empty line,
@@ -142,11 +204,11 @@ public struct TextBuffer: Equatable, Sendable {
         if count == 0 { return 0 }
         var c = min(max(0, raw), count)
         if normalMode {
-            if c >= count { c = count - 1 }
+            if c >= count { c = graphemeStart(before: count) }
             if c < count, character(at: c) == "\n" {
                 let line = lineIndex(containing: c)
                 if lineStarts[line] < c {
-                    c -= 1
+                    c = graphemeStart(before: c)
                 }
             }
         } else {
@@ -176,15 +238,73 @@ public struct TextBuffer: Equatable, Sendable {
     }
 
     private mutating func rebuildLines() {
-        var starts: [Int] = [0]
-        var offset = 0
-        for ch in text {
-            if ch == "\n" {
-                starts.append(offset + 1)
+        lineStarts = [0]
+        let text = rope.content
+        var units = 0
+        for unit in text.utf16 {
+            units += 1
+            if unit == 10 {
+                lineStarts.append(units)
             }
-            offset += 1
         }
-        lineStarts = starts
+    }
+
+    private mutating func updateLineStarts(replacing range: Range<Int>, with new: String) {
+        let startLine = lineIndex(containing: min(range.lowerBound, max(0, count)))
+        // `count` is already the post-edit length. The line index of the edit
+        // start is still valid because line starts at or before the edit didn't move.
+        var next: [Int] = []
+        next.reserveCapacity(lineStarts.count + 4)
+        if lineStarts.indices.contains(startLine) {
+            for index in 0...startLine {
+                next.append(lineStarts[index])
+            }
+        } else {
+            next = [0]
+        }
+        var relative = 0
+        for unit in new.utf16 {
+            if unit == 10 {
+                next.append(range.lowerBound + relative + 1)
+            }
+            relative += 1
+        }
+        let delta = new.utf16.count - range.count
+        for start in lineStarts where start > range.upperBound {
+            next.append(start + delta)
+        }
+        if next.isEmpty || next[0] != 0 {
+            next.insert(0, at: 0)
+        }
+        lineStarts = next
+    }
+
+    private mutating func adjustAnchors(replacing range: Range<Int>, withUTF16 newLen: Int) {
+        let delta = newLen - range.count
+        for index in anchors.indices {
+            let position = anchors[index].offset
+            if position < range.lowerBound {
+                continue
+            }
+            if range.lowerBound == range.upperBound, position == range.lowerBound {
+                if anchors[index].gravity == .right {
+                    anchors[index].offset += newLen
+                }
+                continue
+            }
+            if position >= range.upperBound {
+                anchors[index].offset += delta
+                continue
+            }
+            if position == range.lowerBound, anchors[index].gravity == .left {
+                continue
+            }
+            if anchors[index].gravity == .right {
+                anchors[index].offset = range.lowerBound + newLen
+            } else {
+                anchors[index].offset = range.lowerBound
+            }
+        }
     }
 }
 

@@ -193,7 +193,92 @@ final class LSPClientTests: XCTestCase {
         let hover = try client.hover(uri: "file:///tmp/doc.md", position: LSPPosition(line: 0, character: 0))
         XCTAssertEqual(hover?.contents, "A note")
 
+        XCTAssertTrue(client.capabilities.hoverProvider)
+        XCTAssertTrue(client.capabilities.completionProvider)
+        XCTAssertTrue(client.capabilities.definitionProvider)
         client.stop()
+    }
+
+    func testMethodNotFoundAndStringRequestID() throws {
+        let (clientEnd, serverEnd) = MemoryTransport.makePair()
+        let client = JSONRPCSession(transport: clientEnd)
+        client.onServerRequest = { id, method, _ in
+            XCTAssertEqual(id, .string("abc"))
+            XCTAssertEqual(method, "custom/x")
+            return .string("pong")
+        }
+        client.startReading()
+        let payload = Data(#"{"jsonrpc":"2.0","id":"abc","method":"custom/x"}"#.utf8)
+        try serverEnd.write(JSONRPCFramer().encode(payload))
+        guard let framed = try serverEnd.readSome(),
+              let body = JSONRPCFramer().append(framed).first,
+              let value = try? JSONValue.decode(body) else {
+            return XCTFail("missing reply")
+        }
+        XCTAssertEqual(value["id"]?.string, "abc")
+        XCTAssertEqual(value["result"]?.string, "pong")
+
+        client.onServerRequest = { _, _, _ in nil }
+        let unknown = Data(#"{"jsonrpc":"2.0","id":7,"method":"nope"}"#.utf8)
+        try serverEnd.write(JSONRPCFramer().encode(unknown))
+        guard let framed2 = try serverEnd.readSome(),
+              let body2 = JSONRPCFramer().append(framed2).first,
+              let err = try? JSONValue.decode(body2) else {
+            return XCTFail("missing error")
+        }
+        XCTAssertEqual(err["error"]?.object?["code"]?.int, -32601)
+        client.close()
+        serverEnd.close()
+    }
+
+    func testIncrementalSyncAndMissingEnv() throws {
+        var sync = DocumentSync(text: "one two", version: 1)
+        sync.apply(edits: [(0..<3, "ONE")])
+        let flushed = sync.flush(incremental: true)
+        XCTAssertEqual(flushed.version, 2)
+        XCTAssertEqual(flushed.changes.count, 1)
+        XCTAssertEqual(flushed.changes[0].text, "ONE")
+        XCTAssertEqual(flushed.changes[0].range?.start.character, 0)
+        XCTAssertEqual(flushed.changes[0].range?.end.character, 3)
+        XCTAssertEqual(sync.text, "ONE two")
+
+        var full = DocumentSync(text: "ab", version: 1)
+        full.apply(edits: [(2..<2, "c")])
+        let whole = full.flush(incremental: false)
+        XCTAssertEqual(whole.changes.first?.text, "abc")
+        XCTAssertNil(whole.changes.first?.range)
+
+        let json = Data(#"{"servers":[{"name":"m","command":"marksman"}]}"#.utf8)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("quill-lsp-\(UUID().uuidString).json")
+        try json.write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let loaded = LSPSettings.loadReporting(from: url)
+        XCTAssertNil(loaded.error)
+        XCTAssertEqual(loaded.settings.servers.first?.env, [:])
+        XCTAssertEqual(loaded.settings.servers.first?.languages, ["markdown"])
+
+        let emoji = "a😀b"
+        let pos = LSPPosition.position(utf16Offset: 3, in: emoji)
+        XCTAssertEqual(pos.line, 0)
+        XCTAssertEqual(pos.character, 3)
+        XCTAssertEqual(LSPPosition.utf16Offset(in: emoji, position: pos), 3)
+    }
+
+    func testServerIsReusedUntilItCrashes() async throws {
+        let manager = LanguageServerManager()
+        let client = LSPClient(config: LSPServerConfig(name: "mock", command: "false"))
+        let key = await manager.adopt(client, root: URL(fileURLWithPath: "/tmp/notes"))
+        await manager.trackOpen(key: key, uri: "file:///tmp/notes/a.md")
+        let open = await manager.isOpen(key: key, uri: "file:///tmp/notes/a.md")
+        XCTAssertTrue(open)
+        let again = await manager.client(key)
+        XCTAssertTrue(again === client)
+        await manager.noteCrash(key)
+        let first = await manager.restartDelay(key)
+        XCTAssertEqual(first, 0.25)
+        await manager.noteCrash(key)
+        let second = await manager.restartDelay(key)
+        XCTAssertEqual(second, 0.5)
     }
 
     func testMissingServerIsUnavailable() {

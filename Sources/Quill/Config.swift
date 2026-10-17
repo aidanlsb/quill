@@ -3,7 +3,7 @@ import Foundation
 import QuillLSP
 import QuillVim
 
-struct QuillConfig: Codable, Equatable {
+struct QuillConfig: Equatable {
     var leader: String
     var leaderMaps: [String: String]
     var lsp: LSPSettings
@@ -19,19 +19,43 @@ struct QuillConfig: Codable, Equatable {
     )
 
     static func load() -> QuillConfig {
+        loadReporting().config
+    }
+
+    static func loadReporting() -> (config: QuillConfig, error: String?) {
         let urls = [
             FileManager.default.homeDirectoryForCurrentUser
                 .appendingPathComponent(".config/quill/config.json"),
             FileManager.default.homeDirectoryForCurrentUser
                 .appendingPathComponent("Library/Application Support/Quill/config.json"),
         ]
-        for url in urls {
-            if let data = try? Data(contentsOf: url),
-               let decoded = try? JSONDecoder().decode(QuillConfig.self, from: data) {
-                return decoded
+        for url in urls where FileManager.default.fileExists(atPath: url.path) {
+            do {
+                let data = try Data(contentsOf: url)
+                let decoded = try JSONDecoder().decode(Stored.self, from: data)
+                return (decoded.config, nil)
+            } catch {
+                return (.default, "config: \(error.localizedDescription)")
             }
         }
-        return .default
+        return (.default, nil)
+    }
+
+    private struct Stored: Decodable {
+        var config: QuillConfig
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            let leader = try c.decodeIfPresent(String.self, forKey: .leader) ?? QuillConfig.default.leader
+            let maps = try c.decodeIfPresent([String: String].self, forKey: .leaderMaps) ?? QuillConfig.default.leaderMaps
+            let lsp = try c.decodeIfPresent(LSPSettings.self, forKey: .lsp) ?? QuillConfig.default.lsp
+            let column = try c.decodeIfPresent(Int.self, forKey: .columnWidth) ?? QuillConfig.default.columnWidth
+            let shift = try c.decodeIfPresent(Int.self, forKey: .shiftWidth) ?? QuillConfig.default.shiftWidth
+            config = QuillConfig(leader: leader, leaderMaps: maps, lsp: lsp, columnWidth: column, shiftWidth: shift)
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case leader, leaderMaps, lsp, columnWidth, shiftWidth
+        }
     }
 
     func apply(to engine: Engine) {

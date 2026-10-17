@@ -10,6 +10,9 @@ rm -rf "$DEST"
 mkdir -p "$DEST/Contents/MacOS" "$DEST/Contents/Resources"
 cp "$BIN" "$DEST/Contents/MacOS/Quill"
 cp Sources/Quill/Info.plist "$DEST/Contents/Info.plist"
+if command -v codesign >/dev/null 2>&1; then
+  codesign --force --sign - "$DEST"
+fi
 echo "Built $DEST"
 echo "Open with: open $DEST"
 echo "Install with: ./Scripts/install.sh"

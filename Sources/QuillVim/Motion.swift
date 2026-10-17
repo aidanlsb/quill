@@ -139,7 +139,26 @@ enum MotionResolver {
         let line = buffer.lineIndex(containing: buffer.cursor)
         let content = buffer.lineContentRange(at: line)
         if content.isEmpty { return .fail(buffer.cursor) }
-        let dest = min(max(content.lowerBound, buffer.cursor + delta), content.upperBound - 1)
+        var dest = buffer.cursor
+        if delta > 0 {
+            for _ in 0..<delta {
+                let next = buffer.graphemeSpan(containing: dest).upperBound
+                if next >= content.upperBound {
+                    let last = content.upperBound == content.lowerBound
+                        ? content.lowerBound
+                        : buffer.graphemeStart(before: content.upperBound)
+                    if last == dest { return .fail(buffer.cursor) }
+                    dest = last
+                    break
+                }
+                dest = next
+            }
+        } else if delta < 0 {
+            for _ in 0..<(-delta) {
+                if dest <= content.lowerBound { break }
+                dest = buffer.graphemeStart(before: dest)
+            }
+        }
         if dest == buffer.cursor { return .fail(buffer.cursor) }
         return .move(dest, inclusive: inclusive)
     }
@@ -488,50 +507,7 @@ enum MotionResolver {
         forward: Bool,
         wrap: Bool
     ) -> Int? {
-        guard !pattern.isEmpty, !buffer.text.isEmpty else { return nil }
-        if forward {
-            if let hit = firstMatch(buffer.text, pattern, startingAt: from + 1) {
-                return hit
-            }
-            if wrap, let hit = firstMatch(buffer.text, pattern, startingAt: 0, limit: from + 1) {
-                return hit
-            }
-        } else {
-            if let hit = lastMatch(buffer.text, pattern, before: from) {
-                return hit
-            }
-            if wrap, let hit = lastMatch(buffer.text, pattern, before: buffer.count, start: from) {
-                return hit
-            }
-        }
-        return nil
-    }
-
-    private static func firstMatch(_ text: String, _ pattern: String, startingAt: Int, limit: Int? = nil) -> Int? {
-        let chars = Array(text)
-        let pat = Array(pattern)
-        let end = limit ?? chars.count
-        guard pat.count <= chars.count else { return nil }
-        var i = max(0, startingAt)
-        while i + pat.count <= end && i + pat.count <= chars.count {
-            if Array(chars[i..<(i + pat.count)]) == pat { return i }
-            i += 1
-        }
-        return nil
-    }
-
-    private static func lastMatch(_ text: String, _ pattern: String, before: Int, start: Int = 0) -> Int? {
-        let chars = Array(text)
-        let pat = Array(pattern)
-        guard pat.count <= chars.count else { return nil }
-        var i = min(before, chars.count - pat.count + 1) - 1
-        while i >= start {
-            if i + pat.count <= chars.count, Array(chars[i..<(i + pat.count)]) == pat {
-                return i
-            }
-            i -= 1
-        }
-        return nil
+        return Searcher.find(text: buffer.text, pattern: pattern, from: from, forward: forward, wrap: wrap)
     }
 }
 

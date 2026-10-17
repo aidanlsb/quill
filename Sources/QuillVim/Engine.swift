@@ -1,8 +1,8 @@
 /// A from-scratch vim engine: parse count, then operator, then motion or text object.
 /// Motions and text objects return ranges; operators act on those ranges so they compose.
 /// Every change is recorded as a replayable command for `.` and grouped undo.
-public final class Engine: @unchecked Sendable {
-    public var buffer: TextBuffer
+public final class Engine {
+    public private(set) var buffer: TextBuffer
     public var mode: Mode = .normal
     public var layout: any TextLayout
     public var clipboard: any Clipboard
@@ -13,6 +13,7 @@ public final class Engine: @unchecked Sendable {
     /// Leader key in normal mode. Space by default; configurable by the host.
     public var leaderKey: Character = " "
     /// Sequence → action after the leader. Host loads this from config.
+    public var keymap = Keymap()
     public var leaderBindings: [String: HostAction] = [
         "sf": .findFiles,
         "sg": .liveGrep,
@@ -23,7 +24,10 @@ public final class Engine: @unchecked Sendable {
     public private(set) var lastEdit: TextEdit?
 
     var unnamed = Register.empty
+    var registers = RegisterStore()
     var visualAnchor: Int = 0
+    private var jumpBack: [Int] = []
+    private var jumpForward: [Int] = []
 
     var count: Int?
     var operatorKind: OperatorKind?
@@ -34,13 +38,34 @@ public final class Engine: @unchecked Sendable {
     var pendingFind: FindKind?
     var pendingTextObjectInner: Bool?
     var pendingLeader: String?
+    var pendingMarkSet = false
+    var pendingMarkJump: Character?
+    var mapPrefix = ""
 
     var lastFind: (FindKind, Character)?
     var searchPattern: String = ""
     var searchForward: Bool = true
+    var commandHistory: [String] = []
+    var historyCursor: Int = 0
 
-    private var undoStack: [Snapshot] = []
-    private var redoStack: [Snapshot] = []
+    private struct UndoEntry {
+        var forward: [TextEdit]
+        var inverse: [TextEdit]
+        var cursorBefore: Int
+        var cursorAfter: Int
+        var stamp: Int
+    }
+
+    private var undoStack: [UndoEntry] = []
+    private var redoStack: [UndoEntry] = []
+    private var strokeEdits: [TextEdit] = []
+    private var groupDepth = 0
+    private var groupForward: [TextEdit] = []
+    private var groupInverse: [TextEdit] = []
+    private var groupCursorBefore = 0
+    private var nextStamp = 1
+    private var currentStamp = 0
+    private var savedStamp = 0
     var lastRepeatable: Repeatable?
 
     var insertKind: InsertKind = .i
@@ -85,6 +110,13 @@ public final class Engine: @unchecked Sendable {
         isModified = false
         undoStack = []
         redoStack = []
+        groupDepth = 0
+        groupForward = []
+        groupInverse = []
+        strokeEdits = []
+        nextStamp = 1
+        currentStamp = 0
+        savedStamp = 0
         lastRepeatable = nil
         pendingLeader = nil
         resetParser()
@@ -100,7 +132,43 @@ public final class Engine: @unchecked Sendable {
     }
 
     public func markSaved() {
+        savedStamp = currentStamp
         isModified = false
+    }
+
+    /// Host-initiated edit (completion, snippet). Goes through the same funnel as keys.
+    @discardableResult
+    public func applyHostEdit(replacing range: Range<Int>, with text: String) -> EngineResult {
+        strokeEdits.removeAll(keepingCapacity: true)
+        let before = buffer.cursor
+        let nested = groupDepth > 0
+        if !nested { beginTransaction() }
+        replace(range, with: text)
+        let width = buffer.measure(text)
+        buffer.cursor = buffer.clampedCursor(range.lowerBound + width, normalMode: mode != .insert)
+        buffer.preferredColumn = buffer.column(of: buffer.cursor)
+        if !nested { commitTransaction() }
+        return finishStroke(EngineResult(didChangeText: true, beep: false, actions: []), cursorBefore: before)
+    }
+
+    /// Install a directory-line identity at the start of `line`.
+    public func setDirectoryAnchor(line: Int, id: UInt64, sourcePath: String, isDirectory: Bool) {
+        guard line >= 0, line < buffer.lineCount else { return }
+        let offset = buffer.lineStarts[line]
+        buffer.addAnchor(Anchor(
+            id: AnchorID(raw: id),
+            offset: offset,
+            gravity: .left,
+            kind: .directoryEntry(sourcePath: sourcePath, isDirectory: isDirectory, transfer: .identity)
+        ))
+    }
+
+    /// Drag-select in the text view. The anchor stays put; the caret follows the mouse.
+    public func beginMouseSelection(anchor: Int, caret: Int) {
+        visualAnchor = min(anchor, buffer.count)
+        mode = .visual
+        buffer.cursor = buffer.clampedCursor(max(anchor, caret), normalMode: true)
+        buffer.preferredColumn = buffer.column(of: buffer.cursor)
     }
 
     public func moveCursor(to offset: Int) {
@@ -119,7 +187,22 @@ public final class Engine: @unchecked Sendable {
 
     @discardableResult
     public func handle(_ event: KeyEvent) -> EngineResult {
-        lastEdit = nil
+        strokeEdits.removeAll(keepingCapacity: true)
+        let before = buffer.cursor
+        let result = dispatch(event)
+        return finishStroke(result, cursorBefore: before)
+    }
+
+    private func finishStroke(_ result: EngineResult, cursorBefore: Int) -> EngineResult {
+        var result = result
+        result.edits = strokeEdits
+        result.cursorBefore = cursorBefore
+        result.cursorAfter = buffer.cursor
+        lastEdit = strokeEdits.last
+        return result
+    }
+
+    private func dispatch(_ event: KeyEvent) -> EngineResult {
         switch mode {
         case .insert:
             return handleInsert(event)
@@ -148,6 +231,9 @@ public final class Engine: @unchecked Sendable {
         pendingFind = nil
         pendingTextObjectInner = nil
         pendingLeader = nil
+        pendingMarkSet = false
+        pendingMarkJump = nil
+        mapPrefix = ""
         if mode == .operatorPending {
             mode = .normal
         }
@@ -190,13 +276,47 @@ public final class Engine: @unchecked Sendable {
             if c == "r" {
                 return redo()
             }
+            if c == "o" {
+                return jumpList(older: true)
+            }
+            if c == "i" {
+                return jumpList(older: false)
+            }
             return beepResult()
         case .character(let ch):
+            return handleNormalCharacter(ch)
+        case .text(let text):
+            guard let ch = text.first else { return beepResult() }
             return handleNormalCharacter(ch)
         }
     }
 
     private func handleNormalCharacter(_ ch: Character) -> EngineResult {
+        if pendingMarkSet {
+            pendingMarkSet = false
+            return setMark(ch)
+        }
+        if pendingMarkJump != nil {
+            pendingMarkJump = nil
+            return jumpToMark(ch)
+        }
+        if parserIsIdle {
+            let next = mapPrefix + String(ch)
+            switch keymap.lookup(next) {
+            case .command(let name):
+                mapPrefix = ""
+                resetParser()
+                return EngineResult(didChangeText: false, beep: false, actions: [.command(name)])
+            case .prefix:
+                mapPrefix = next
+                return .noop
+            case .none:
+                if !mapPrefix.isEmpty {
+                    mapPrefix = ""
+                    return beepResult()
+                }
+            }
+        }
         if let prefix = pendingLeader {
             return handleLeader(prefix, ch)
         }
@@ -207,6 +327,20 @@ public final class Engine: @unchecked Sendable {
                 pendingRegister = .clipboard
             case "\"":
                 pendingRegister = .unnamed
+            case "_":
+                pendingRegister = .blackHole
+            case "-":
+                pendingRegister = .smallDelete
+            case ".":
+                pendingRegister = .lastInsert
+            case ":":
+                pendingRegister = .lastCommand
+            case "/":
+                pendingRegister = .lastSearch
+            case let digit where digit.isNumber:
+                pendingRegister = .numbered(digit.wholeNumberValue ?? 0)
+            case let letter where letter.isLetter:
+                pendingRegister = .named(letter)
             default:
                 return beepResult()
             }
@@ -257,6 +391,18 @@ public final class Engine: @unchecked Sendable {
         case "\"":
             pendingQuote = true
             return .noop
+        case "m":
+            if operatorKind == nil, !mode.isVisual {
+                pendingMarkSet = true
+                return .noop
+            }
+            return beepResult()
+        case "'", "`":
+            if operatorKind == nil, !mode.isVisual {
+                pendingMarkJump = ch
+                return .noop
+            }
+            return beepResult()
         case "g":
             pendingG = true
             return .noop
@@ -360,6 +506,7 @@ public final class Engine: @unchecked Sendable {
             if mode.isVisual { return beepResult() }
             mode = .commandLine
             commandLine = ":"
+            historyCursor = commandHistory.count
             return .noop
         case "-":
             if operatorKind == nil, !mode.isVisual {
@@ -426,7 +573,13 @@ public final class Engine: @unchecked Sendable {
 
     private func handleFindChar(_ event: KeyEvent) -> EngineResult {
         let restore = operatorKind != nil ? Mode.operatorPending : Mode.normal
-        guard case .character(let ch) = event.key, event.key != .escape else {
+        let character: Character?
+        switch event.key {
+        case .character(let ch): character = ch
+        case .text(let text): character = text.first
+        default: character = nil
+        }
+        guard let ch = character, event.key != .escape else {
             mode = restore
             pendingFind = nil
             if event.key == .escape { resetParser() }
@@ -527,6 +680,12 @@ public final class Engine: @unchecked Sendable {
             updatePreferredColumn(after: kind)
             resetParser()
             return .noop
+        }
+        switch kind {
+        case .gotoLine, .fileStart, .search:
+            recordJump(from: buffer.cursor)
+        default:
+            break
         }
         buffer.cursor = buffer.clampedCursor(resolved.position, normalMode: true)
         updatePreferredColumn(after: kind)
@@ -636,9 +795,12 @@ public final class Engine: @unchecked Sendable {
             mode = .normal
             return .noop
         case .delete, .change:
-            beginUndo()
+            beginTransaction()
             let deleted = buffer.substring(range)
-            yank(range, style: style)
+            yank(range, style: style, deleting: true)
+            if style == .linewise {
+                buffer.removeAnchors(in: range)
+            }
             replace(range, with: "")
             buffer.cursor = buffer.clampedCursor(range.lowerBound, normalMode: op == .delete)
             buffer.preferredColumn = buffer.column(of: buffer.cursor)
@@ -648,13 +810,15 @@ public final class Engine: @unchecked Sendable {
                 _ = deleted
                 return EngineResult(didChangeText: true, beep: false, actions: [])
             }
+            commitTransaction()
             lastRepeatable = .operate(.delete, count: n, target: target, inserted: nil)
             mode = .normal
             resetParser()
             return EngineResult(didChangeText: true, beep: false, actions: [])
         case .indent, .unindent:
-            beginUndo()
+            beginTransaction()
             indent(range: range, direction: op == .indent ? 1 : -1)
+            commitTransaction()
             lastRepeatable = .operate(op, count: n, target: target, inserted: nil)
             mode = .normal
             resetParser()
@@ -662,16 +826,67 @@ public final class Engine: @unchecked Sendable {
         }
     }
 
-    private func yank(_ range: Range<Int>, style: RangeStyle) {
+    private func yank(_ range: Range<Int>, style: RangeStyle, deleting: Bool = false) {
         var text = buffer.substring(range)
         if style == .linewise, !text.hasSuffix("\n"), !text.isEmpty {
             text += "\n"
         }
-        let register = Register(text: text, style: style)
-        unnamed = register
-        if pendingRegister == .clipboard {
-            clipboard.text = text
+        let transfer: DirectoryTransfer = deleting ? .move : .copy
+        let anchors = buffer.anchors(in: range).map { anchor -> Anchor in
+            var copy = anchor
+            copy.offset -= range.lowerBound
+            if case .directoryEntry(let path, let isDir, _) = copy.kind {
+                copy.kind = .directoryEntry(sourcePath: path, isDirectory: isDir, transfer: transfer)
+            }
+            return copy
         }
+        let register = Register(text: text, style: style, anchors: anchors)
+        storeYank(register)
+    }
+
+    private func storeYank(_ register: Register) {
+        switch pendingRegister {
+        case .clipboard:
+            clipboard.text = register.text
+            unnamed = register
+            registers.unnamed = register
+        case .blackHole:
+            break
+        case .named, .numbered, .smallDelete, .lastInsert, .lastSearch, .lastCommand:
+            registers.write(register, to: pendingRegister)
+            unnamed = registers.unnamed
+        case .unnamed:
+            unnamed = register
+            registers.unnamed = register
+            if register.style == .linewise || register.text.contains("\n") {
+                registers.shiftNumbered(register)
+                unnamed = registers.unnamed
+            } else {
+                registers.smallDelete = register
+            }
+        }
+    }
+
+    private func recordJump(from offset: Int) {
+        if jumpBack.last != offset {
+            jumpBack.append(offset)
+        }
+        if jumpBack.count > 100 { jumpBack.removeFirst() }
+        jumpForward.removeAll()
+    }
+
+    private func jumpList(older: Bool) -> EngineResult {
+        if older {
+            guard let pos = jumpBack.popLast() else { return beepResult() }
+            jumpForward.append(buffer.cursor)
+            buffer.cursor = buffer.clampedCursor(pos, normalMode: mode != .insert)
+        } else {
+            guard let pos = jumpForward.popLast() else { return beepResult() }
+            jumpBack.append(buffer.cursor)
+            buffer.cursor = buffer.clampedCursor(pos, normalMode: mode != .insert)
+        }
+        buffer.preferredColumn = buffer.column(of: buffer.cursor)
+        return .noop
     }
 
     // MARK: Insert
@@ -708,35 +923,25 @@ public final class Engine: @unchecked Sendable {
             let line = buffer.lineIndex(containing: buffer.cursor)
             buffer.cursor = buffer.lineEnd(at: line)
         case .o:
-            beginUndo()
+            beginTransaction()
             let line = buffer.lineIndex(containing: buffer.cursor)
             let insertAt = buffer.lineFullRange(at: line).upperBound
             replace(insertAt..<insertAt, with: "\n")
-            buffer.cursor = insertAt + (insertAt == buffer.count && !buffer.text.hasSuffix("\n") ? 0 : 0)
-            // After inserting newline at end of line content...
-            let newLine = buffer.lineIndex(containing: min(insertAt, max(0, buffer.count - 1)))
-            // Place cursor on the new line.
-            if insertAt <= buffer.count {
-                buffer.cursor = min(insertAt + (buffer.substring(insertAt..<min(insertAt + 1, buffer.count)) == "\n" ? 0 : 0), buffer.count)
-            }
-            // Simpler: go to start of the line after the original.
             let targetLine = min(line + 1, buffer.lineCount - 1)
             buffer.cursor = buffer.lineStarts[targetLine]
-            insertStarted = true
         case .O:
-            beginUndo()
+            beginTransaction()
             let line = buffer.lineIndex(containing: buffer.cursor)
             let insertAt = buffer.lineStarts[line]
             replace(insertAt..<insertAt, with: "\n")
             buffer.cursor = insertAt
-            insertStarted = true
         }
     }
 
     private func enterInsertMode(_ kind: InsertKind) {
         insertKind = kind
-        if !insertStarted {
-            beginUndo()
+        if groupDepth == 0 {
+            beginTransaction()
         }
         insertBaseline = buffer.text
         insertBaselineCursor = buffer.cursor
@@ -761,23 +966,27 @@ public final class Engine: @unchecked Sendable {
             return EngineResult(didChangeText: true, beep: false, actions: [])
         case .backspace:
             if buffer.cursor == 0 { return beepResult() }
-            replace((buffer.cursor - 1)..<buffer.cursor, with: "")
-            buffer.cursor -= 1
+            let start = buffer.graphemeStart(before: buffer.cursor)
+            replace(start..<buffer.cursor, with: "")
+            buffer.cursor = start
             return EngineResult(didChangeText: true, beep: false, actions: [])
         case .delete:
             if buffer.cursor >= buffer.count { return beepResult() }
-            replace(buffer.cursor..<(buffer.cursor + 1), with: "")
+            let end = buffer.graphemeSpan(containing: buffer.cursor).upperBound
+            replace(buffer.cursor..<end, with: "")
             return EngineResult(didChangeText: true, beep: false, actions: [])
         case .tab:
             let tab = String(repeating: " ", count: max(1, shiftWidth))
             replace(buffer.cursor..<buffer.cursor, with: tab)
-            buffer.cursor += tab.count
+            buffer.cursor += buffer.measure(tab)
             return EngineResult(didChangeText: true, beep: false, actions: [])
         case .left:
-            buffer.cursor = max(0, buffer.cursor - 1)
+            buffer.cursor = buffer.graphemeStart(before: buffer.cursor)
             return .noop
         case .right:
-            buffer.cursor = min(buffer.count, buffer.cursor + 1)
+            if buffer.cursor < buffer.count {
+                buffer.cursor = buffer.graphemeSpan(containing: buffer.cursor).upperBound
+            }
             return .noop
         case .up, .down:
             let delta = event.key == .up ? -1 : 1
@@ -789,12 +998,19 @@ public final class Engine: @unchecked Sendable {
             )
             return .noop
         case .character(let ch):
-            replace(buffer.cursor..<buffer.cursor, with: String(ch))
-            buffer.cursor += 1
-            return EngineResult(didChangeText: true, beep: false, actions: [])
+            return insertText(String(ch))
+        case .text(let text):
+            return insertText(text)
         case .ctrl:
             return beepResult()
         }
+    }
+
+    private func insertText(_ text: String) -> EngineResult {
+        if text.isEmpty { return .noop }
+        replace(buffer.cursor..<buffer.cursor, with: text)
+        buffer.cursor += buffer.measure(text)
+        return EngineResult(didChangeText: true, beep: false, actions: [])
     }
 
     private func finishInsert() -> EngineResult {
@@ -802,7 +1018,7 @@ public final class Engine: @unchecked Sendable {
         if insertCount > 1, !inserted.isEmpty {
             let extra = String(repeating: inserted, count: insertCount - 1)
             replace(buffer.cursor..<buffer.cursor, with: extra)
-            buffer.cursor += extra.count
+            buffer.cursor += buffer.measure(extra)
         }
         switch lastRepeatable {
         case .insert(let kind, _, let count):
@@ -826,9 +1042,9 @@ public final class Engine: @unchecked Sendable {
         }
         buffer.clampCursor(normalMode: true)
         buffer.preferredColumn = buffer.column(of: buffer.cursor)
-        if insertBaseline == buffer.text {
-            // Nothing changed — drop the undo snapshot.
-            if !undoStack.isEmpty { _ = undoStack.popLast() }
+        commitTransaction()
+        if !inserted.isEmpty {
+            registers.lastInsert = Register(text: inserted, style: .characterwise)
         }
         return EngineResult(didChangeText: inserted.count > 0, beep: false, actions: [])
     }
@@ -861,25 +1077,27 @@ public final class Engine: @unchecked Sendable {
             }
             return beepResult()
         }
-        beginUndo()
+        beginTransaction()
         let line = buffer.lineIndex(containing: buffer.cursor)
         let endLimit = buffer.lineEnd(at: line)
-        let end = min(buffer.cursor + count, endLimit)
+        let end = buffer.endOfGraphemes(from: buffer.cursor, count: count, limit: endLimit)
         let range = buffer.cursor..<max(buffer.cursor, end)
         if range.isEmpty {
+            abortTransaction()
             if enterInsert {
                 enterInsertMode(.s)
                 return .noop
             }
             return beepResult()
         }
-        yank(range, style: .characterwise)
+        yank(range, style: .characterwise, deleting: true)
         replace(range, with: "")
         buffer.cursor = buffer.clampedCursor(range.lowerBound, normalMode: !enterInsert)
         if enterInsert {
             lastRepeatable = .operate(.change, count: count, target: .characterCount(count), inserted: nil)
             enterInsertMode(.s)
         } else {
+            commitTransaction()
             lastRepeatable = .operate(.delete, count: count, target: .characterCount(count), inserted: nil)
         }
         resetParser()
@@ -888,36 +1106,47 @@ public final class Engine: @unchecked Sendable {
 
     private func handleReplaceChar(_ event: KeyEvent) -> EngineResult {
         mode = .normal
-        guard case .character(let ch) = event.key, ch != "\n" else {
+        let replacementChar: Character?
+        switch event.key {
+        case .character(let ch): replacementChar = ch
+        case .text(let text): replacementChar = text.first
+        default: replacementChar = nil
+        }
+        guard let ch = replacementChar, ch != "\n" else {
             if event.key == .escape { return .noop }
             return beepResult()
         }
         if buffer.isEmpty { return beepResult() }
         let n = effectiveCount()
-        beginUndo()
+        beginTransaction()
         let line = buffer.lineIndex(containing: buffer.cursor)
         let endLimit = buffer.lineEnd(at: line)
         let end = min(buffer.cursor + n, endLimit)
-        guard buffer.cursor < end else { return beepResult() }
+        guard buffer.cursor < end else {
+            abortTransaction()
+            return beepResult()
+        }
         let replacement = String(repeating: String(ch), count: end - buffer.cursor)
         replace(buffer.cursor..<end, with: replacement)
-        buffer.cursor = buffer.clampedCursor(end - 1, normalMode: true)
+        buffer.cursor = buffer.clampedCursor(max(buffer.cursor, end - 1), normalMode: true)
         lastRepeatable = .replace(count: n, ch)
         resetParser()
+        commitTransaction()
         return EngineResult(didChangeText: true, beep: false, actions: [])
     }
 
     private func toggleCase(count n: Int) -> EngineResult {
         if mode.isVisual, let range = visualSelection {
-            beginUndo()
+            beginTransaction()
             toggleCase(in: range)
+            commitTransaction()
             mode = .normal
             lastRepeatable = .toggleCase(count: range.count)
             resetParser()
             return EngineResult(didChangeText: true, beep: false, actions: [])
         }
         if buffer.isEmpty { return beepResult() }
-        beginUndo()
+        beginTransaction()
         let line = buffer.lineIndex(containing: buffer.cursor)
         let endLimit = buffer.lineEnd(at: line)
         let end = min(buffer.cursor + n, endLimit)
@@ -929,6 +1158,7 @@ public final class Engine: @unchecked Sendable {
         }
         lastRepeatable = .toggleCase(count: n)
         resetParser()
+        commitTransaction()
         return EngineResult(didChangeText: true, beep: false, actions: [])
     }
 
@@ -954,12 +1184,11 @@ public final class Engine: @unchecked Sendable {
         let line = buffer.lineIndex(containing: buffer.cursor)
         let last = min(buffer.lineCount - 1, line + max(1, n - 1))
         if last == line { return beepResult() }
-        beginUndo()
+        beginTransaction()
         for _ in line..<last {
             let current = buffer.lineIndex(containing: buffer.cursor)
             if current + 1 >= buffer.lineCount { break }
             let end = buffer.lineEnd(at: current)
-            let nextStart = buffer.lineStarts[current + 1]
             let nextContent = buffer.lineContentRange(at: current + 1)
             var next = nextContent.lowerBound
             while next < nextContent.upperBound {
@@ -980,21 +1209,25 @@ public final class Engine: @unchecked Sendable {
         buffer.clampCursor(normalMode: true)
         lastRepeatable = .join(count: n)
         resetParser()
+        commitTransaction()
         return EngineResult(didChangeText: true, beep: false, actions: [])
     }
 
     private func put(after: Bool, count n: Int) -> EngineResult {
         let source: Register
-        if pendingRegister == .clipboard {
+        switch pendingRegister {
+        case .clipboard:
             source = Register(text: clipboard.text, style: clipboard.text.hasSuffix("\n") ? .linewise : .characterwise)
-        } else {
+        case .unnamed:
             source = unnamed
+        default:
+            source = registers.read(pendingRegister)
         }
         if source.text.isEmpty {
             resetParser()
             return beepResult()
         }
-        beginUndo()
+        beginTransaction()
         let payload = String(repeating: source.text, count: max(1, n))
         if source.style == .linewise {
             let line = buffer.lineIndex(containing: buffer.cursor)
@@ -1010,6 +1243,7 @@ public final class Engine: @unchecked Sendable {
                 insertAt = buffer.lineStarts[line]
             }
             replace(insertAt..<insertAt, with: text)
+            installPutAnchors(source, at: insertAt, inserted: text)
             let dest = after ? insertAt + (text.hasPrefix("\n") && insertAt == buffer.lineFullRange(at: line).upperBound ? 1 : 0) : insertAt
             buffer.cursor = buffer.firstNonBlank(onLine: buffer.lineIndex(containing: min(dest, max(0, buffer.count - 1))))
         } else {
@@ -1021,12 +1255,23 @@ public final class Engine: @unchecked Sendable {
                 }
             }
             replace(at..<at, with: payload)
-            buffer.cursor = buffer.clampedCursor(at + payload.count - 1, normalMode: true)
+            installPutAnchors(source, at: at, inserted: payload)
+            buffer.cursor = buffer.clampedCursor(at + max(0, buffer.measure(payload) - 1), normalMode: true)
         }
         lastRepeatable = .put(after: after, count: n)
         resetParser()
         mode = .normal
+        commitTransaction()
         return EngineResult(didChangeText: true, beep: false, actions: [])
+    }
+
+    private func installPutAnchors(_ source: Register, at insertAt: Int, inserted: String) {
+        let shift = inserted.hasPrefix("\n") && !source.text.hasPrefix("\n") ? 1 : 0
+        for anchor in source.anchors {
+            var installed = anchor
+            installed.offset += insertAt + shift
+            buffer.addAnchor(installed)
+        }
     }
 
     private func indent(range: Range<Int>, direction: Int) {
@@ -1038,21 +1283,11 @@ public final class Engine: @unchecked Sendable {
             endLine -= 1
         }
         let pad = String(repeating: " ", count: max(1, shiftWidth))
-        var offsetAdjust = 0
-        for line in startLine...endLine {
-            let start = buffer.lineStarts[line] + offsetAdjust
-            // Recompute because earlier inserts shifted later lines; rebuild is in replace.
-            let currentLine = startLine + (line - startLine)
-            _ = currentLine
-        }
-        // Apply from last line to first so offsets stay valid... actually replace rebuilds lines.
-        // Collect line starts first.
         let lines = startLine...endLine
         if direction > 0 {
             for line in lines.reversed() {
                 let at = buffer.lineStarts[line]
-                buffer.replace(at..<at, with: pad)
-                offsetAdjust += pad.count
+                replace(at..<at, with: pad)
             }
         } else {
             for line in lines.reversed() {
@@ -1072,12 +1307,10 @@ public final class Engine: @unchecked Sendable {
                     }
                 }
                 if i > content.lowerBound {
-                    buffer.replace(content.lowerBound..<i, with: "")
+                    replace(content.lowerBound..<i, with: "")
                 }
             }
         }
-        lastEdit = TextEdit(range: range, replacement: "")
-        isModified = true
         buffer.cursor = buffer.firstNonBlank(onLine: startLine)
         buffer.preferredColumn = buffer.column(of: buffer.cursor)
     }
@@ -1141,38 +1374,75 @@ public final class Engine: @unchecked Sendable {
         return result
     }
 
-    private struct Snapshot {
-        var text: String
-        var cursor: Int
+    private func beginTransaction() {
+        if groupDepth == 0 {
+            groupForward.removeAll(keepingCapacity: true)
+            groupInverse.removeAll(keepingCapacity: true)
+            groupCursorBefore = buffer.cursor
+            redoStack.removeAll()
+        }
+        groupDepth += 1
     }
 
-    private func beginUndo() {
-        undoStack.append(Snapshot(text: buffer.text, cursor: buffer.cursor))
-        redoStack.removeAll()
+    private func commitTransaction() {
+        guard groupDepth > 0 else { return }
+        groupDepth -= 1
+        if groupDepth == 0 {
+            if !groupForward.isEmpty {
+                let stamp = nextStamp
+                nextStamp += 1
+                currentStamp = stamp
+                undoStack.append(UndoEntry(
+                    forward: groupForward,
+                    inverse: groupInverse,
+                    cursorBefore: groupCursorBefore,
+                    cursorAfter: buffer.cursor,
+                    stamp: stamp
+                ))
+                isModified = currentStamp != savedStamp
+            }
+            groupForward.removeAll(keepingCapacity: true)
+            groupInverse.removeAll(keepingCapacity: true)
+        }
+    }
+
+    private func abortTransaction() {
+        groupDepth = 0
+        groupForward.removeAll(keepingCapacity: true)
+        groupInverse.removeAll(keepingCapacity: true)
     }
 
     private func undo() -> EngineResult {
-        guard let snap = undoStack.popLast() else { return beepResult() }
-        redoStack.append(Snapshot(text: buffer.text, cursor: buffer.cursor))
-        let old = buffer.text
-        buffer = TextBuffer(text: snap.text, cursor: snap.cursor)
-        isModified = true
-        lastEdit = TextEdit(range: 0..<old.count, replacement: snap.text)
+        guard let entry = undoStack.popLast() else { return beepResult() }
+        redoStack.append(entry)
+        applyHistory(entry.inverse.reversed(), cursor: entry.cursorBefore)
+        currentStamp = undoStack.last?.stamp ?? 0
+        isModified = currentStamp != savedStamp
         mode = .normal
         resetParser()
         return EngineResult(didChangeText: true, beep: false, actions: [])
     }
 
     private func redo() -> EngineResult {
-        guard let snap = redoStack.popLast() else { return beepResult() }
-        undoStack.append(Snapshot(text: buffer.text, cursor: buffer.cursor))
-        let old = buffer.text
-        buffer = TextBuffer(text: snap.text, cursor: snap.cursor)
-        isModified = true
-        lastEdit = TextEdit(range: 0..<old.count, replacement: snap.text)
+        guard let entry = redoStack.popLast() else { return beepResult() }
+        undoStack.append(entry)
+        applyHistory(entry.forward, cursor: entry.cursorAfter)
+        currentStamp = entry.stamp
+        isModified = currentStamp != savedStamp
         mode = .normal
         resetParser()
         return EngineResult(didChangeText: true, beep: false, actions: [])
+    }
+
+    private func applyHistory<S: Sequence>(_ edits: S, cursor: Int) where S.Element == TextEdit {
+        for edit in edits {
+            let lower = min(max(0, edit.range.lowerBound), buffer.count)
+            let upper = min(max(lower, edit.range.upperBound), buffer.count)
+            buffer.replace(lower..<upper, with: edit.replacement)
+            strokeEdits.append(TextEdit(range: lower..<upper, replacement: edit.replacement))
+        }
+        buffer.cursor = buffer.clampedCursor(cursor, normalMode: true)
+        buffer.preferredColumn = buffer.column(of: buffer.cursor)
     }
 
     // MARK: Search / ex
@@ -1203,6 +1473,9 @@ public final class Engine: @unchecked Sendable {
         case .character(let ch):
             commandLine.append(ch)
             return .noop
+        case .text(let text):
+            commandLine.append(text)
+            return .noop
         default:
             return .noop
         }
@@ -1226,23 +1499,29 @@ public final class Engine: @unchecked Sendable {
             let cmd = String(commandLine.dropFirst()).trimASCIISpaces()
             mode = .normal
             commandLine = ""
-            switch cmd {
-            case "w":
-                return EngineResult(didChangeText: false, beep: false, actions: [.write])
-            case "q":
-                if isModified {
-                    statusMessage = "No write since last change"
-                    return beepResult()
-                }
-                return EngineResult(didChangeText: false, beep: false, actions: [.quit])
-            case "wq", "x":
-                return EngineResult(didChangeText: false, beep: false, actions: [.writeQuit])
-            default:
-                statusMessage = "Not an editor command"
-                return beepResult()
+            if !cmd.isEmpty { commandHistory.append(cmd) }
+            return executeEx(cmd)
+        case .left:
+            return .noop
+        case .right:
+            return .noop
+        case .up:
+            guard !commandHistory.isEmpty else { return .noop }
+            historyCursor = max(0, historyCursor - 1)
+            if historyCursor >= commandHistory.count { historyCursor = commandHistory.count - 1 }
+            commandLine = ":" + commandHistory[historyCursor]
+            return .noop
+        case .down:
+            if historyCursor + 1 < commandHistory.count {
+                historyCursor += 1
+                commandLine = ":" + commandHistory[historyCursor]
             }
+            return .noop
         case .character(let ch):
             commandLine.append(ch)
+            return .noop
+        case .text(let text):
+            commandLine.append(text)
             return .noop
         default:
             return .noop
@@ -1252,9 +1531,175 @@ public final class Engine: @unchecked Sendable {
     // MARK: Buffer writes
 
     private func replace(_ range: Range<Int>, with new: String) {
-        lastEdit = TextEdit(range: range, replacement: new)
-        buffer.replace(range, with: new)
+        let lower = min(max(0, range.lowerBound), buffer.count)
+        let upper = min(max(lower, range.upperBound), buffer.count)
+        let span = lower..<upper
+        let old = buffer.substring(span)
+        let edit = TextEdit(range: span, replacement: new)
+        if groupDepth > 0 {
+            let width = buffer.measure(new)
+            groupForward.append(edit)
+            groupInverse.append(TextEdit(range: lower..<(lower + width), replacement: old))
+        }
+        buffer.replace(span, with: new)
+        strokeEdits.append(edit)
+        lastEdit = edit
         isModified = true
+        if groupDepth == 0 {
+            currentStamp = nextStamp
+            nextStamp += 1
+        }
+    }
+
+    private var parserIsIdle: Bool {
+        count == nil && operatorKind == nil && !pendingG && !pendingQuote && pendingLeader == nil
+            && !pendingMarkSet && pendingMarkJump == nil
+    }
+
+    private func setMark(_ ch: Character) -> EngineResult {
+        guard ch.isLetter || ch == "<" || ch == ">" else { return beepResult() }
+        let kind = AnchorKind.mark(String(ch))
+        buffer.removeAnchors { $0.kind == kind }
+        buffer.addAnchor(Anchor(
+            id: AnchorID(raw: UInt64(ch.asciiValue ?? 1)),
+            offset: buffer.cursor,
+            gravity: .right,
+            kind: kind
+        ))
+        return .noop
+    }
+
+    private func jumpToMark(_ ch: Character) -> EngineResult {
+        guard let anchor = buffer.anchors.first(where: {
+            if case .mark(let name) = $0.kind { return name == String(ch) }
+            return false
+        }) else { return beepResult() }
+        recordJump(from: buffer.cursor)
+        buffer.cursor = buffer.clampedCursor(anchor.offset, normalMode: true)
+        buffer.preferredColumn = buffer.column(of: buffer.cursor)
+        return .noop
+    }
+
+    private func executeEx(_ cmd: String) -> EngineResult {
+        let parsed = Ex.parse(cmd)
+        switch parsed.name {
+        case "w":
+            return EngineResult(didChangeText: false, beep: false, actions: [.write])
+        case "q":
+            if parsed.bang || !isModified {
+                return EngineResult(didChangeText: false, beep: false, actions: [.quit])
+            }
+            statusMessage = "No write since last change"
+            return beepResult()
+        case "wq", "x":
+            return EngineResult(didChangeText: false, beep: false, actions: [.writeQuit])
+        case "e":
+            let name = parsed.args.isEmpty ? "edit" : "edit:\(parsed.args)"
+            return EngineResult(didChangeText: false, beep: false, actions: [.command(name)])
+        case "sp":
+            return EngineResult(didChangeText: false, beep: false, actions: [.command("split")])
+        case "vs":
+            return EngineResult(didChangeText: false, beep: false, actions: [.command("vsplit")])
+        case "set":
+            return applySet(parsed.args)
+        case "s":
+            return substitute(parsed)
+        default:
+            statusMessage = "Not an editor command"
+            return beepResult()
+        }
+    }
+
+    private func applySet(_ args: String) -> EngineResult {
+        let parts = args.split(separator: "=", maxSplits: 1).map(String.init)
+        guard parts.count == 2, parts[0] == "shiftwidth" || parts[0] == "sw", let width = Int(parts[1]) else {
+            statusMessage = "Not an editor command"
+            return beepResult()
+        }
+        shiftWidth = max(1, width)
+        return .noop
+    }
+
+    private func substitute(_ parsed: ParsedEx) -> EngineResult {
+        guard let parts = Searcher.substituteParts(parsed.args), !parts.pattern.isEmpty else {
+            statusMessage = "Not an editor command"
+            return beepResult()
+        }
+        let last = max(0, buffer.lineCount - 1)
+        let current = buffer.lineIndex(containing: buffer.cursor)
+        let startLine: Int
+        let endLine: Int
+        if parsed.rangeStart == .all {
+            startLine = 0
+            endLine = last
+        } else {
+            startLine = resolveAddress(parsed.rangeStart, current: current, last: last)
+            endLine = resolveAddress(parsed.rangeEnd ?? parsed.rangeStart, current: current, last: last)
+        }
+        let lower = min(startLine, endLine)
+        let upper = max(startLine, endLine)
+        beginTransaction()
+        var changed = false
+        for line in stride(from: upper, through: lower, by: -1) {
+            let content = buffer.lineContentRange(at: line)
+            let text = buffer.substring(content)
+            let updated = replaceInLine(text, pattern: parts.pattern, with: parts.replacement, global: parts.global)
+            if updated != text {
+                replace(content, with: updated)
+                changed = true
+            }
+        }
+        if !changed {
+            abortTransaction()
+            return beepResult()
+        }
+        commitTransaction()
+        return EngineResult(didChangeText: true, beep: false, actions: [])
+    }
+
+    private func resolveAddress(_ address: ParsedEx.Address?, current: Int, last: Int) -> Int {
+        switch address {
+        case .none, .current?: return current
+        case .last, .all: return last
+        case .number(let n): return min(max(0, n - 1), last)
+        case .mark(let name):
+            if let anchor = buffer.anchors.first(where: {
+                if case .mark(let mark) = $0.kind { return mark == String(name) }
+                return false
+            }) {
+                return buffer.lineIndex(containing: anchor.offset)
+            }
+            return current
+        }
+    }
+
+    private func replaceInLine(_ text: String, pattern: String, with replacement: String, global: Bool) -> String {
+        let ignore = Searcher.ignoresCase(pattern)
+        let hay = Array(text.utf16)
+        let folded = Array((ignore ? text.lowercased() : text).utf16)
+        let needle = Array((ignore ? pattern.lowercased() : pattern).utf16)
+        guard !needle.isEmpty else { return text }
+        var out: [UInt16] = []
+        let rep = Array(replacement.utf16)
+        var index = 0
+        var did = false
+        while index < hay.count {
+            let fits = index + needle.count <= hay.count
+            let equal = fits && folded[index..<(index + needle.count)].elementsEqual(needle)
+            if (!did || global) && equal {
+                out.append(contentsOf: rep)
+                index += needle.count
+                did = true
+                if !global {
+                    out.append(contentsOf: hay[index...])
+                    break
+                }
+            } else {
+                out.append(hay[index])
+                index += 1
+            }
+        }
+        return String(decoding: out, as: UTF16.self)
     }
 
     private func beepResult() -> EngineResult {

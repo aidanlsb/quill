@@ -114,14 +114,34 @@ public final class MemoryTransport: ByteTransport, @unchecked Sendable {
     }
 }
 
+public enum JSONRPCID: Hashable, Sendable {
+    case number(Int)
+    case string(String)
+
+    public var json: JSONValue {
+        switch self {
+        case .number(let n): return .number(Double(n))
+        case .string(let s): return .string(s)
+        }
+    }
+
+    public static func parse(_ value: JSONValue) -> JSONRPCID? {
+        if let n = value.int { return .number(n) }
+        if let s = value.string { return .string(s) }
+        return nil
+    }
+}
+
 public final class JSONRPCSession: @unchecked Sendable {
     private let transport: ByteTransport
     private let framer = JSONRPCFramer()
     private let lock = NSLock()
+    private let writeLock = NSLock()
     private var nextID = 1
-    private var pending: [Int: (Result<JSONValue, Error>) -> Void] = [:]
+    private var pending: [JSONRPCID: (Result<JSONValue, Error>) -> Void] = [:]
     public var onNotification: ((String, JSONValue?) -> Void)?
-    public var onServerRequest: ((Int, String, JSONValue?) -> JSONValue?)?
+    /// Return nil to answer with JSON-RPC MethodNotFound. Return `.null` for an explicit null result.
+    public var onServerRequest: ((JSONRPCID, String, JSONValue?) -> JSONValue?)?
 
     public init(transport: ByteTransport) {
         self.transport = transport
@@ -144,48 +164,83 @@ public final class JSONRPCSession: @unchecked Sendable {
             "method": .string(method),
         ]
         if let params { obj["params"] = params }
-        try transport.write(framer.encode(try JSONValue.encode(.object(obj))))
+        try send(obj)
     }
 
     public func request(method: String, params: JSONValue? = nil, timeout: TimeInterval = 5) throws -> JSONValue {
-        let id: Int = locked {
-            let id = nextID
-            nextID += 1
-            return id
-        }
-        var obj: [String: JSONValue] = [
-            "jsonrpc": .string("2.0"),
-            "id": .number(Double(id)),
-            "method": .string(method),
-        ]
-        if let params { obj["params"] = params }
-        let semaphore = DispatchSemaphore(value: 0)
-        var result: Result<JSONValue, Error>?
+        let id = allocateID()
+        let box = ResponseBox()
         locked {
-            pending[id] = { r in
-                result = r
-                semaphore.signal()
+            pending[id] = { result in
+                box.condition.lock()
+                box.result = result
+                box.condition.signal()
+                box.condition.unlock()
             }
         }
-        try transport.write(framer.encode(try JSONValue.encode(.object(obj))))
-        if semaphore.wait(timeout: .now() + timeout) == .timedOut {
+        do {
+            try send(requestObject(id: id, method: method, params: params))
+        } catch {
+            locked { pending.removeValue(forKey: id) }
+            throw error
+        }
+        box.condition.lock()
+        let deadline = Date().addingTimeInterval(timeout)
+        while box.result == nil {
+            if !box.condition.wait(until: deadline) { break }
+        }
+        let result = box.result
+        box.condition.unlock()
+        if result == nil {
             locked { pending.removeValue(forKey: id) }
             throw JSONRPCError.timeout
         }
         switch result {
         case .success(let value): return value
         case .failure(let error): throw error
-        case .none: throw JSONRPCError.closed
+        case nil: throw JSONRPCError.closed
         }
     }
 
-    public func reply(id: Int, result: JSONValue) throws {
-        let obj: [String: JSONValue] = [
+    public func request(method: String, params: JSONValue? = nil) async throws -> JSONValue {
+        let id = allocateID()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<JSONValue, Error>) in
+                let gate = OnceResume()
+                locked {
+                    pending[id] = { result in
+                        gate.resume(continuation, with: result)
+                    }
+                }
+                do {
+                    try send(requestObject(id: id, method: method, params: params))
+                } catch {
+                    locked { pending.removeValue(forKey: id) }
+                    gate.resume(continuation, with: .failure(error))
+                }
+            }
+        } onCancel: { [weak self] in
+            try? self?.notify(method: "$/cancelRequest", params: .object(["id": id.json]))
+        }
+    }
+
+    public func reply(id: JSONRPCID, result: JSONValue) throws {
+        try send([
             "jsonrpc": .string("2.0"),
-            "id": .number(Double(id)),
+            "id": id.json,
             "result": result,
-        ]
-        try transport.write(framer.encode(try JSONValue.encode(.object(obj))))
+        ])
+    }
+
+    public func replyError(id: JSONRPCID, code: Int, message: String) throws {
+        try send([
+            "jsonrpc": .string("2.0"),
+            "id": id.json,
+            "error": .object([
+                "code": .number(Double(code)),
+                "message": .string(message),
+            ]),
+        ])
     }
 
     public func close() {
@@ -208,8 +263,7 @@ public final class JSONRPCSession: @unchecked Sendable {
 
     private func handle(_ payload: Data) {
         guard let value = try? JSONValue.decode(payload), let obj = value.object else { return }
-        if let idVal = obj["id"], obj["method"] == nil {
-            let id = idVal.int ?? Int(idVal.string ?? "") ?? -1
+        if let idVal = obj["id"], obj["method"] == nil, let id = JSONRPCID.parse(idVal) {
             let callback = locked { pending.removeValue(forKey: id) }
             if let err = obj["error"]?.object {
                 let code = err["code"]?.int ?? -1
@@ -222,14 +276,41 @@ public final class JSONRPCSession: @unchecked Sendable {
         }
         if let method = obj["method"]?.string {
             let params = obj["params"]
-            if let idVal = obj["id"] {
-                let id = idVal.int ?? Int(idVal.string ?? "") ?? 0
-                let result = onServerRequest?(id, method, params) ?? .null
-                try? reply(id: id, result: result)
+            if let idVal = obj["id"], let id = JSONRPCID.parse(idVal) {
+                if let result = onServerRequest?(id, method, params) {
+                    try? reply(id: id, result: result)
+                } else {
+                    try? replyError(id: id, code: -32601, message: "Method not found: \(method)")
+                }
             } else {
                 onNotification?(method, params)
             }
         }
+    }
+
+    private func allocateID() -> JSONRPCID {
+        locked {
+            let id = nextID
+            nextID += 1
+            return .number(id)
+        }
+    }
+
+    private func requestObject(id: JSONRPCID, method: String, params: JSONValue?) -> [String: JSONValue] {
+        var obj: [String: JSONValue] = [
+            "jsonrpc": .string("2.0"),
+            "id": id.json,
+            "method": .string(method),
+        ]
+        if let params { obj["params"] = params }
+        return obj
+    }
+
+    private func send(_ object: [String: JSONValue]) throws {
+        let framed = framer.encode(try JSONValue.encode(.object(object)))
+        writeLock.lock()
+        defer { writeLock.unlock() }
+        try transport.write(framed)
     }
 
     @discardableResult
@@ -237,5 +318,26 @@ public final class JSONRPCSession: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return body()
+    }
+}
+
+private final class ResponseBox: @unchecked Sendable {
+    let condition = NSCondition()
+    var result: Result<JSONValue, Error>?
+}
+
+private final class OnceResume: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+
+    func resume(_ continuation: CheckedContinuation<JSONValue, Error>, with result: Result<JSONValue, Error>) {
+        lock.lock()
+        if done {
+            lock.unlock()
+            return
+        }
+        done = true
+        lock.unlock()
+        continuation.resume(with: result)
     }
 }

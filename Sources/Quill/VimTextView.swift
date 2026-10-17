@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import QuillMarkdown
 import QuillVim
 
 /// TextKit 2 display-line layout. `@unchecked Sendable` because the vim engine
@@ -7,6 +8,8 @@ import QuillVim
 @MainActor
 final class TextKit2Layout: TextLayout, @unchecked Sendable {
     weak var textView: NSTextView?
+    private var stickyColumn = -1
+    private var stickyX: CGFloat = 0
 
     nonisolated func displayColumn(of offset: Int, in buffer: TextBuffer) -> Int {
         LogicalLineLayout.shared.displayColumn(of: offset, in: buffer)
@@ -26,6 +29,8 @@ final class TextKit2Layout: TextLayout, @unchecked Sendable {
                 in: buffer
             )
         }
+        // TextBuffer is not Sendable; the engine calls this synchronously on the main thread.
+        nonisolated(unsafe) let buffer = buffer
         return MainActor.assumeIsolated {
             positionUsingTextKit(
                 from: offset,
@@ -50,52 +55,70 @@ final class TextKit2Layout: TextLayout, @unchecked Sendable {
                 in: buffer
             )
         }
-        let utf16 = utf16Offset(offset, in: buffer.text)
+        let utf16 = min(max(0, offset), (tv.string as NSString).length)
+        lm.ensureLayout(for: lm.documentRange)
         guard let location = lm.location(lm.documentRange.location, offsetBy: utf16) else {
             return LogicalLineLayout.shared.position(
                 from: offset, displayLines: delta, preferredColumn: preferredColumn, in: buffer
             )
         }
-        var fragment = lm.textLayoutFragment(for: location)
-        var remaining = delta
-        let step = remaining > 0 ? 1 : -1
-        while remaining != 0, let current = fragment {
-            let next: NSTextLayoutFragment?
-            if step > 0 {
-                if let end = current.rangeInElement.endLocation as? NSTextLocation,
-                   let after = lm.location(end, offsetBy: 1) {
-                    next = lm.textLayoutFragment(for: after)
-                } else {
-                    next = nil
-                }
-            } else {
-                let start = current.rangeInElement.location
-                if let before = lm.location(start, offsetBy: -1) {
-                    next = lm.textLayoutFragment(for: before)
-                } else {
-                    next = nil
-                }
-            }
-            guard let next, next !== current else { break }
-            fragment = next
-            remaining -= step
+        guard let fragment = lm.textLayoutFragment(for: location) else {
+            return LogicalLineLayout.shared.position(
+                from: offset, displayLines: delta, preferredColumn: preferredColumn, in: buffer
+            )
         }
-        guard let fragment else {
-            return offset
+        let lines = visualLines(around: fragment, layout: lm, extra: abs(delta) + 1)
+        guard !lines.isEmpty else { return offset }
+        let local = utf16 - lines[0].documentLocation
+        var index = lines.firstIndex { line in
+            let start = line.fragmentRange.location
+            return local >= start && local < start + max(line.fragmentRange.length, 1)
+        } ?? 0
+        if preferredColumn != stickyColumn {
+            stickyColumn = preferredColumn
+            stickyX = lines[index].line.locationForCharacter(at: min(local - lines[index].fragmentRange.location, lines[index].fragmentRange.length)).x
         }
-        let startUTF16 = lm.offset(from: lm.documentRange.location, to: fragment.rangeInElement.location)
-        let dest = characterOffset(utf16: max(0, startUTF16 + min(preferredColumn, 80)), in: buffer.text)
+        index = min(max(0, index + delta), lines.count - 1)
+        let line = lines[index]
+        let hit = line.line.characterIndex(for: CGPoint(x: stickyX, y: line.line.typographicBounds.midY))
+        let dest = line.documentLocation + line.fragmentRange.location + hit
         return buffer.clampedCursor(dest, normalMode: true)
     }
 
-    private func utf16Offset(_ characterOffset: Int, in text: String) -> Int {
-        let i = text.index(text.startIndex, offsetBy: min(characterOffset, text.count))
-        return i.utf16Offset(in: text)
+    private struct VisualLine {
+        var line: NSTextLineFragment
+        var fragmentRange: NSRange
+        var documentLocation: Int
     }
 
-    private func characterOffset(utf16: Int, in text: String) -> Int {
-        let i = String.Index(utf16Offset: min(utf16, text.utf16.count), in: text)
-        return text.distance(from: text.startIndex, to: i)
+    private func visualLines(around fragment: NSTextLayoutFragment, layout lm: NSTextLayoutManager, extra: Int) -> [VisualLine] {
+        var fragments: [NSTextLayoutFragment] = [fragment]
+        var backward: NSTextLayoutFragment? = fragment
+        for _ in 0..<extra {
+            guard let current = backward else { break }
+            let start = current.rangeInElement.location
+            guard let before = lm.location(start, offsetBy: -1),
+                  let previous = lm.textLayoutFragment(for: before),
+                  previous !== current else { break }
+            fragments.insert(previous, at: 0)
+            backward = previous
+        }
+        var forward: NSTextLayoutFragment? = fragment
+        for _ in 0..<extra {
+            guard let current = forward else { break }
+            let end = current.rangeInElement.endLocation
+            guard let after = lm.location(end, offsetBy: 0),
+                  let next = lm.textLayoutFragment(for: after),
+                  next !== current else { break }
+            fragments.append(next)
+            forward = next
+        }
+        return fragments.flatMap { piece in
+            let origin = lm.offset(from: lm.documentRange.location, to: piece.rangeInElement.location)
+            return piece.textLineFragments.map { line in
+                VisualLine(line: line, fragmentRange: line.characterRange, documentLocation: origin)
+            }
+        }
     }
 }
 
@@ -115,6 +138,11 @@ final class VimTextView: NSTextView {
     var theme = QuillTheme.current()
     var diagnosticRanges: [(NSRange, Int)] = []
     private var restyleQueued = false
+    private var tokenizer = MarkdownTokenizer(text: "")
+    /// Read by `EditorView` in this file. `private` would hide them from that type.
+    fileprivate var appliedThemeID = -1
+    fileprivate var appliedFocus = false
+    private var mouseAnchor: Int?
 
     override func awakeFromNib() {
         super.awakeFromNib()
@@ -174,32 +202,44 @@ final class VimTextView: NSTextView {
         let text = engine.text
         if string != text {
             string = text
+            tokenizer = MarkdownTokenizer(text: text)
         }
-        let utf16 = utf16Offset(engine.cursor)
-        setSelectedRange(NSRange(location: utf16, length: 0))
+        setSelectedRange(NSRange(location: clampUTF16(engine.cursor), length: 0))
         if let sel = engine.visualSelection, engine.mode.isVisual {
-            let loc = utf16Offset(sel.lowerBound)
-            let end = utf16Offset(sel.upperBound)
+            let loc = clampUTF16(sel.lowerBound)
+            let end = clampUTF16(sel.upperBound)
             setSelectedRange(NSRange(location: loc, length: max(0, end - loc)))
         }
-        queueRestyle()
-        scrollToVisible(rectForCharacterRange())
+        queueRestyle(dirty: nil)
+        scrollRangeToVisible(selectedRange())
     }
 
     func applyResult(_ result: EngineResult) {
         if result.didChangeText {
-            if let edit = engine.lastEdit {
-                let nsRange = nsRange(edit.range)
-                if nsRange.location != NSNotFound, let storage = textStorage {
-                    storage.replaceCharacters(in: nsRange, with: edit.replacement)
-                } else {
-                    string = engine.text
-                }
-            } else {
+            if result.edits.isEmpty {
                 string = engine.text
+                tokenizer = MarkdownTokenizer(text: string)
+            } else if let storage = textStorage {
+                for edit in result.edits {
+                    let nsRange = nsRange(edit.range)
+                    if nsRange.location != NSNotFound, NSMaxRange(nsRange) <= storage.length {
+                        storage.replaceCharacters(in: nsRange, with: edit.replacement)
+                    } else {
+                        string = engine.text
+                        break
+                    }
+                }
             }
         }
-        syncFromEngine()
+        let dirty = result.edits.first?.range.lowerBound
+        setSelectedRange(NSRange(location: clampUTF16(engine.cursor), length: 0))
+        if let sel = engine.visualSelection, engine.mode.isVisual {
+            let loc = clampUTF16(sel.lowerBound)
+            let end = clampUTF16(sel.upperBound)
+            setSelectedRange(NSRange(location: loc, length: max(0, end - loc)))
+        }
+        queueRestyle(dirty: dirty)
+        scrollRangeToVisible(selectedRange())
         vimDelegate?.vimTextView(self, didHandle: result)
     }
 
@@ -208,7 +248,7 @@ final class VimTextView: NSTextView {
             super.keyDown(with: event)
             return
         }
-        if hasMarkedText() {
+        if hasMarkedText() || event.characters?.isEmpty != false {
             super.keyDown(with: event)
             return
         }
@@ -225,10 +265,18 @@ final class VimTextView: NSTextView {
 
     override func mouseDown(with event: NSEvent) {
         super.mouseDown(with: event)
-        let utf16 = selectedRange().location
-        let offset = characterOffset(utf16: utf16)
+        let offset = clampUTF16(selectedRange().location)
+        mouseAnchor = offset
         engine.moveCursor(to: offset)
         vimDelegate?.vimTextViewDidClick(self, characterOffset: offset, commandClick: event.modifierFlags.contains(.command))
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        super.mouseDragged(with: event)
+        let offset = clampUTF16(selectedRange().location)
+        if let anchor = mouseAnchor, selectedRange().length > 0 {
+            engine.beginMouseSelection(anchor: anchor, caret: offset + selectedRange().length)
+        }
     }
 
     override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
@@ -247,40 +295,47 @@ final class VimTextView: NSTextView {
     }
 
     override func insertText(_ insertString: Any, replacementRange: NSRange) {
-        // All typing goes through keyDown → engine.
+        let raw: String
+        if let text = insertString as? String {
+            raw = text
+        } else if let text = insertString as? NSAttributedString {
+            raw = text.string
+        } else {
+            return
+        }
+        guard !raw.isEmpty else { return }
+        let result = engine.handle(KeyEvent(.text(raw)))
+        applyResult(result)
     }
 
-    func queueRestyle() {
+    func queueRestyle(dirty: Int? = nil) {
         guard !restyleQueued else { return }
         restyleQueued = true
+        let dirty = dirty
         Task { @MainActor [weak self] in
             guard let self, let storage = self.textStorage else { return }
             self.restyleQueued = false
-            MarkdownStyler.restyle(storage, theme: self.theme, diagnostics: self.diagnosticRanges)
+            self.tokenizer.replace(text: storage.string, dirtyUTF16: dirty ?? 0)
+            MarkdownStyler.restyle(
+                storage,
+                theme: self.theme,
+                spans: self.tokenizer.spans,
+                dirtyUTF16: dirty,
+                focus: self.focusMode,
+                caret: self.engine.cursor,
+                diagnostics: self.diagnosticRanges
+            )
         }
     }
 
-    func utf16Offset(_ characterOffset: Int) -> Int {
-        let text = string
-        let i = text.index(text.startIndex, offsetBy: min(max(0, characterOffset), text.count))
-        return i.utf16Offset(in: text)
-    }
-
-    func characterOffset(utf16: Int) -> Int {
-        let text = string
-        let i = String.Index(utf16Offset: min(max(0, utf16), text.utf16.count), in: text)
-        return text.distance(from: text.startIndex, to: i)
+    func clampUTF16(_ offset: Int) -> Int {
+        min(max(0, offset), (string as NSString).length)
     }
 
     func nsRange(_ range: Range<Int>) -> NSRange {
-        let loc = utf16Offset(range.lowerBound)
-        let end = utf16Offset(range.upperBound)
-        return NSRange(location: loc, length: end - loc)
-    }
-
-    private func rectForCharacterRange() -> NSRect {
-        let r = firstRect(forCharacterRange: selectedRange(), actualRange: nil)
-        return window?.convertFromScreen(r) ?? visibleRect
+        let loc = clampUTF16(range.lowerBound)
+        let end = clampUTF16(range.upperBound)
+        return NSRange(location: loc, length: max(0, end - loc))
     }
 }
 
@@ -313,7 +368,7 @@ extension KeyEvent {
 }
 
 struct EditorView: NSViewRepresentable {
-    @ObservedObject var model: AppModel
+    var model: AppModel
 
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = NSScrollView()
@@ -343,12 +398,19 @@ struct EditorView: NSViewRepresentable {
         tv.engine = model.engine
         tv.columnWidth = model.theme.columnWidth
         tv.isDirectoryBuffer = model.isDirectory
-        tv.diagnosticRanges = model.nsDiagnosticRanges()
-        tv.applyTheme(model.theme, focus: model.focusMode)
-        if tv.string != model.engine.text {
-            tv.syncFromEngine()
+        let diagnostics = model.nsDiagnosticRanges()
+        let diagnosticsChanged = tv.diagnosticRanges.map(\.0) != diagnostics.map(\.0)
+        if diagnosticsChanged { tv.diagnosticRanges = diagnostics }
+        if tv.appliedThemeID != model.themeIdentity || tv.appliedFocus != model.focusMode {
+            tv.applyTheme(model.theme, focus: model.focusMode)
+            tv.appliedThemeID = model.themeIdentity
+            tv.appliedFocus = model.focusMode
         } else {
             tv.updateInsets()
+        }
+        if tv.string != model.engine.text {
+            tv.syncFromEngine()
+        } else if diagnosticsChanged {
             tv.queueRestyle()
         }
         if context.coordinator.hadPicker && model.picker == nil {
