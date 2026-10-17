@@ -3,8 +3,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-swift build -c release --product Quill
-BIN="$(swift build -c release --product Quill --show-bin-path)/Quill"
+swift build -c release --product Quill -Xswiftc -strict-concurrency=complete
+BIN="$(swift build -c release --product Quill -Xswiftc -strict-concurrency=complete --show-bin-path)/Quill"
 DEST="${1:-dist/Quill.app}"
 rm -rf "$DEST"
 mkdir -p "$DEST/Contents/MacOS" "$DEST/Contents/Resources"

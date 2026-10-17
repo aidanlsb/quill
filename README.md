@@ -24,17 +24,20 @@ swift test
 
 That is the verified suite on Linux.
 
-## Build the app (macOS 14+, Xcode 16 / Swift 6)
+## Build the app (macOS 14+, Swift 6.2)
+
+Xcode 16.4 (Swift 6.1) does not compile the app. CI uses Xcode 26.3 (Swift 6.2) on macos-26, with complete concurrency checking. Linux `swift test` does not build this target.
 
 ```bash
-swift build -c release --product Quill
+swift build -c release --product Quill -Xswiftc -strict-concurrency=complete
 ./Scripts/bundle-app.sh          # → dist/Quill.app
 ./Scripts/install.sh             # copies the app to /Applications and `quill` to /usr/local/bin
+Scripts/verify-quill            # QUILL_SMOKE: caret, scrolling, directory buffer
 ```
 
 Or open `Package.swift` in Xcode and run the **Quill** target. The app is not sandboxed, so it can open any folder and spawn configured language servers.
 
-The macOS app target is written for Xcode 16+ / Swift 6. It has **not** been compiled in this environment (Linux VM, no macOS runner).
+`Scripts/verify-quill` is the launch smoke. A green Linux test run is not a substitute. The recipe lives in `.cursor/skills/verify-quill/`.
 
 ## CLI
 

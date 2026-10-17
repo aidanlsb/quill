@@ -91,4 +91,6 @@ jobs:
       - name: Drive caret, scroll, and directory buffers
         run: |
           bin="$(swift build -c release --product Quill -Xswiftc -strict-concurrency=complete --show-bin-path)/Quill"
-          QUILL_SMOKE=1 "$bin"
+          Scripts/verify-quill --bin "$bin"
+          test -s artifacts/verify-quill/smoke.log
+          grep -F -q "quill smoke passed" artifacts/verify-quill/smoke.log
