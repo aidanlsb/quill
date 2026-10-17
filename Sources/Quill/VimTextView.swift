@@ -137,8 +137,9 @@ final class VimTextView: NSTextView {
     var diagnosticRanges: [(NSRange, Int)] = []
     private var restyleQueued = false
     private var tokenizer = MarkdownTokenizer(text: "")
-    private var appliedThemeID = -1
-    private var appliedFocus = false
+    /// Read by `EditorView` in this file. `private` would hide them from that type.
+    fileprivate var appliedThemeID = -1
+    fileprivate var appliedFocus = false
     private var mouseAnchor: Int?
 
     override func awakeFromNib() {
