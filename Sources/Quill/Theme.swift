@@ -16,7 +16,7 @@ struct QuillTheme {
 
     @MainActor
     static func current(columnCharacters: Int = 76) -> QuillTheme {
-        let appearance = NSApp.effectiveAppearance
+        let appearance = NSApp?.effectiveAppearance ?? NSAppearance.currentDrawing()
         let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let body = NSFont(name: "New York", size: 20)
             ?? NSFont(name: "Iowan Old Style", size: 20)
