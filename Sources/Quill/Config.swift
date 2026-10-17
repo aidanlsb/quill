@@ -53,12 +53,20 @@ struct QuillConfig: Codable, Equatable {
     }
 }
 
+/// System pasteboard adapter. Engine only reads/writes this from the app's
+/// main-actor event loop (key handlers and host actions).
 final class PasteboardClipboard: Clipboard {
     var text: String {
-        get { NSPasteboard.general.string(forType: .string) ?? "" }
+        get {
+            MainActor.assumeIsolated {
+                NSPasteboard.general.string(forType: .string) ?? ""
+            }
+        }
         set {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(newValue, forType: .string)
+            MainActor.assumeIsolated {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(newValue, forType: .string)
+            }
         }
     }
 }

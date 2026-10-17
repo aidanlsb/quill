@@ -15,7 +15,33 @@ final class TextKit2Layout: TextLayout {
         preferredColumn: Int,
         in buffer: TextBuffer
     ) -> Int {
-        guard let tv = textView, let lm = tv.textLayoutManager, delta != 0 else {
+        guard textView != nil, delta != 0 else {
+            return LogicalLineLayout.shared.position(
+                from: offset,
+                displayLines: delta,
+                preferredColumn: preferredColumn,
+                in: buffer
+            )
+        }
+        // Engine calls layout from the app's main-actor event loop (keyDown / sync).
+        return MainActor.assumeIsolated {
+            positionUsingTextKit(
+                from: offset,
+                displayLines: delta,
+                preferredColumn: preferredColumn,
+                in: buffer
+            )
+        }
+    }
+
+    @MainActor
+    private func positionUsingTextKit(
+        from offset: Int,
+        displayLines delta: Int,
+        preferredColumn: Int,
+        in buffer: TextBuffer
+    ) -> Int {
+        guard let tv = textView, let lm = tv.textLayoutManager else {
             return LogicalLineLayout.shared.position(
                 from: offset,
                 displayLines: delta,
@@ -72,6 +98,7 @@ final class TextKit2Layout: TextLayout {
     }
 }
 
+@MainActor
 protocol VimTextViewDelegate: AnyObject {
     func vimTextView(_ view: VimTextView, didHandle result: EngineResult)
     func vimTextViewDidClick(_ view: VimTextView, characterOffset: Int, commandClick: Bool)
@@ -225,7 +252,7 @@ final class VimTextView: NSTextView {
     func queueRestyle() {
         guard !restyleQueued else { return }
         restyleQueued = true
-        DispatchQueue.main.async { [weak self] in
+        Task { @MainActor [weak self] in
             guard let self, let storage = self.textStorage else { return }
             self.restyleQueued = false
             MarkdownStyler.restyle(storage, theme: self.theme, diagnostics: self.diagnosticRanges)
@@ -331,6 +358,7 @@ struct EditorView: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
+    @MainActor
     final class Coordinator: NSObject, VimTextViewDelegate {
         var textView: VimTextView?
         weak var model: AppModel?

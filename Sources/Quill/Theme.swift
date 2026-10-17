@@ -13,6 +13,7 @@ struct QuillTheme {
     var columnWidth: CGFloat
     var lineHeight: CGFloat
 
+    @MainActor
     static func current(columnCharacters: Int = 76) -> QuillTheme {
         let appearance = NSApp.effectiveAppearance
         let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
@@ -66,6 +67,7 @@ struct QuillTheme {
     }
 }
 
+@MainActor
 enum MarkdownStyler {
     static func restyle(_ storage: NSTextStorage, theme: QuillTheme, diagnostics: [(NSRange, Int)] = []) {
         let text = storage.string

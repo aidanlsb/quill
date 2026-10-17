@@ -54,6 +54,7 @@ struct QuillApp: App {
     }
 }
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var model: AppModel?
     private var pending: [URL] = []

@@ -240,13 +240,17 @@ struct PickerKeyCatcher: NSViewRepresentable {
     func makeNSView(context: Context) -> PickerKeyView {
         let v = PickerKeyView()
         v.model = model
-        DispatchQueue.main.async { v.window?.makeFirstResponder(v) }
+        Task { @MainActor in
+            v.window?.makeFirstResponder(v)
+        }
         return v
     }
 
     func updateNSView(_ nsView: PickerKeyView, context: Context) {
         nsView.model = model
-        DispatchQueue.main.async { nsView.window?.makeFirstResponder(nsView) }
+        Task { @MainActor in
+            nsView.window?.makeFirstResponder(nsView)
+        }
     }
 }
 

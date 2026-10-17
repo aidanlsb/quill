@@ -43,7 +43,10 @@ final class AppModel: ObservableObject {
         rootURL = home
         config.apply(to: engine)
         appearanceObserver = NSApp.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
-            DispatchQueue.main.async { self?.theme = QuillTheme.current(columnCharacters: self?.config.columnWidth ?? 76) }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.theme = QuillTheme.current(columnCharacters: self.config.columnWidth)
+            }
         }
         theme = QuillTheme.current(columnCharacters: config.columnWidth)
     }
@@ -227,11 +230,13 @@ final class AppModel: ObservableObject {
         panel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText]
         panel.nameFieldStringValue = "untitled.md"
         panel.begin { [weak self] response in
-            guard response == .OK, let url = panel.url else { return }
-            self?.fileURL = url
-            self?.rootURL = url.deletingLastPathComponent()
-            self?.title = url.lastPathComponent
-            self?.writeFile()
+            Task { @MainActor [weak self] in
+                guard let self, response == .OK, let url = panel.url else { return }
+                self.fileURL = url
+                self.rootURL = url.deletingLastPathComponent()
+                self.title = url.lastPathComponent
+                self.writeFile()
+            }
         }
     }
 
@@ -241,8 +246,10 @@ final class AppModel: ObservableObject {
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         panel.begin { [weak self] response in
-            guard response == .OK, let url = panel.url else { return }
-            self?.open(url: url)
+            Task { @MainActor [weak self] in
+                guard let self, response == .OK, let url = panel.url else { return }
+                self.open(url: url)
+            }
         }
     }
 
@@ -373,8 +380,8 @@ final class AppModel: ObservableObject {
             let start = LSPPosition.characterOffset(in: engine.text, position: diag.range.start)
             let end = LSPPosition.characterOffset(in: engine.text, position: diag.range.end)
             let loc = utf16(start)
-            let max = utf16(end)
-            return (NSRange(location: loc, length: max(0, max - loc)), diag.severity)
+            let endUTF16 = utf16(end)
+            return (NSRange(location: loc, length: max(0, endUTF16 - loc)), diag.severity)
         }
     }
 
@@ -427,7 +434,9 @@ final class AppModel: ObservableObject {
         do {
             try client.start(root: root)
             client.onDiagnostics = { [weak self] _, diags in
-                DispatchQueue.main.async { self?.diagnostics = diags }
+                Task { @MainActor [weak self] in
+                    self?.diagnostics = diags
+                }
             }
             lsp = client
             message = "LSP: \(server.name)"
@@ -442,11 +451,11 @@ final class AppModel: ObservableObject {
             return
         }
         let pos = LSPPosition.utf16(in: engine.text, characterOffset: engine.cursor)
-        DispatchQueue.global(qos: .userInitiated).async {
-            let hover = try? client.hover(uri: url.absoluteString, position: pos)
-            DispatchQueue.main.async {
-                self.hoverText = hover?.contents
-            }
+        Task {
+            let hover = await Task.detached {
+                try? client.hover(uri: url.absoluteString, position: pos)
+            }.value
+            self.hoverText = hover?.contents
         }
     }
 
