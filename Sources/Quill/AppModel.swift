@@ -72,7 +72,7 @@ final class AppModel {
         config = loaded.config
         if let error = loaded.error { message = error }
         config.apply(to: engine)
-        appearanceObserver = NSApp.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
+        appearanceObserver = NSApplication.shared.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.theme = QuillTheme.current(columnCharacters: self.config.columnWidth)

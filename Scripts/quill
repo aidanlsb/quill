@@ -71,9 +71,9 @@ fi
 
 open_app() {
   if [[ "$APP" == "Quill" ]]; then
-    open "${wait_flag[@]}" -a Quill "$@"
+    open ${wait_flag[@]+"${wait_flag[@]}"} -a Quill "$@"
   else
-    open "${wait_flag[@]}" -a "$APP" "$@"
+    open ${wait_flag[@]+"${wait_flag[@]}"} -a "$APP" "$@"
   fi
 }
 
@@ -132,4 +132,4 @@ if [[ ${#urls[@]} -eq 0 ]]; then
   exit 0
 fi
 
-open_app "${urls[@]}"
+open_app ${urls[@]+"${urls[@]}"}

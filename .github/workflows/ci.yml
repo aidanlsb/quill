@@ -19,11 +19,69 @@ jobs:
       - name: Test
         run: swift test
 
+  # Xcode 16.4 (Swift 6.1) on macos-15 rejects the app, and Xcode 26
+  # binaries do not run on macOS 15. macos-26 compiles and tests with Swift 6.2.
+  # /bin/bash there is still 3.2, which is what the launcher check needs.
   macos:
-    runs-on: macos-14
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
+      - name: Check launcher under bash 3.2
+        run: |
+          /bin/bash --version
+          /bin/bash -n Scripts/quill
+          # Fake bundle selects the -a "$APP" branch (empty wait_flag under set -u).
+          mkdir -p dist/Quill.app
+          stub="$(mktemp -d)"
+          log="$(mktemp)"
+          cat > "$stub/open" << 'EOF'
+          #!/bin/bash
+          printf '%s\n' "$*" >> "$STUB_OPEN_LOG"
+          exit 0
+          EOF
+          chmod +x "$stub/open"
+          export STUB_OPEN_LOG="$log"
+          export PATH="$stub:$PATH"
+          /bin/bash Scripts/quill
+          /bin/bash Scripts/quill +12
+          /bin/bash Scripts/quill --wait
+          work="$(mktemp -d)"
+          /bin/bash Scripts/quill --wait "$work/note.md:3:2"
+          rm -rf dist
+          grep -F -q -- '-W -n' "$log"
+          grep -F -q -- 'quill://open' "$log"
+          grep -F -q -- 'line=3' "$log"
+          grep -F -q -- 'column=2' "$log"
+          test "$(wc -l < "$log" | tr -d ' ')" -eq 4
+      - name: Select Swift 6.2
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.3.app
+          xcodebuild -version
+          swift --version
       - name: Test
         run: swift test
       - name: Build the app
-        run: swift build --product Quill
+        run: swift build -c release --product Quill
+      - name: Launch the app
+        run: |
+          bin="$(swift build -c release --product Quill --show-bin-path)/Quill"
+          test -x "$bin"
+          log="$(mktemp)"
+          "$bin" >"$log" 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true; sleep 1; kill -9 "$pid" 2>/dev/null || true' EXIT
+          i=0
+          while [[ "$i" -lt 5 ]]; do
+            if ! kill -0 "$pid" 2>/dev/null; then
+              set +e
+              wait "$pid"
+              code=$?
+              set -e
+              echo "Quill exited during launch (status $code)"
+              cat "$log" || true
+              exit 1
+            fi
+            sleep 1
+            i=$((i + 1))
+          done
+          echo "Quill stayed up for 5 seconds"
