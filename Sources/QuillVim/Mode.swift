@@ -67,4 +67,9 @@ public typealias Transaction = EngineResult
 public struct TextEdit: Equatable, Sendable {
     public var range: Range<Int>
     public var replacement: String
+
+    public init(range: Range<Int>, replacement: String) {
+        self.range = range
+        self.replacement = replacement
+    }
 }
