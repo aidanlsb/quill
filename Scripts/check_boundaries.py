@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
-"""Fail when a concurrency escape has no justification.
+"""Fail when a concurrency escape has no justification, or bare NSApp returns.
 
 A line of Swift that contains nonisolated(unsafe) or @unchecked Sendable must
 have a nearby `// quill-concurrency:` comment whose reason is at least 20
 characters. The historical miss was `nonisolated(unsafe) let buffer = buffer`
 with no required marker, which is what agents copy.
+
+Bare `NSApp` traps when the singleton is nil during SwiftUI init. The
+historical line was `NSApp.effectiveAppearance` in QuillTheme.current. Use
+`NSApp?` while the application object may be nil, or `NSApplication.shared`
+after launch.
 """
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -20,6 +26,8 @@ HISTORICAL = {
     "VimTextView.swift": "        nonisolated(unsafe) let buffer = buffer\n",
     "TextKit2Layout.swift": "final class TextKit2Layout: TextLayout, @unchecked Sendable {\n",
 }
+HISTORICAL_NSAPP = "        let appearance = NSApp.effectiveAppearance\n"
+BARE_NSAPP = re.compile(r"(?<![A-Za-z0-9_])NSApp(?![A-Za-z0-9_?])")
 
 
 def code_only(line: str) -> str:
@@ -78,11 +86,28 @@ def scan_swift(text: str, path: str) -> list[str]:
     return errors
 
 
+def scan_nsapp(text: str, path: str) -> list[str]:
+    errors: list[str] = []
+    for index, line in enumerate(text.splitlines()):
+        code = code_only(line)
+        if not BARE_NSAPP.search(code):
+            continue
+        errors.append(
+            f"{path}:{index + 1}: bare NSApp traps when the application object is nil "
+            f"during SwiftUI init. Use NSApp? or NSApplication.shared. "
+            f"Offending line: {line.strip()}"
+        )
+    return errors
+
+
 def scan_tree() -> list[str]:
     errors: list[str] = []
     for folder in ("Sources", "Tests"):
         for path in sorted((ROOT / folder).rglob("*.swift")):
-            errors.extend(scan_swift(path.read_text(), str(path.relative_to(ROOT))))
+            text = path.read_text()
+            relative = str(path.relative_to(ROOT))
+            errors.extend(scan_swift(text, relative))
+            errors.extend(scan_nsapp(text, relative))
     return errors
 
 
@@ -115,6 +140,18 @@ def self_test() -> int:
     if not scan_swift(short, "short.swift"):
         print("self-test: a too-short reason was accepted", file=sys.stderr)
         failed = True
+    if not scan_nsapp(HISTORICAL_NSAPP, "Theme.swift"):
+        print("self-test: historical NSApp.effectiveAppearance was accepted", file=sys.stderr)
+        failed = True
+    else:
+        print("self-test: rejected historical Theme.swift NSApp.effectiveAppearance")
+    safe_nsapp = "let appearance = NSApp?.effectiveAppearance ?? NSAppearance.currentDrawing()\n"
+    if scan_nsapp(safe_nsapp, "safe.swift") or scan_nsapp("NSApplication.shared.keyWindow?.close()\n", "shared.swift"):
+        print("self-test: NSApp? or NSApplication.shared was rejected", file=sys.stderr)
+        failed = True
+    if scan_nsapp("/// `NSApp` is not required; the URL is queued.\n", "comment.swift"):
+        print("self-test: a comment mentioning NSApp was rejected", file=sys.stderr)
+        failed = True
     repo = scan_tree()
     workflow = workflow_passes_complete_checking()
     if repo or workflow:
@@ -124,7 +161,7 @@ def self_test() -> int:
         failed = True
     if failed:
         return 1
-    print("check_boundaries: concurrency escapes are justified and CI passes -strict-concurrency=complete")
+    print("check_boundaries: concurrency escapes are justified, bare NSApp is rejected, and CI passes -strict-concurrency=complete")
     return 0
 
 

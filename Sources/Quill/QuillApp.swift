@@ -13,9 +13,9 @@ struct QuillApp: App {
                 .frame(minWidth: 720, minHeight: 480)
                 .onAppear {
                     appDelegate.attach(model)
-                    NSApp.setActivationPolicy(.regular)
+                    NSApplication.shared.setActivationPolicy(.regular)
                     model.consumeLaunchArguments(Array(CommandLine.arguments.dropFirst()))
-                    NSApp.windows.forEach { $0.delegate = appDelegate }
+                    NSApplication.shared.windows.forEach { $0.delegate = appDelegate }
                     AppSmoke.runIfRequested(model: model)
                 }
                 .onOpenURL { url in
