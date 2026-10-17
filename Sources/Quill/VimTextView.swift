@@ -393,6 +393,7 @@ struct EditorView: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let tv = scroll.documentView as? VimTextView else { return }
         tv.engine = model.engine
+        _ = model.revision
         tv.columnWidth = model.theme.columnWidth
         tv.isDirectoryBuffer = model.isDirectory
         let diagnostics = model.nsDiagnosticRanges()
@@ -405,7 +406,8 @@ struct EditorView: NSViewRepresentable {
         } else {
             tv.updateInsets()
         }
-        if tv.string != model.engine.text {
+        let caret = min(model.engine.cursor, (tv.string as NSString).length)
+        if tv.string != model.engine.text || tv.selectedRange().location != caret {
             tv.syncFromEngine()
         } else if diagnosticsChanged {
             tv.queueRestyle()

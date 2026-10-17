@@ -45,6 +45,12 @@ public enum HostAction: Equatable, Sendable {
     case openUnderCursor
     case findFiles
     case liveGrep
+    /// `textDocument/references` for the symbol under the cursor (`gr`).
+    case findReferences
+    /// `textDocument/codeAction` for the cursor or selection (`<leader>ca`).
+    case codeAction
+    /// Run a configured shell command in the workspace root.
+    case shell(String)
     /// Extensible leader mapping that the host looks up by name.
     case command(String)
 }

@@ -290,6 +290,166 @@ final class LSPClientTests: XCTestCase {
         }
     }
 
+    func testReferencesCodeActionAndApplyEdit() async throws {
+        let transport = ScriptedTransport()
+        transport.onRequest = { method, params in
+            switch method {
+            case "initialize":
+                let textDocument = params?["capabilities"]?.object?["textDocument"]?.object
+                XCTAssertNotNil(textDocument?["references"])
+                XCTAssertNotNil(textDocument?["codeAction"])
+                XCTAssertEqual(params?["capabilities"]?.object?["workspace"]?.object?["applyEdit"]?.bool, true)
+                return .object(["capabilities": .object([:])])
+            case "textDocument/references":
+                XCTAssertEqual(params?["context"]?.object?["includeDeclaration"]?.bool, true)
+                XCTAssertEqual(params?["position"]?.object?["line"]?.int, 1)
+                XCTAssertEqual(params?["textDocument"]?.object?["uri"]?.string, "file:///tmp/note.md")
+                return .array([
+                    .object([
+                        "uri": .string("file:///tmp/note.md"),
+                        "range": .object([
+                            "start": .object(["line": .number(4), "character": .number(2)]),
+                            "end": .object(["line": .number(4), "character": .number(5)]),
+                        ]),
+                    ]),
+                ])
+            case "textDocument/codeAction":
+                XCTAssertEqual(params?["range"]?.object?["start"]?.object?["line"]?.int, 0)
+                XCTAssertEqual(params?["context"]?.object?["diagnostics"]?.array?.count, 1)
+                return .array([
+                    .object([
+                        "title": .string("Fix"),
+                        "kind": .string("quickfix"),
+                        "isPreferred": .bool(true),
+                        "edit": .object([
+                            "changes": .object([
+                                "file:///tmp/note.md": .array([
+                                    .object([
+                                        "range": .object([
+                                            "start": .object(["line": .number(0), "character": .number(0)]),
+                                            "end": .object(["line": .number(0), "character": .number(1)]),
+                                        ]),
+                                        "newText": .string("Z"),
+                                    ]),
+                                ]),
+                            ]),
+                        ]),
+                        "command": .object([
+                            "title": .string("Fix"),
+                            "command": .string("mock.fix"),
+                            "arguments": .array([.string("a")]),
+                        ]),
+                    ]),
+                    .object([
+                        "title": .string("Run"),
+                        "command": .string("mock.run"),
+                    ]),
+                ])
+            case "workspace/executeCommand":
+                XCTAssertEqual(params?["command"]?.string, "mock.fix")
+                XCTAssertEqual(params?["arguments"]?.array?.first?.string, "a")
+                return .null
+            default:
+                return .null
+            }
+        }
+
+        let session = JSONRPCSession(transport: transport)
+        let client = LSPClient(config: LSPServerConfig(name: "mock", command: "false"))
+        try client.attach(session: session, rootURI: "file:///tmp")
+
+        let refs = try await client.references(uri: "file:///tmp/note.md", position: LSPPosition(line: 1, character: 0))
+        XCTAssertEqual(refs.count, 1)
+        XCTAssertEqual(refs[0].uri, "file:///tmp/note.md")
+        XCTAssertEqual(refs[0].range.start.line, 4)
+        XCTAssertEqual(refs[0].range.start.character, 2)
+
+        let diag = Diagnostic(
+            range: LSPRange(start: LSPPosition(line: 0, character: 0), end: LSPPosition(line: 0, character: 1)),
+            severity: 1,
+            message: "tidy"
+        )
+        let actions = try await client.codeAction(
+            uri: "file:///tmp/note.md",
+            range: LSPRange(start: LSPPosition(line: 0, character: 0), end: LSPPosition(line: 0, character: 0)),
+            diagnostics: [diag]
+        )
+        XCTAssertEqual(actions.map(\.title), ["Fix", "Run"])
+        XCTAssertEqual(actions[0].command?.command, "mock.fix")
+        XCTAssertEqual(actions[1].command?.command, "mock.run")
+        XCTAssertNil(actions[1].edit)
+        let file = URL(fileURLWithPath: "/tmp/note.md")
+        let edits = actions[0].edit?.bufferEdits(in: "abc\n", file: file) ?? []
+        XCTAssertEqual(edits, [BufferEdit(range: 0..<1, replacement: "Z")])
+
+        let executed = try await client.executeCommand(command: "mock.fix", arguments: .array([.string("a")]))
+        XCTAssertEqual(executed, .null)
+
+        let applied = expectation(description: "applyEdit")
+        client.onApplyEdit = { edit in
+            let got = edit.bufferEdits(in: "abc\n", file: file)
+            XCTAssertEqual(got, [BufferEdit(range: 0..<1, replacement: "Q")])
+            XCTAssertTrue(edit.containsEdits(outside: URL(fileURLWithPath: "/tmp/other.md")))
+            applied.fulfill()
+        }
+        try transport.pushRequest(method: "workspace/applyEdit", params: .object([
+            "edit": .object([
+                "documentChanges": .array([
+                    .object([
+                        "textDocument": .object(["uri": .string("file:///tmp/note.md")]),
+                        "edits": .array([
+                            .object([
+                                "range": .object([
+                                    "start": .object(["line": .number(0), "character": .number(0)]),
+                                    "end": .object(["line": .number(0), "character": .number(1)]),
+                                ]),
+                                "newText": .string("Q"),
+                            ]),
+                        ]),
+                    ]),
+                    .object(["kind": .string("rename"), "oldUri": .string("file:///tmp/a"), "newUri": .string("file:///tmp/b")]),
+                ]),
+            ]),
+        ]))
+        await fulfillment(of: [applied], timeout: 2)
+        client.stop()
+    }
+
+    func testWorkspaceEditAppliesEndToStart() {
+        let text = "aaa\nbbb\nccc"
+        let edit = WorkspaceEdit.parse(.object([
+            "changes": .object([
+                "file:///tmp/note.md": .array([
+                    .object([
+                        "range": .object([
+                            "start": .object(["line": .number(0), "character": .number(0)]),
+                            "end": .object(["line": .number(0), "character": .number(3)]),
+                        ]),
+                        "newText": .string("AAA"),
+                    ]),
+                    .object([
+                        "range": .object([
+                            "start": .object(["line": .number(2), "character": .number(0)]),
+                            "end": .object(["line": .number(2), "character": .number(3)]),
+                        ]),
+                        "newText": .string("CCC"),
+                    ]),
+                ]),
+            ]),
+        ]))
+        let file = URL(fileURLWithPath: "/tmp/note.md")
+        XCTAssertEqual(
+            edit.bufferEdits(in: text, file: file),
+            [
+                BufferEdit(range: 8..<11, replacement: "CCC"),
+                BufferEdit(range: 0..<3, replacement: "AAA"),
+            ]
+        )
+        XCTAssertTrue(edit.bufferEdits(in: text, file: URL(fileURLWithPath: "/tmp/other.md")).isEmpty)
+        XCTAssertTrue(edit.containsEdits(outside: URL(fileURLWithPath: "/tmp/other.md")))
+        XCTAssertFalse(edit.containsEdits(outside: file))
+    }
+
     func testPositionConversion() {
         let text = "ab\ncafé"
         let pos = LSPPosition.utf16(in: text, characterOffset: 5)

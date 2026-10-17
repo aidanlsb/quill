@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Launch Quill with zero or more files/directories.
-# Usage:
-#   quill
+# Line targets match LaunchRequest.parse:
 #   quill path/to/note.md
+#   quill path/to/note.md:12
+#   quill path/to/note.md:12:4
+#   quill +12 path/to/note.md
 #   quill .
 #   quill --wait new-note.md
 set -euo pipefail
@@ -21,35 +23,113 @@ resolve_app() {
   fi
 }
 
+urlencode() {
+  local LC_ALL=C
+  local s="$1" i c hex out=""
+  local len=${#s}
+  for ((i = 0; i < len; i++)); do
+    c=${s:i:1}
+    case "$c" in
+      [a-zA-Z0-9._~/-]) out+="$c" ;;
+      *)
+        printf -v hex '%%%02X' "'$c"
+        out+="$hex"
+        ;;
+    esac
+  done
+  printf '%s' "$out"
+}
+
+# Make `path` absolute and create it when it is a missing file.
+materialize() {
+  local path="$1" dir base
+  if [[ "$path" != /* ]]; then
+    path="$PWD/$path"
+  fi
+  dir="$(dirname -- "$path")"
+  base="$(basename -- "$path")"
+  if [[ ! -e "$dir/$base" && "$base" != "." && "$base" != ".." ]]; then
+    mkdir -p -- "$dir"
+    : > "$dir/$base"
+  fi
+  if [[ -d "$dir" ]]; then
+    dir="$(cd -- "$dir" && pwd)"
+  fi
+  if [[ "$base" == "." ]]; then
+    printf '%s' "$dir"
+  else
+    printf '%s/%s' "$dir" "$base"
+  fi
+}
+
 APP="$(resolve_app)"
 wait_flag=()
 if [[ "${1:-}" == "--wait" ]]; then
   wait_flag=(-W -n)
   shift
 fi
-if [[ $# -eq 0 ]]; then
+
+open_app() {
   if [[ "$APP" == "Quill" ]]; then
-    open "${wait_flag[@]}" -a Quill
+    open "${wait_flag[@]}" -a Quill "$@"
   else
-    open "${wait_flag[@]}" -a "$APP"
+    open "${wait_flag[@]}" -a "$APP" "$@"
   fi
+}
+
+if [[ $# -eq 0 ]]; then
+  open_app
   exit 0
 fi
 
-# Expand relative paths and create files that do not exist yet.
-args=()
+urls=()
+pending_line=""
 for arg in "$@"; do
-  if [[ -e "$arg" ]]; then
-    args+=("$(cd "$(dirname "$arg")" && pwd)/$(basename "$arg")")
-  else
-    mkdir -p "$(dirname "$arg")"
-    : > "$arg"
-    args+=("$(cd "$(dirname "$arg")" && pwd)/$(basename "$arg")")
+  if [[ "$arg" =~ ^\+([0-9]+)$ ]]; then
+    n=$((10#${BASH_REMATCH[1]}))
+    if [[ "$n" -ge 1 ]]; then
+      pending_line="$n"
+      continue
+    fi
   fi
+
+  path="$arg"
+  line=""
+  col=""
+  if [[ "$arg" =~ ^(.+):([0-9]+):([0-9]+)$ ]]; then
+    parsed_line=$((10#${BASH_REMATCH[2]}))
+    parsed_col=$((10#${BASH_REMATCH[3]}))
+    if [[ "$parsed_line" -ge 1 && "$parsed_col" -ge 1 ]]; then
+      path="${BASH_REMATCH[1]}"
+      line="$parsed_line"
+      col="$parsed_col"
+    fi
+  elif [[ "$arg" =~ ^(.+):([0-9]+)$ ]]; then
+    parsed_line=$((10#${BASH_REMATCH[2]}))
+    if [[ "$parsed_line" -ge 1 ]]; then
+      path="${BASH_REMATCH[1]}"
+      line="$parsed_line"
+    fi
+  fi
+  if [[ -z "$line" && -n "$pending_line" ]]; then
+    line="$pending_line"
+  fi
+  pending_line=""
+
+  abs="$(materialize "$path")"
+  url="quill://open?path=$(urlencode "$abs")"
+  if [[ -n "$line" ]]; then
+    url+="&line=$line"
+  fi
+  if [[ -n "$col" ]]; then
+    url+="&column=$col"
+  fi
+  urls+=("$url")
 done
 
-if [[ "$APP" == "Quill" ]]; then
-  open "${wait_flag[@]}" -a Quill -- "${args[@]}"
-else
-  open "${wait_flag[@]}" -a "$APP" -- "${args[@]}"
+if [[ ${#urls[@]} -eq 0 ]]; then
+  open_app
+  exit 0
 fi
+
+open_app "${urls[@]}"

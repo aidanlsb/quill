@@ -9,6 +9,8 @@ public final class LSPClient: @unchecked Sendable {
     public private(set) var capabilities = ServerCapabilities()
     public var onDiagnostics: ((String, [Diagnostic]) -> Void)?
     public var onLog: ((String) -> Void)?
+    /// `workspace/applyEdit`. Invoked on the JSON-RPC reader thread; the host must hop off it.
+    public var onApplyEdit: ((WorkspaceEdit) -> Void)?
 
     private var session: JSONRPCSession?
     private var process: Process?
@@ -163,6 +165,35 @@ public final class LSPClient: @unchecked Sendable {
         return Hover.from(result ?? .null)
     }
 
+    public func references(uri: String, position: LSPPosition) async throws -> [Location] {
+        let params = JSONValue.object([
+            "textDocument": .object(["uri": .string(uri)]),
+            "position": position.json,
+            "context": .object(["includeDeclaration": .bool(true)]),
+        ])
+        guard let session else { throw JSONRPCError.closed }
+        let result = try await session.request(method: "textDocument/references", params: params)
+        return parseLocations(result)
+    }
+
+    public func codeAction(uri: String, range: LSPRange, diagnostics: [Diagnostic]) async throws -> [CodeAction] {
+        let params = JSONValue.object([
+            "textDocument": .object(["uri": .string(uri)]),
+            "range": range.json,
+            "context": .object(["diagnostics": .array(diagnostics.map(\.json))]),
+        ])
+        guard let session else { throw JSONRPCError.closed }
+        let result = try await session.request(method: "textDocument/codeAction", params: params)
+        return CodeAction.list(from: result)
+    }
+
+    public func executeCommand(command: String, arguments: JSONValue?) async throws -> JSONValue {
+        var fields: [String: JSONValue] = ["command": .string(command)]
+        if let arguments { fields["arguments"] = arguments }
+        guard let session else { throw JSONRPCError.closed }
+        return try await session.request(method: "workspace/executeCommand", params: .object(fields))
+    }
+
     private func initialize() throws {
         let caps = JSONValue.object([
             "textDocument": .object([
@@ -173,11 +204,26 @@ public final class LSPClient: @unchecked Sendable {
                 "completion": .object(["dynamicRegistration": .bool(false)]),
                 "hover": .object(["contentFormat": .array([.string("plaintext"), .string("markdown")])]),
                 "definition": .object(["dynamicRegistration": .bool(false)]),
+                "references": .object(["dynamicRegistration": .bool(false)]),
+                "codeAction": .object([
+                    "dynamicRegistration": .bool(false),
+                    "codeActionLiteralSupport": .object([
+                        "codeActionKind": .object([
+                            "valueSet": .array([
+                                .string("quickfix"),
+                                .string("refactor"),
+                                .string("source"),
+                            ]),
+                        ]),
+                    ]),
+                ]),
                 "publishDiagnostics": .object(["relatedInformation": .bool(false)]),
             ]),
             "workspace": .object([
                 "workspaceFolders": .bool(true),
                 "configuration": .bool(true),
+                "applyEdit": .bool(true),
+                "executeCommand": .object(["dynamicRegistration": .bool(false)]),
             ]),
         ])
         let params = JSONValue.object([
@@ -212,6 +258,12 @@ public final class LSPClient: @unchecked Sendable {
             return .array(Array(repeating: .object([:]), count: max(1, items.count)))
         case "client/registerCapability", "client/unregisterCapability", "window/workDoneProgress/create":
             return .null
+        case "workspace/applyEdit":
+            guard let raw = params?.object?["edit"], let handler = onApplyEdit else {
+                return .object(["applied": .bool(false)])
+            }
+            handler(WorkspaceEdit.parse(raw))
+            return .object(["applied": .bool(true)])
         default:
             return nil
         }
