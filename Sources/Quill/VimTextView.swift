@@ -29,6 +29,8 @@ final class TextKit2Layout: TextLayout, @unchecked Sendable {
                 in: buffer
             )
         }
+        // TextBuffer is not Sendable; the engine calls this synchronously on the main thread.
+        nonisolated(unsafe) let buffer = buffer
         return MainActor.assumeIsolated {
             positionUsingTextKit(
                 from: offset,
