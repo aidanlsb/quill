@@ -80,7 +80,15 @@ final class TextKit2Layout: TextLayout, @unchecked Sendable {
         // Laying that stale string out and treating its rows as buffer offsets
         // deletes the wrong span. Logical lines until the lengths agree.
         guard viewMatches(buffer), let tv = textView, let lm = tv.textLayoutManager else { return logical }
-        let utf16 = min(max(0, offset), (tv.string as NSString).length)
+        let viewLength = (tv.string as NSString).length
+        let base = sliceBase()
+        let utf16: Int
+        if base == 0, !sliceIsActive() {
+            utf16 = min(max(0, offset), viewLength)
+        } else {
+            utf16 = offset - base
+            guard utf16 >= 0, utf16 <= viewLength else { return logical }
+        }
         guard let origin = visualLine(at: utf16, layout: lm) else {
             stickyColumn = -1
             goalOrigin = -1
@@ -89,7 +97,7 @@ final class TextKit2Layout: TextLayout, @unchecked Sendable {
         if TextBuffer.isEndColumn(preferredColumn) {
             stickyColumn = preferredColumn
             stickyX = .greatestFiniteMagnitude
-        } else if utf16 != goalOrigin || preferredColumn != stickyColumn {
+        } else if offset != goalOrigin || preferredColumn != stickyColumn {
             stickyColumn = preferredColumn
             let local = min(max(0, utf16 - origin.start), max(0, selectableCount(origin, buffer: buffer) - 1))
             stickyX = origin.line.locationForCharacter(at: local).x
@@ -100,13 +108,18 @@ final class TextKit2Layout: TextLayout, @unchecked Sendable {
         var line = origin
         var remaining = abs(delta)
         let forward = delta > 0
+        var stepped = false
         while remaining > 0 {
-            guard let next = adjacentVisualLine(to: line, forward: forward, layout: lm) else { break }
+            guard let next = adjacentVisualLine(to: line, forward: forward, layout: lm) else {
+                if !stepped { return logical }
+                break
+            }
             line = next
             remaining -= 1
+            stepped = true
         }
         let hit = characterOffset(on: line, atX: stickyX, buffer: buffer)
-        let dest = buffer.clampedCursor(line.start + hit, normalMode: true)
+        let dest = buffer.clampedCursor(sliceBase() + line.start + hit, normalMode: true)
         goalOrigin = dest
         return dest
     }
@@ -115,12 +128,34 @@ final class TextKit2Layout: TextLayout, @unchecked Sendable {
         guard viewMatches(buffer), let tv = textView, let lm = tv.textLayoutManager else {
             return logicalRange(at: offset, in: buffer)
         }
-        let utf16 = min(max(0, offset), (tv.string as NSString).length)
+        let viewLength = (tv.string as NSString).length
+        let base = sliceBase()
+        let utf16: Int
+        if base == 0, !sliceIsActive() {
+            utf16 = min(max(0, offset), viewLength)
+        } else {
+            utf16 = offset - base
+            guard utf16 >= 0, utf16 <= viewLength else {
+                return logicalRange(at: offset, in: buffer)
+            }
+        }
         guard let line = visualLine(at: utf16, layout: lm) else {
             return logicalRange(at: offset, in: buffer)
         }
-        let end = min(buffer.count, line.start + line.length)
-        return min(line.start, end)..<end
+        let start = base + line.start
+        let end = min(buffer.count, start + line.length)
+        return min(start, end)..<end
+    }
+
+    /// A long note shows a window of lines. Visual rows are offsets into that
+    /// window; adding this base turns them back into buffer offsets.
+    private func sliceBase() -> Int {
+        guard let vim = textView as? VimTextView, vim.sliceActive else { return 0 }
+        return vim.sliceOrigin
+    }
+
+    private func sliceIsActive() -> Bool {
+        (textView as? VimTextView)?.sliceActive == true
     }
 
     /// The visual row containing `utf16`. Layout is ensured only through this
@@ -171,7 +206,16 @@ final class TextKit2Layout: TextLayout, @unchecked Sendable {
     /// breaks must not be applied to the listing.
     private func viewMatches(_ buffer: TextBuffer) -> Bool {
         guard let tv = textView else { return false }
-        return (tv.string as NSString).length == buffer.count
+        let viewLength = (tv.string as NSString).length
+        guard let vim = tv as? VimTextView, vim.sliceActive else {
+            return viewLength == buffer.count
+        }
+        let origin = vim.sliceOrigin
+        guard origin >= 0, viewLength > 0, origin + viewLength <= buffer.count else { return false }
+        let probe = min(viewLength, 80)
+        let head = buffer.substring(origin..<(origin + probe))
+        let shown = (tv.string as NSString).substring(with: NSRange(location: 0, length: probe))
+        return head == shown
     }
 
     /// Lays out only the fragment that contains `utf16`. `textLayoutFragment(for:)`
@@ -209,7 +253,7 @@ final class TextKit2Layout: TextLayout, @unchecked Sendable {
     private func selectableCount(_ line: VisualLine, buffer: TextBuffer) -> Int {
         var length = line.length
         guard length > 1 else { return max(length, 1) }
-        let last = line.start + length - 1
+        let last = sliceBase() + line.start + length - 1
         guard last < buffer.count else { return length }
         let ch = buffer.character(at: last)
         if ch == "\n" || ch == "\r" {
@@ -328,10 +372,14 @@ final class VimTextView: NSTextView {
     fileprivate var appliedFocus = false
     private var mouseAnchor: Int?
     private let caretChrome = CaretChrome(frame: .zero)
-    /// TextKit's link back to the content manager is weak. Without this the
-    /// viewport storage is released at the end of `make()` and the view falls
-    /// back to a stock content storage, or crashes on the dangling edit.
-    private var ownsViewportContent: ViewportContentStorage?
+    /// Long notes display a window of lines in the stock text view. The engine
+    /// still holds the whole buffer. A custom text-location on the content
+    /// storage traps as soon as TextKit lays the document out.
+    fileprivate var sliceActive = false
+    fileprivate var sliceOrigin = 0
+    private var sliceLine = 0
+    private let sliceLineCount = 160
+    private let sliceMargin = 48
     private var placingCaret = false
     private var orderingCaret = false
 
@@ -362,60 +410,14 @@ final class VimTextView: NSTextView {
         autoresizingMask = [.width]
     }
 
-    /// TextKit 2 view. A long note swaps in viewport storage later; doing that
-    /// for every view threw the caret off when the writing column resized.
+    /// TextKit 2 view. Long notes pass a window of lines in later; swapping the
+    /// content storage threw the caret off when the writing column resized.
     static func make(frame: NSRect = .zero) -> VimTextView {
         let view = VimTextView(usingTextLayoutManager: true)
         if frame != .zero {
             view.frame = frame
         }
         return view
-    }
-
-    /// Long notes skip the per-line paragraph shift. Short notes, including the
-    /// resize check, keep the text view's original content storage so caret
-    /// geometry stays on TextKit's own elements.
-    private func adoptViewportStorageIfNeeded() {
-        guard (engine.text as NSString).length >= ViewportContentStorage.adoptionThreshold else { return }
-        installViewportContent()
-    }
-
-    /// Move the layout manager onto storage that does not build a paragraph per line.
-    private func installViewportContent() {
-        guard let layout = textLayoutManager else {
-            boot("install-no-layout")
-            return
-        }
-        if layout.textContentManager is ViewportContentStorage { return }
-        boot("install-begin")
-        let content = ViewportContentStorage()
-        let existing = (layout.textContentManager as? NSTextContentStorage)?.textStorage?.string ?? ""
-        content.prime(NSTextStorage(string: existing))
-        boot("install-primed")
-        layout.replace(content)
-        boot("install-replaced")
-        if !content.textLayoutManagers.contains(where: { $0 === layout }) {
-            boot("install-relink")
-            content.addTextLayoutManager(layout)
-        }
-        content.useLineIndex()
-        ownsViewportContent = content
-        boot("install-done")
-    }
-
-    private func boot(_ step: String) {
-        QuillTrace.write("quill boot \(step)\n")
-    }
-
-    private func bootViewport(_ step: String) {
-        guard textLayoutManager?.textContentManager is ViewportContentStorage else { return }
-        boot(step)
-    }
-
-    /// Reveal the real document length once this edit's storage mutations,
-    /// including restyle, have finished.
-    private func finishViewportEdit() {
-        (textLayoutManager?.textContentManager as? ViewportContentStorage)?.finishFastEdit()
     }
 
     func applyTheme(_ theme: QuillTheme, focus: Bool) {
@@ -505,57 +507,151 @@ final class VimTextView: NSTextView {
         return (span.inset, vertical, span.column)
     }
 
+    /// Window of lines placed over `cursor`. Short notes and directory listings
+    /// keep the whole buffer in the text view.
+    private func placeSlice(cursor: Int) {
+        let buffer = engine.buffer
+        if isDirectoryBuffer || buffer.count < ViewportContentStorage.adoptionThreshold {
+            sliceActive = false
+            sliceOrigin = 0
+            sliceLine = 0
+            return
+        }
+        sliceActive = true
+        let limit = buffer.lineCount
+        let clamped = min(max(0, cursor), buffer.count)
+        let line = limit == 0 ? 0 : buffer.lineIndex(containing: clamped)
+        var first = max(0, line - sliceLineCount / 2)
+        var last = min(limit, first + sliceLineCount)
+        if last - first < sliceLineCount {
+            first = max(0, last - sliceLineCount)
+        }
+        if limit == 0 {
+            sliceLine = 0
+            sliceOrigin = 0
+            return
+        }
+        sliceLine = first
+        sliceOrigin = buffer.lineStarts[first]
+    }
+
+    private func displayedText() -> String {
+        if !sliceActive { return engine.text }
+        let buffer = engine.buffer
+        let last = min(buffer.lineCount, sliceLine + sliceLineCount)
+        let end = last < buffer.lineCount ? buffer.lineStarts[last] : buffer.count
+        if sliceOrigin >= end { return "" }
+        return buffer.substring(sliceOrigin..<end)
+    }
+
+    private func cursorInSliceBand() -> Bool {
+        if !sliceActive { return true }
+        let buffer = engine.buffer
+        if buffer.lineCount == 0 { return true }
+        let line = buffer.lineIndex(containing: min(max(0, engine.cursor), buffer.count))
+        let last = min(buffer.lineCount, sliceLine + sliceLineCount)
+        if line < sliceLine || line >= last { return false }
+        let lower = sliceLine == 0 ? sliceLine : sliceLine + sliceMargin
+        let upper = last == buffer.lineCount ? last : max(lower + 1, last - sliceMargin)
+        return line >= lower && line < upper
+    }
+
+    private func editsStayInSlice(_ edits: [TextEdit]) -> Bool {
+        if !sliceActive { return true }
+        if edits.isEmpty { return false }
+        let end = sliceOrigin + (string as NSString).length
+        for edit in edits where edit.range.lowerBound < sliceOrigin || edit.range.lowerBound > end {
+            return false
+        }
+        return cursorInSliceBand()
+    }
+
+    func localOffset(_ offset: Int) -> Int {
+        min(max(0, offset - sliceOrigin), (string as NSString).length)
+    }
+
+    private func localRange(_ range: Range<Int>) -> Range<Int> {
+        (range.lowerBound - sliceOrigin)..<(range.upperBound - sliceOrigin)
+    }
+
+    private func selectEngineCursor() {
+        if let sel = engine.visualSelection, engine.mode.isVisual {
+            let loc = localOffset(sel.lowerBound)
+            let end = localOffset(sel.upperBound)
+            setSelectedRange(NSRange(location: loc, length: max(0, end - loc)))
+        } else {
+            setSelectedRange(NSRange(location: localOffset(engine.cursor), length: 0))
+        }
+    }
+
+    func selectionMatchesEngine() -> Bool {
+        selectedRange().location == localOffset(engine.cursor)
+    }
+
+    func displayedTextMatchesEngine() -> Bool {
+        if sliceActive { return cursorInSliceBand() }
+        return string == engine.text
+    }
+
+    override var textContainerOrigin: NSPoint {
+        let base = super.textContainerOrigin
+        guard sliceActive, sliceLine > 0 else { return base }
+        return NSPoint(x: base.x, y: base.y + CGFloat(sliceLine) * rowHeight())
+    }
+
     func syncFromEngine() {
-        let text = engine.text
+        placeSlice(cursor: engine.cursor)
+        let text = displayedText()
         let replaced = string != text
         if replaced {
-            adoptViewportStorageIfNeeded()
             let began = DispatchTime.now().uptimeNanoseconds
             string = text
             QuillPerfSplit.add("syncStringMs", since: began)
-            bootViewport("sync-assigned")
             let tokenBegan = DispatchTime.now().uptimeNanoseconds
             let through = viewportLastLine()
             tokenizer = MarkdownTokenizer(text: text, scanThroughLine: through)
             styledCoverage = 0..<0
             QuillPerfSplit.add("syncTokenMs", since: tokenBegan)
         }
-        setSelectedRange(NSRange(location: clampUTF16(engine.cursor), length: 0))
-        if let sel = engine.visualSelection, engine.mode.isVisual {
-            let loc = clampUTF16(sel.lowerBound)
-            let end = clampUTF16(sel.upperBound)
-            setSelectedRange(NSRange(location: loc, length: max(0, end - loc)))
-        }
-        bootViewport("sync-selected")
+        selectEngineCursor()
         if replaced {
             let began = DispatchTime.now().uptimeNanoseconds
             queueRestyle(dirty: nil)
             QuillPerfSplit.add("syncStyleMs", since: began)
-            bootViewport("sync-styled")
         } else if focusMode {
-            queueRestyle(dirty: engine.cursor)
+            queueRestyle(dirty: localOffset(engine.cursor))
         }
-        finishViewportEdit()
         let frameBegan = DispatchTime.now().uptimeNanoseconds
         noteContentSizeChanged()
         QuillPerfSplit.add("syncFrameMs", since: frameBegan)
         let revealBegan = DispatchTime.now().uptimeNanoseconds
         revealCaret()
         QuillPerfSplit.add("syncRevealMs", since: revealBegan)
-        bootViewport("sync-revealed")
     }
 
     func applyResult(_ result: EngineResult) {
+        if sliceActive, !cursorInSliceBand() {
+            syncFromEngine()
+            if isDirectoryBuffer { needsDisplay = true }
+            vimDelegate?.vimTextView(self, didHandle: result)
+            return
+        }
+        if result.didChangeText, sliceActive, !editsStayInSlice(result.edits) {
+            syncFromEngine()
+            if isDirectoryBuffer { needsDisplay = true }
+            vimDelegate?.vimTextView(self, didHandle: result)
+            return
+        }
         var applied: [TextEdit] = []
         if result.didChangeText {
-            adoptViewportStorageIfNeeded()
-            if result.edits.isEmpty {
-                string = engine.text
+            let edits = result.edits.map { TextEdit(range: localRange($0.range), replacement: $0.replacement) }
+            if edits.isEmpty {
+                string = displayedText()
                 tokenizer = MarkdownTokenizer(text: string)
             } else if let storage = textStorage {
                 var ok = true
                 let replaceBegan = DispatchTime.now().uptimeNanoseconds
-                for edit in result.edits {
+                for edit in edits {
                     let nsRange = nsRange(edit.range)
                     if nsRange.location != NSNotFound, NSMaxRange(nsRange) <= storage.length {
                         storage.replaceCharacters(in: nsRange, with: edit.replacement)
@@ -566,28 +662,22 @@ final class VimTextView: NSTextView {
                 }
                 QuillPerfSplit.add("keyReplaceMs", since: replaceBegan)
                 if ok {
-                    applied = result.edits
+                    applied = edits
                 } else {
-                    string = engine.text
+                    string = displayedText()
                     tokenizer = MarkdownTokenizer(text: string)
                 }
             }
         }
-        let dirty = result.edits.first?.range.lowerBound
-        setSelectedRange(NSRange(location: clampUTF16(engine.cursor), length: 0))
-        if let sel = engine.visualSelection, engine.mode.isVisual {
-            let loc = clampUTF16(sel.lowerBound)
-            let end = clampUTF16(sel.upperBound)
-            setSelectedRange(NSRange(location: loc, length: max(0, end - loc)))
-        }
+        let dirty = applied.first?.range.lowerBound
+        selectEngineCursor()
         if result.didChangeText {
             let began = DispatchTime.now().uptimeNanoseconds
             queueRestyle(dirty: dirty, edits: applied)
             QuillPerfSplit.add("keyRestyleMs", since: began)
         } else if focusMode {
-            queueRestyle(dirty: engine.cursor)
+            queueRestyle(dirty: localOffset(engine.cursor))
         }
-        finishViewportEdit()
         let caretBegan = DispatchTime.now().uptimeNanoseconds
         noteContentSizeChanged()
         revealCaret()
@@ -619,7 +709,7 @@ final class VimTextView: NSTextView {
 
     override func mouseDown(with event: NSEvent) {
         super.mouseDown(with: event)
-        let offset = clampUTF16(selectedRange().location)
+        let offset = sliceOrigin + clampUTF16(selectedRange().location)
         mouseAnchor = offset
         engine.moveCursor(to: offset)
         vimDelegate?.vimTextViewDidClick(self, characterOffset: offset, commandClick: event.modifierFlags.contains(.command))
@@ -627,7 +717,7 @@ final class VimTextView: NSTextView {
 
     override func mouseDragged(with event: NSEvent) {
         super.mouseDragged(with: event)
-        let offset = clampUTF16(selectedRange().location)
+        let offset = sliceOrigin + clampUTF16(selectedRange().location)
         if let anchor = mouseAnchor, selectedRange().length > 0 {
             engine.beginMouseSelection(anchor: anchor, caret: offset + selectedRange().length)
         }
@@ -882,7 +972,7 @@ final class VimTextView: NSTextView {
             if !plainShift {
                 let span = tokenizer.lineSpan(covered)
                 if focusMode {
-                    let focus = tokenizer.paragraphRange(containing: engine.cursor)
+                    let focus = tokenizer.paragraphRange(containing: localOffset(engine.cursor))
                     styleLimit = min(span.lowerBound, focus.lowerBound)..<max(span.upperBound, focus.upperBound)
                 } else {
                     styleLimit = span
@@ -913,7 +1003,8 @@ final class VimTextView: NSTextView {
         shiftCoverage(for: edits)
         let limit = styleLimit ?? 0..<0
         let visibleSpans = limit.isEmpty ? [] : tokenizer.spans(overlapping: limit)
-        let focusParagraph = focusMode ? tokenizer.paragraphRange(containing: engine.cursor) : nil
+        let caret = localOffset(engine.cursor)
+        let focusParagraph = focusMode ? tokenizer.paragraphRange(containing: caret) : nil
         MarkdownStyler.restyle(
             storage,
             theme: theme,
@@ -921,7 +1012,7 @@ final class VimTextView: NSTextView {
             dirtyUTF16: dirty,
             paragraphUTF16: styleLimit,
             focus: focusMode,
-            caret: engine.cursor,
+            caret: caret,
             focusParagraph: focusParagraph,
             diagnostics: diagnosticRanges
         )
@@ -934,6 +1025,10 @@ final class VimTextView: NSTextView {
     /// Lines that fit in the clip, plus a short margin, so a keystroke does not
     /// style the whole note and a scroll has the next screen ready.
     private func viewportLineBounds() -> Range<Int> {
+        if sliceActive {
+            let count = max(0, min(sliceLineCount, engine.buffer.lineCount - sliceLine))
+            return 0..<count
+        }
         let count = engine.buffer.lineCount
         guard count > 0 else { return 0..<0 }
         let row = max(rowHeight(), 1)
@@ -1162,7 +1257,7 @@ final class VimTextView: NSTextView {
 
     private func caretUTF16() -> Int {
         if engine.mode.isVisual {
-            return clampUTF16(engine.cursor)
+            return localOffset(engine.cursor)
         }
         return clampUTF16(selectedRange().location)
     }
@@ -1192,8 +1287,16 @@ final class VimTextView: NSTextView {
         guard let scroll = enclosingScrollView else { return }
         let clip = scroll.contentView
         var rect = caretLineRect() ?? caretCell(suggested: NSRect(x: 0, y: 0, width: 1, height: rowHeight()))
-        let line = engine.buffer.lineIndex(containing: clampUTF16(engine.cursor))
-        let estimatedMinY = textContainerOrigin.y + CGFloat(line) * rowHeight()
+        let line: Int
+        let estimatedMinY: CGFloat
+        if sliceActive {
+            let cursor = min(max(0, engine.cursor), engine.buffer.count)
+            line = engine.buffer.lineIndex(containing: cursor)
+            estimatedMinY = textContainerInset.height + CGFloat(line) * rowHeight()
+        } else {
+            line = engine.buffer.lineIndex(containing: clampUTF16(engine.cursor))
+            estimatedMinY = textContainerOrigin.y + CGFloat(line) * rowHeight()
+        }
         // A fragment TextKit has not laid out comes back inside the viewport,
         // so the clip never follows the cursor. Use the logical row instead.
         if line > 1, rect.maxY < rowHeight() * 2, estimatedMinY > clip.bounds.height {
@@ -1542,18 +1645,16 @@ struct EditorView: NSViewRepresentable {
         } else {
             tv.updateInsets()
         }
-        let caret = min(model.engine.cursor, (tv.string as NSString).length)
         let bufferReplaced = context.coordinator.syncedRevision != revision
         // A keystroke already updated this view. Comparing the whole string
         // here, or treating that keystroke's revision bump as a buffer swap,
-        // restyled the document again on every character.
-        if bufferReplaced || tv.selectedRange().location != caret {
-            if bufferReplaced {
-                tv.syncFromEngine()
-            } else if tv.string != model.engine.text {
+        // restyled the document again on every character. A long note's view
+        // holds a window, so it never equals the engine text.
+        if bufferReplaced || !tv.selectionMatchesEngine() {
+            if bufferReplaced || !tv.displayedTextMatchesEngine() {
                 tv.syncFromEngine()
             } else if model.focusMode {
-                tv.queueRestyle(dirty: caret)
+                tv.queueRestyle(dirty: tv.localOffset(model.engine.cursor))
             }
             context.coordinator.syncedRevision = revision
         } else if diagnosticsChanged {
