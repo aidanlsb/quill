@@ -25,8 +25,8 @@ struct ContentView: View {
                         ) { model.applyCompletion($0) }
                         Spacer()
                     }
-                    .padding(.leading, 72)
-                    .padding(.bottom, 72)
+                    .padding(.leading, QuillMetrics.sideGutter)
+                    .padding(.bottom, QuillMetrics.verticalInset)
                 }
             }
         }
@@ -72,8 +72,8 @@ struct StatusBar: View {
         }
         .font(.system(size: 11, design: .monospaced))
         .foregroundStyle(Color(model.theme.dimColor))
-        .padding(.horizontal, 28)
-        .padding(.vertical, 8)
+        .padding(.horizontal, QuillMetrics.sideGutter)
+        .padding(.vertical, 10)
         .background(Color(model.theme.backgroundColor))
     }
 }
@@ -170,8 +170,8 @@ struct PickerPanel: View {
                 }
                 .font(.system(size: 13, design: .monospaced))
                 .foregroundStyle(Color(model.theme.dimColor))
-                .padding(.horizontal, 72)
-                .padding(.top, 64)
+                .padding(.horizontal, QuillMetrics.sideGutter)
+                .padding(.top, QuillMetrics.verticalInset)
 
                 ScrollViewReader { proxy in
                     ScrollView {
@@ -189,7 +189,6 @@ struct PickerPanel: View {
                                     }
                                     Spacer(minLength: 0)
                                 }
-                                .padding(.horizontal, 16)
                                 .padding(.vertical, 4)
                                 .background(
                                     index == picker.selectedIndex
@@ -199,7 +198,7 @@ struct PickerPanel: View {
                                 .id(index)
                             }
                         }
-                        .padding(.horizontal, 56)
+                        .padding(.horizontal, QuillMetrics.sideGutter)
                     }
                     .onChange(of: picker.selectedIndex) { _, idx in
                         proxy.scrollTo(idx, anchor: .center)
@@ -212,12 +211,12 @@ struct PickerPanel: View {
                         .font(.system(size: 13, design: .monospaced))
                         .foregroundStyle(Color(model.theme.dimColor))
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 72)
+                        .padding(.horizontal, QuillMetrics.sideGutter)
                         .textSelection(.enabled)
                 }
             }
         }
-        .padding(.bottom, 48)
+        .padding(.bottom, QuillMetrics.verticalInset)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color(model.theme.backgroundColor).ignoresSafeArea())
         .background(PickerKeyCatcher(model: model))

@@ -195,7 +195,7 @@ final class VimTextView: NSTextView {
         isRichText = false
         allowsUndo = false
         isIncrementalSearchingEnabled = false
-        textContainer?.widthTracksTextView = true
+        textContainer?.widthTracksTextView = false
         textContainer?.heightTracksTextView = false
         textContainer?.lineFragmentPadding = 0
         minSize = NSSize(width: 0, height: 0)
@@ -228,10 +228,10 @@ final class VimTextView: NSTextView {
     func updateInsets() {
         guard let clip = enclosingScrollView?.contentView else { return }
         let width = clip.bounds.width
-        let extra = focusMode ? 96 : 64
-        let inset = max(72, (width - columnWidth) / 2)
-        textContainerInset = NSSize(width: inset, height: CGFloat(extra))
-        textContainer?.size = NSSize(width: columnWidth, height: CGFloat.greatestFiniteMagnitude)
+        let vertical = focusMode ? QuillMetrics.focusVerticalInset : QuillMetrics.verticalInset
+        let span = QuillMetrics.columnSpan(width: width, column: columnWidth)
+        textContainerInset = NSSize(width: span.inset, height: vertical)
+        textContainer?.size = NSSize(width: span.column, height: CGFloat.greatestFiniteMagnitude)
     }
 
     func syncFromEngine() {

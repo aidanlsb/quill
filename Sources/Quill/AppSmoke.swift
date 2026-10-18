@@ -58,6 +58,15 @@ enum AppSmoke {
         check(QuillMetrics.fontSize(9) == 16, "default body font low", failures: &failures)
         check(QuillMetrics.fontSize(33) == 16, "default body font high", failures: &failures)
         check(QuillMetrics.fontSize(18) == 18, "font size 18", failures: &failures)
+        check(QuillMetrics.sideGutter >= 120, "side gutter \(QuillMetrics.sideGutter)", failures: &failures)
+        check(QuillMetrics.verticalInset >= 120, "vertical inset \(QuillMetrics.verticalInset)", failures: &failures)
+        let tight = QuillMetrics.columnSpan(width: 700, column: 560)
+        check(tight.inset >= QuillMetrics.sideGutter, "side gutter \(tight.inset)", failures: &failures)
+        check(
+            tight.inset * 2 + tight.column <= 700.5,
+            "side gutter overflow \(tight.inset) \(tight.column)",
+            failures: &failures
+        )
     }
 
     @MainActor

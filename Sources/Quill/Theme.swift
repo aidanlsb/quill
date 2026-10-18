@@ -8,6 +8,18 @@ enum QuillMetrics {
     static let lineHeight: CGFloat = 1.5
     static let headingScale: [CGFloat] = [1.5, 1.3, 1.15, 1.05, 1.0, 1.0]
     static let monoScale: CGFloat = 0.85
+    /// Minimum space between the text and the window edge. The column stays centered inside it.
+    static let sideGutter: CGFloat = 128
+    static let verticalInset: CGFloat = 128
+    static let focusVerticalInset: CGFloat = 192
+
+    /// Width of the text column and the inset that keeps it off both edges.
+    static func columnSpan(width: CGFloat, column: CGFloat) -> (inset: CGFloat, column: CGFloat) {
+        let available = max(160, width - sideGutter * 2)
+        let span = min(max(column, 1), available)
+        let inset = max(sideGutter, (width - span) / 2)
+        return (inset, span)
+    }
 
     /// Missing or out-of-range sizes fall back to the default. Accepted range is 10...32.
     static func fontSize(_ raw: Double?) -> Double {

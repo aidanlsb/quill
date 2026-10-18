@@ -56,7 +56,7 @@ The `quill` script resolves `/Applications/Quill.app` (or a local `dist/Quill.ap
 ## Writing feel
 
 - System body at 16pt (config `fontSize`, 10–32) with 1.5 line height
-- Centered ~70-character column (`columnWidth`)
+- Centered ~70-character column (`columnWidth`), with at least 128pt between the text and the window edge
 - Live markdown styling in the buffer (headings, emphasis, code, lists, checkboxes, `[[wikilinks]]`, dimmed syntax) without rewriting the file
 - Light and dark follow the system
 - Focus mode: **⌃⌘F** (hides the status bar, larger margins)
