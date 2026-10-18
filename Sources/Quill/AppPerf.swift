@@ -112,12 +112,12 @@ enum AppPerf {
 
         let session = host(edited)
         let view = session.view
-        let usesViewport = view.textLayoutManager?.textContentManager is ViewportContentStorage
-        emit("viewportStorage", usesViewport ? 1 : 0)
         let sync = millis {
             view.syncFromEngine()
         }
         emit("textSyncMs", sync)
+        let usesViewport = view.textLayoutManager?.textContentManager is ViewportContentStorage
+        emit("viewportStorage", usesViewport ? 1 : 0)
         view.engine.mode = .insert
         let typing = millis {
             for _ in 0..<20 {
@@ -135,6 +135,7 @@ enum AppPerf {
             }
         }
         emit("scrollMs", motion / 40.0)
+        QuillTrace.write("quill boot layout-full-begin\n")
         let layout = millis {
             view.layoutAdapter.ensureFullLayout()
         }

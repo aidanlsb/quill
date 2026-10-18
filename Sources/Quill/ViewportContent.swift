@@ -15,7 +15,6 @@ final class ViewportContentStorage: NSTextContentStorage {
     /// super later would walk that stale array and trap.
     private var lineIndexOnly = false
     private var loggedFastEdit = false
-    private var loggedDocLen = false
     /// Below this, smoke and normal notes keep TextKit's own content storage.
     /// The 10k-line perf note is far above it.
     static let adoptionThreshold = 20_000
@@ -118,9 +117,9 @@ final class ViewportContentStorage: NSTextContentStorage {
         }
         lineIndexOnly = true
         // The superclass shifts every paragraph object past the edit. Record
-        // the line-start delta. Invalidating a range the stock element array
-        // does not cover traps (status 133), so only invalidate when
-        // `documentRange` already matches the string.
+        // the line-start delta and return. `invalidateLayout` from inside
+        // `processEditing` traps (status 133) once the document range matches
+        // the string; viewport layout is requested later, outside this call.
         let length = textStorage.length
         let previous = length - delta
         if indexedLength != previous || delta < 0 || rangeContainsNewline(newCharRange, storage: textStorage) {
@@ -134,44 +133,11 @@ final class ViewportContentStorage: NSTextContentStorage {
         }
         if !loggedFastEdit {
             loggedFastEdit = true
+            let docLen = offset(from: documentRange.location, to: documentRange.endLocation)
             QuillTrace.write("quill boot fast-enter lines=\(lineStarts.count) len=\(length)\n")
-        }
-        let doc = documentRange
-        let docLen = offset(from: doc.location, to: doc.endLocation)
-        if loggedFastEdit, !loggedDocLen {
-            loggedDocLen = true
             QuillTrace.write("quill boot fast-doc \(docLen)\n")
+            QuillTrace.write("quill boot fast-return\n")
         }
-        guard docLen == length, !invalidating else {
-            _ = editMask
-            _ = invalidatedCharRange
-            return
-        }
-        guard let layout = textLayoutManagers.first ?? primaryTextLayoutManager else { return }
-        let startOffset: Int
-        if length == 0 || lineStarts.isEmpty {
-            startOffset = 0
-        } else {
-            let probe = min(max(0, newCharRange.location), length - 1)
-            startOffset = lineStarts[lineIndex(containing: probe)]
-        }
-        let endOffset: Int
-        if delta == 0 {
-            endOffset = min(length, max(startOffset, NSMaxRange(newCharRange)))
-        } else {
-            let probe = min(max(0, startOffset), max(0, length - 1))
-            let line = lineStarts.isEmpty ? 0 : lineIndex(containing: probe)
-            if line + 1 < lineStarts.count {
-                endOffset = lineStarts[line + 1]
-            } else {
-                endOffset = length
-            }
-        }
-        guard let start = self.location(doc.location, offsetBy: startOffset),
-              let textRange = NSTextRange(location: start, end: location(at: endOffset)) else { return }
-        invalidating = true
-        layout.invalidateLayout(for: textRange)
-        invalidating = false
         _ = editMask
         _ = invalidatedCharRange
     }
@@ -181,8 +147,6 @@ final class ViewportContentStorage: NSTextContentStorage {
         if lineIndexOnly { return true }
         return length >= Self.adoptionThreshold
     }
-
-    private var invalidating = false
 
     private func ensureIndex() {
         let length = textStorage?.length ?? 0
