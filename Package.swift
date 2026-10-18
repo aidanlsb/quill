@@ -14,6 +14,7 @@ let package = Package(
         .library(name: "QuillSearch", targets: ["QuillSearch"]),
         .library(name: "QuillMarkdown", targets: ["QuillMarkdown"]),
         .library(name: "QuillWorkspace", targets: ["QuillWorkspace"]),
+        .library(name: "QuillTOML", targets: ["QuillTOML"]),
     ],
     targets: [
         .target(
@@ -38,6 +39,10 @@ let package = Package(
         ),
         .target(
             name: "QuillWorkspace",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .target(
+            name: "QuillTOML",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(
@@ -70,6 +75,11 @@ let package = Package(
             dependencies: ["QuillWorkspace"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
+        .testTarget(
+            name: "QuillTOMLTests",
+            dependencies: ["QuillTOML"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
     ]
 )
 
@@ -80,7 +90,7 @@ package.products.append(
 package.targets.append(
     .executableTarget(
         name: "Quill",
-        dependencies: ["QuillVim", "QuillLSP", "QuillFS", "QuillSearch", "QuillMarkdown", "QuillWorkspace"],
+        dependencies: ["QuillVim", "QuillLSP", "QuillFS", "QuillSearch", "QuillMarkdown", "QuillWorkspace", "QuillTOML"],
         path: "Sources/Quill",
         exclude: ["Info.plist"],
         swiftSettings: [.swiftLanguageMode(.v6)]

@@ -80,7 +80,7 @@ Own engine: parse **count → operator → motion or text object**. Motions retu
 
 **Registers:** unnamed, plus `"+` / `"*` for the system clipboard.
 
-**Ex:** `:w` `:q` `:wq` only. `:q` refuses a dirty buffer.
+**Ex:** `:w` `:q` `:wq`. `:q` refuses a dirty buffer. `:theme` toggles light and dark; `:theme light`, `:theme dark`, and `:theme system` set it. The last runtime choice is remembered in `~/.config/quill/state.toml` and overrides `theme` in `config.toml` on the next launch.
 
 **Other:** `gd` (definition / wikilink), `gr` (references), `-` (parent directory), **leader** (Space by default).
 
@@ -105,13 +105,16 @@ The planner lives in **QuillFS**: a buffer diff becomes `create` / `rename` / `d
 
 ## Leader and pickers (Telescope-style)
 
-Default leader is **Space**. Configurable in `~/.config/quill/config.json`.
+Default leader is **Space**. Configurable in `~/.config/quill/config.toml`.
 
 | Map | Action |
 |---|---|
 | `<leader>sf` | fuzzy files in the opened root (gitignore + hidden/VCS skipped) |
 | `<leader>sg` | live grep; results are `file:line` plus snippet |
 | `<leader>ca` | code actions for the cursor or selection |
+| `<leader>tt` | toggle light and dark |
+
+`<leader>t*` is reserved for toggles. `tt` is the appearance toggle; other `t` sequences are left open. **⇧⌘L** is the same toggle, under View → Toggle Light/Dark.
 | ⌘P | alias for find files |
 
 The picker is a native floating panel with a preview.
@@ -128,9 +131,12 @@ Search is native (fuzzy subsequence matcher + line scan). If `rg` is on `PATH`, 
 
 `shellCommands` binds a leader sequence to a shell command. Quill runs it in the workspace root, off the main thread. The last non-empty stdout line is a file path, optionally `path:line` or `path:line:col`, and Quill opens it. A non-zero exit prints the error on the status line. The command string is config; Quill has no built-in knowledge of it.
 
-```json
-"shellCommands": { "d": "rvn daily" }
+```toml
+[shellCommands]
+d = "rvn daily"
 ```
+
+An inline table works too: `shellCommands = { d = "rvn daily" }`.
 
 `<leader>d` runs `rvn daily`.
 
@@ -138,40 +144,43 @@ Search is native (fuzzy subsequence matcher + line scan). If `rg` is on `PATH`, 
 
 Generic LSP 3.17 over stdio. **No default server** and nothing vault-specific. If the command is missing, editing still works.
 
-Example `~/.config/quill/config.json` (also under `examples/config.json`):
+Example `~/.config/quill/config.toml` (also under `examples/config.toml`). If `config.toml` is missing and `config.json` is still there, Quill reads the JSON once, writes an equivalent `config.toml`, and says so on the status line. The JSON file is left in place.
 
-```json
-{
-  "leader": " ",
-  "leaderMaps": { "sf": "findFiles", "sg": "liveGrep" },
-  "shellCommands": { "d": "rvn daily" },
-  "columnWidth": 70,
-  "fontSize": 16,
-  "font": "",
-  "shiftWidth": 2,
-  "lsp": {
-    "servers": [
-      {
-        "name": "marksman",
-        "command": "marksman",
-        "arguments": ["server"],
-        "extensions": [".md", ".markdown"],
-        "languages": ["markdown"],
-        "rootMarkers": [".git", ".marksman.toml"],
-        "env": {}
-      },
-      {
-        "name": "rvn",
-        "command": "rvn",
-        "arguments": ["lsp"],
-        "extensions": [".md", ".markdown"],
-        "languages": ["markdown"],
-        "rootMarkers": [".git"],
-        "env": {}
-      }
-    ]
-  }
-}
+```toml
+# `font` empty, or a family that is not installed, uses the system font.
+
+leader = " "
+# system follows macOS. light and dark stay put. A later :theme or <leader>tt is remembered.
+theme = "system"
+columnWidth = 70
+fontSize = 16
+font = ""
+shiftWidth = 2
+
+[leaderMaps]
+sf = "findFiles"
+sg = "liveGrep"
+
+[shellCommands]
+d = "rvn daily"
+
+[[lsp.servers]]
+name = "marksman"
+command = "marksman"
+arguments = ["server"]
+extensions = [".md", ".markdown"]
+languages = ["markdown"]
+rootMarkers = [".git", ".marksman.toml"]
+env = {}
+
+[[lsp.servers]]
+name = "rvn"
+command = "rvn"
+arguments = ["lsp"]
+extensions = [".md", ".markdown"]
+languages = ["markdown"]
+rootMarkers = [".git"]
+env = {}
 ```
 
 `marksman` and `rvn lsp` are example command lines. Any other server is the same shape: set `command`, `arguments`, `extensions`, and `rootMarkers`.
@@ -180,7 +189,7 @@ Wired: `initialize`, `initialized`, `textDocument/didOpen|didChange|didSave|didC
 
 ## What is verified vs not
 
-**Verified on Linux (`swift test`):** QuillVim (motions, operators, text objects, visual, `.` / undo, ex, leader, `-`, `gr`, `<leader>ca`), QuillLSP JSON-RPC framing and a mock-server lifecycle (initialize, document sync, completion, definition, references, code action, executeCommand, applyEdit, hover, diagnostics, missing-server), launch-argument and shell-hook parsing, QuillFS diffs (create/rename/delete/move), QuillSearch fuzzy + grep + picker insert/normal.
+**Verified on Linux (`swift test`):** QuillVim (motions, operators, text objects, visual, `.` / undo, ex, leader, `-`, `gr`, `<leader>ca`), QuillLSP JSON-RPC framing and a mock-server lifecycle (initialize, document sync, completion, definition, references, code action, executeCommand, applyEdit, hover, diagnostics, missing-server), launch-argument and shell-hook parsing, QuillFS diffs (create/rename/delete/move), QuillSearch fuzzy + grep + picker insert/normal, QuillTOML (the config subset: tables, strings, numbers, bools, arrays, inline tables, arrays of tables).
 
 **Unverified:** compiling or running the macOS app (no macOS toolchain here). TextKit 2 display-line `j`/`k`, the confirmation sheet, Trash deletes, and a live language server should be checked in Xcode.
 

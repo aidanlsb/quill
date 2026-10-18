@@ -64,6 +64,7 @@ final class AppModel {
     private var codeActions: [CodeAction] = []
     var pendingNavigation: PendingNavigation?
     var themeIdentity = 0
+    var themeChoice: ThemeChoice = .system
 
     init() {
         let home = FileManager.default.homeDirectoryForCurrentUser
@@ -72,21 +73,49 @@ final class AppModel {
         config = loaded.config
         if let error = loaded.error { message = error }
         config.apply(to: engine)
+        themeChoice = ThemeChoice.resolved(
+            config: config.theme,
+            remembered: ThemeMemory.load(from: ThemeMemory.url(home: home))
+        )
         appearanceObserver = NSApplication.shared.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
             Task { @MainActor [weak self] in
-                guard let self else { return }
-                self.theme = QuillTheme.current(
-                    fontFamily: self.config.font,
-                    fontSize: self.config.fontSize,
-                    columnCharacters: self.config.columnWidth
-                )
-                self.themeIdentity += 1
+                guard let self, self.themeChoice == .system else { return }
+                self.applyTheme(self.themeChoice, remember: false)
             }
         }
-        theme = QuillTheme.current(
+        theme = makeTheme(themeChoice)
+    }
+
+    func setTheme(_ choice: ThemeChoice) {
+        applyTheme(choice, remember: true)
+    }
+
+    func toggleTheme() {
+        let appearance = NSApp?.effectiveAppearance ?? NSAppearance.currentDrawing()
+        let systemDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        applyTheme(themeChoice.toggled(systemIsDark: systemDark), remember: true)
+    }
+
+    private func applyTheme(_ choice: ThemeChoice, remember: Bool) {
+        themeChoice = choice
+        theme = makeTheme(choice)
+        themeIdentity += 1
+        guard remember else { return }
+        message = "theme \(choice.rawValue)"
+        let url = ThemeMemory.url(home: FileManager.default.homeDirectoryForCurrentUser)
+        do {
+            try ThemeMemory.save(choice, to: url)
+        } catch {
+            message = "theme \(choice.rawValue) (\(error.localizedDescription))"
+        }
+    }
+
+    private func makeTheme(_ choice: ThemeChoice) -> QuillTheme {
+        QuillTheme.current(
             fontFamily: config.font,
             fontSize: config.fontSize,
-            columnCharacters: config.columnWidth
+            columnCharacters: config.columnWidth,
+            scheme: choice
         )
     }
 
@@ -260,6 +289,10 @@ final class AppModel {
             presentCodeActions()
         case .shell(let command):
             runShell(command)
+        case .setTheme(let choice):
+            setTheme(choice)
+        case .toggleTheme:
+            toggleTheme()
         case .command(let name):
             if name == "split" || name == "vsplit" {
                 message = "Split the window from the view layer once a second EditorWindow is attached"

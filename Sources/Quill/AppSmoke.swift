@@ -16,6 +16,7 @@ enum AppSmoke {
         _ = model
         var failures: [String] = []
         checkDefaultType(failures: &failures)
+        checkTheme(failures: &failures)
         checkCaretAndScroll(failures: &failures)
         checkDirectory(failures: &failures)
         if failures.isEmpty {
@@ -85,7 +86,7 @@ enum AppSmoke {
         )
         let helvetica = QuillTheme.current(fontFamily: "Helvetica")
         check(helvetica.bodyFont.familyName == "Helvetica", "font family \(helvetica.bodyFont.familyName ?? "")", failures: &failures)
-        if let decoded = try? QuillConfig.decode(Data(#"{"font":" Helvetica "}"#.utf8)) {
+        if let decoded = try? QuillConfig.decode(Data("font = \" Helvetica \"\n".utf8)) {
             check(decoded.font == "Helvetica", "font config \(decoded.font)", failures: &failures)
         } else {
             failures.append("font config decode")
@@ -113,6 +114,47 @@ enum AppSmoke {
             return CGFloat(truncating: number)
         }
         return 0
+    }
+
+    @MainActor
+    private static func checkTheme(failures: inout [String]) {
+        let dark = QuillTheme.current(scheme: .dark)
+        let light = QuillTheme.current(scheme: .light)
+        check(brightness(dark.backgroundColor) < brightness(light.backgroundColor), "theme dark", failures: &failures)
+        let engine = Engine(text: "hello")
+        check(engine.type(":theme dark<CR>").actions == [.setTheme(.dark)], "theme command", failures: &failures)
+        check(engine.type(":theme<CR>").actions == [.toggleTheme], "theme toggle", failures: &failures)
+        let bad = engine.type(":theme blue<CR>")
+        check(bad.beep && bad.actions.isEmpty, "theme name", failures: &failures)
+        check(Engine(text: "hello").type(" tt").actions == [.toggleTheme], "leader tt", failures: &failures)
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("quill-theme-\(UUID().uuidString)", isDirectory: true)
+        let url = directory.appendingPathComponent("state.toml")
+        do {
+            try ThemeMemory.save(.dark, to: url)
+            check(ThemeMemory.load(from: url) == .dark, "theme memory", failures: &failures)
+        } catch {
+            failures.append("theme memory \(error.localizedDescription)")
+        }
+        try? FileManager.default.removeItem(at: directory)
+        check(QuillConfig.default.theme == .system, "theme config default", failures: &failures)
+        if let decoded = try? QuillConfig.decode(Data("theme = \"dark\"\n".utf8)) {
+            check(decoded.theme == .dark, "theme config \(decoded.theme.rawValue)", failures: &failures)
+        } else {
+            failures.append("theme config")
+        }
+        check((try? QuillConfig.decode(Data("theme = \"blue\"\n".utf8))) == nil, "theme config name", failures: &failures)
+    }
+
+    @MainActor
+    private static func brightness(_ color: NSColor) -> CGFloat {
+        let rgb = color.usingColorSpace(.sRGB) ?? color
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 0
+        rgb.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        return red
     }
 
     @MainActor

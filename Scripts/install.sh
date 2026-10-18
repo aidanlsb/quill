@@ -13,4 +13,4 @@ cp Scripts/quill /usr/local/bin/quill
 chmod +x /usr/local/bin/quill
 echo "Installed /Applications/Quill.app and /usr/local/bin/quill"
 echo "Try: quill ."
-echo "Config (optional): ~/.config/quill/config.json"
+echo "Config (optional): ~/.config/quill/config.toml"

@@ -1,0 +1,41 @@
+# Quill config. Copy to ~/.config/quill/config.toml
+# `font` is a family name. Leave it empty, or name a family that is not
+# installed, and Quill uses the macOS system font. fontSize is points, 10 to 32.
+
+leader = " "
+# system follows macOS. light and dark stay put.
+# :theme, <leader>tt, and View → Toggle Light/Dark remember a choice in state.toml.
+theme = "system"
+columnWidth = 70
+fontSize = 16
+font = ""
+shiftWidth = 2
+
+[leaderMaps]
+sf = "findFiles"
+sg = "liveGrep"
+
+# A leader sequence that runs a shell command in the workspace root.
+[shellCommands]
+d = "rvn daily"
+
+# The same maps can be written as inline tables:
+# shellCommands = { d = "rvn daily" }
+
+[[lsp.servers]]
+name = "marksman"
+command = "marksman"
+arguments = ["server"]
+extensions = [".md", ".markdown"]
+languages = ["markdown"]
+rootMarkers = [".git", ".marksman.toml"]
+env = {}
+
+[[lsp.servers]]
+name = "rvn"
+command = "rvn"
+arguments = ["lsp"]
+extensions = [".md", ".markdown"]
+languages = ["markdown"]
+rootMarkers = [".git"]
+env = {}

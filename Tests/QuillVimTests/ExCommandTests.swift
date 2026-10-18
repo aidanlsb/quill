@@ -107,6 +107,38 @@ final class ExCommandTests: XCTestCase {
         XCTAssertEqual(Ex.parse("'<,'>s/a/b").rangeStart, .mark("<"))
     }
 
+    func testThemeCommandAndLeaderToggle() {
+        let e = Engine(text: "hello")
+        XCTAssertEqual(e.type(":theme dark<CR>").actions, [.setTheme(.dark)])
+        XCTAssertEqual(e.type(":theme light<CR>").actions, [.setTheme(.light)])
+        XCTAssertEqual(e.type(":theme SYSTEM<CR>").actions, [.setTheme(.system)])
+        XCTAssertEqual(e.type(":theme<CR>").actions, [.toggleTheme])
+        let bad = e.type(":theme blue<CR>")
+        XCTAssertTrue(bad.beep)
+        XCTAssertTrue(bad.actions.isEmpty)
+        XCTAssertEqual(e.statusMessage, "theme must be light, dark, or system")
+        XCTAssertEqual(Engine(text: "hello").type(" tt").actions, [.toggleTheme])
+        let reserved = Engine(text: "hello")
+        let prefix = reserved.type(" t")
+        XCTAssertTrue(prefix.actions.isEmpty)
+        XCTAssertFalse(prefix.beep)
+        XCTAssertTrue(reserved.type("x").beep)
+    }
+
+    func testThemeChoice() {
+        XCTAssertEqual(ThemeChoice.parse(" Light "), .light)
+        XCTAssertNil(ThemeChoice.parse("blue"))
+        XCTAssertEqual(ThemeChoice.light.toggled(systemIsDark: true), .dark)
+        XCTAssertEqual(ThemeChoice.dark.toggled(systemIsDark: false), .light)
+        XCTAssertEqual(ThemeChoice.system.toggled(systemIsDark: true), .light)
+        XCTAssertEqual(ThemeChoice.system.toggled(systemIsDark: false), .dark)
+        XCTAssertEqual(ThemeChoice.resolved(config: .system, remembered: .dark), .dark)
+        XCTAssertEqual(ThemeChoice.resolved(config: .light, remembered: nil), .light)
+        XCTAssertFalse(ThemeChoice.light.isDark(systemIsDark: true))
+        XCTAssertTrue(ThemeChoice.dark.isDark(systemIsDark: false))
+        XCTAssertTrue(ThemeChoice.system.isDark(systemIsDark: true))
+    }
+
     func testLeaderCustomBinding() {
         let e = Engine(text: "hello")
         e.leaderBindings["x"] = .command("custom")
