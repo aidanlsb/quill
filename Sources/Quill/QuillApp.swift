@@ -13,15 +13,18 @@ struct QuillApp: App {
                 .frame(minWidth: 720, minHeight: 480)
                 .onAppear {
                     appDelegate.attach(model)
-                    NSApplication.shared.setActivationPolicy(.regular)
+                    AppActivation.bringForward()
                     model.consumeLaunchArguments(Array(CommandLine.arguments.dropFirst()))
                     NSApplication.shared.windows.forEach { $0.delegate = appDelegate }
                     WindowChrome.apply(theme: model.theme)
+                    QuillTrace.event("keyWindow")
+                    AppPerf.noteKeyWindow()
                     AppSmoke.noteWindowAppeared()
                     AppSmoke.runIfRequested(model: model)
                 }
                 .onOpenURL { url in
                     model.open(url: url)
+                    AppActivation.bringForward()
                 }
         }
         .defaultSize(width: 960, height: 760)
@@ -60,6 +63,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var model: AppModel?
     private var pending: [URL] = []
 
+    override init() {
+        super.init()
+        QuillTrace.event("delegateInit")
+    }
+
     func attach(_ model: AppModel) {
         self.model = model
         drainPending()
@@ -73,6 +81,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             forEventClass: AEEventClass(kInternetEventClass),
             andEventID: AEEventID(kAEGetURL)
         )
+        // `.regular` before any window exists. A quill:// open from the CLI
+        // otherwise comes up behind the terminal.
+        AppActivation.prepare()
+        QuillTrace.event("willFinishLaunching")
         // A background shell does not activate the app, so the SwiftUI window
         // may never appear. Arm the smoke watchdog before that wait.
         AppSmoke.prepareIfRequested()
@@ -103,20 +115,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         } else {
             pending.append(url)
         }
+        AppActivation.bringForward()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         drainPending()
+        AppActivation.bringForward()
+        QuillTrace.event("didFinishLaunching")
         // Do not wait for onAppear. That callback is the only thing that used
         // to start smoke, and it never runs when no window becomes key.
         AppSmoke.launchDidFinish(model: model)
+        AppPerf.launchDidFinish()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        // Smoke opens its own windows before the SwiftUI window exists, then
-        // releases them. Closing that last window must not terminate the process
-        // mid-check. Smoke exits on its own.
-        ProcessInfo.processInfo.environment["QUILL_SMOKE"] != "1"
+        // Smoke and the perf probe open their own windows before the SwiftUI
+        // window exists, then release them. Closing that last window must not
+        // terminate the process mid-check. Those modes exit on their own.
+        let env = ProcessInfo.processInfo.environment
+        return env["QUILL_SMOKE"] != "1" && env["QUILL_PERF"] != "1"
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -132,5 +149,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let urls = pending
         pending.removeAll()
         urls.forEach { model.open(url: $0) }
+    }
+}
+
+/// `open -a` asks Launch Services to activate Quill. The window still has to
+/// be ordered front: a quill:// delivery can arrive before the window exists,
+/// and a direct binary launch never becomes key on its own.
+@MainActor
+enum AppActivation {
+    static func prepare() {
+        let app = NSApplication.shared
+        if app.activationPolicy() != .regular {
+            _ = app.setActivationPolicy(.regular)
+        }
+    }
+
+    static func bringForward() {
+        prepare()
+        let app = NSApplication.shared
+        app.activate()
+        if let key = app.keyWindow {
+            key.makeKeyAndOrderFront(nil)
+            return
+        }
+        if let window = app.windows.first(where: { $0.canBecomeKey }) ?? app.windows.first {
+            window.makeKeyAndOrderFront(nil)
+        }
     }
 }

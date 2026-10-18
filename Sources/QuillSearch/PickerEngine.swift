@@ -224,7 +224,7 @@ public final class PickerEngine {
             }
             .sorted { lhs, rhs in
                 if lhs.1 != rhs.1 { return lhs.1 > rhs.1 }
-                return source[lhs.0].title.localizedStandardCompare(source[rhs.0].title) == .orderedAscending
+                return source[lhs.0].title < source[rhs.0].title
             }
             items = ranked.map { source[$0.0] }
         }

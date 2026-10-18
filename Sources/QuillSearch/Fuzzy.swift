@@ -72,7 +72,7 @@ public enum Fuzzy {
         }
         .sorted {
             if $0.score != $1.score { return $0.score > $1.score }
-            return $0.value.localizedStandardCompare($1.value) == .orderedAscending
+            return $0.value < $1.value
         }
     }
 

@@ -109,3 +109,46 @@ fi
 
 echo "verify-quill: quill smoke passed"
 echo "verify-quill: evidence $log"
+
+# Separate process from the smoke. Records launch and editing timings.
+# The app's own probe exits; this kill is only if that probe wedges.
+perf_log="$root/artifacts/verify-quill/perf.log"
+: > "$perf_log"
+QUILL_PERF=1 "$bin" >"$perf_log" 2>&1 &
+perf_pid=$!
+perf_status=0
+perf_done=0
+i=0
+while [[ "$i" -lt 90 ]]; do
+  if ! kill -0 "$perf_pid" 2>/dev/null; then
+    set +e
+    wait "$perf_pid"
+    perf_status=$?
+    set -e
+    perf_done=1
+    break
+  fi
+  sleep 1
+  i=$((i + 1))
+done
+if [[ "$perf_done" -eq 0 ]]; then
+  echo "verify-quill: perf still running after 90s; killing pid $perf_pid" >&2
+  kill "$perf_pid" 2>/dev/null || true
+  sleep 1
+  kill -9 "$perf_pid" 2>/dev/null || true
+  wait "$perf_pid" 2>/dev/null || true
+  exit 1
+fi
+if [[ "$perf_status" -ne 0 ]]; then
+  echo "verify-quill: perf failed (status $perf_status). Log: $perf_log" >&2
+  cat "$perf_log" >&2 || true
+  exit "$perf_status"
+fi
+if ! grep -F -q "quill perf done" "$perf_log"; then
+  echo "verify-quill: perf exited without 'quill perf done'. Log: $perf_log" >&2
+  cat "$perf_log" >&2 || true
+  exit 1
+fi
+echo "verify-quill: perf"
+grep -F "quill perf " "$perf_log" || true
+echo "verify-quill: perf evidence $perf_log"
