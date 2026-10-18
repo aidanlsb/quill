@@ -1,5 +1,6 @@
 import AppKit
 import QuillMarkdown
+import QuillVim
 
 /// One type scale and measure. Config defaults and `QuillTheme.current` both read this.
 enum QuillMetrics {
@@ -66,10 +67,12 @@ struct QuillTheme {
     static func current(
         fontFamily: String = "",
         fontSize: Double = QuillMetrics.defaultFontSize,
-        columnCharacters: Int = QuillMetrics.defaultColumn
+        columnCharacters: Int = QuillMetrics.defaultColumn,
+        scheme: ThemeChoice = .system
     ) -> QuillTheme {
         let appearance = NSApp?.effectiveAppearance ?? NSAppearance.currentDrawing()
-        let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let systemDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let dark = scheme.isDark(systemIsDark: systemDark)
         let size = CGFloat(QuillMetrics.fontSize(fontSize))
         let body = QuillMetrics.bodyFont(family: fontFamily, size: size)
         let mono = QuillMetrics.monoFont(ofSize: size * QuillMetrics.monoScale)

@@ -21,6 +21,8 @@ public final class Engine {
         "sf": .findFiles,
         "sg": .liveGrep,
         "ca": .codeAction,
+        // `<leader>t*` is reserved for toggles. `tt` is the appearance toggle.
+        "tt": .toggleTheme,
     ]
     public private(set) var isModified: Bool = false
     public private(set) var statusMessage: String = ""
@@ -1647,6 +1649,15 @@ public final class Engine {
             return EngineResult(didChangeText: false, beep: false, actions: [.command("vsplit")])
         case "set":
             return applySet(parsed.args)
+        case "theme":
+            if parsed.args.isEmpty {
+                return EngineResult(didChangeText: false, beep: false, actions: [.toggleTheme])
+            }
+            guard let choice = ThemeChoice.parse(parsed.args) else {
+                statusMessage = "theme must be light, dark, or system"
+                return beepResult()
+            }
+            return EngineResult(didChangeText: false, beep: false, actions: [.setTheme(choice)])
         case "s":
             return substitute(parsed)
         default:

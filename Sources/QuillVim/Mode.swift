@@ -31,6 +31,43 @@ public enum Mode: Equatable, Sendable {
     }
 }
 
+/// `system` follows the macOS appearance. A runtime toggle leaves `system` for an explicit side.
+public enum ThemeChoice: String, Equatable, Sendable {
+    case system
+    case light
+    case dark
+
+    public static func parse(_ text: String) -> ThemeChoice? {
+        switch text.trimASCIISpaces().lowercased() {
+        case "system": return .system
+        case "light": return .light
+        case "dark": return .dark
+        default: return nil
+        }
+    }
+
+    /// A remembered runtime choice wins. Config applies when nothing has been chosen yet.
+    public static func resolved(config: ThemeChoice, remembered: ThemeChoice?) -> ThemeChoice {
+        remembered ?? config
+    }
+
+    public func toggled(systemIsDark: Bool) -> ThemeChoice {
+        switch self {
+        case .light: return .dark
+        case .dark: return .light
+        case .system: return systemIsDark ? .light : .dark
+        }
+    }
+
+    public func isDark(systemIsDark: Bool) -> Bool {
+        switch self {
+        case .dark: return true
+        case .light: return false
+        case .system: return systemIsDark
+        }
+    }
+}
+
 public enum HostAction: Equatable, Sendable {
     case write
     case quit
@@ -53,6 +90,10 @@ public enum HostAction: Equatable, Sendable {
     case shell(String)
     /// Extensible leader mapping that the host looks up by name.
     case command(String)
+    /// `:theme light|dark|system`.
+    case setTheme(ThemeChoice)
+    /// `:theme` with no argument, and `<leader>tt`.
+    case toggleTheme
 }
 
 public struct EngineResult: Equatable, Sendable {

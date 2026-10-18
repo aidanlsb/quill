@@ -80,7 +80,7 @@ Own engine: parse **count → operator → motion or text object**. Motions retu
 
 **Registers:** unnamed, plus `"+` / `"*` for the system clipboard.
 
-**Ex:** `:w` `:q` `:wq` only. `:q` refuses a dirty buffer.
+**Ex:** `:w` `:q` `:wq`. `:q` refuses a dirty buffer. `:theme` toggles light and dark; `:theme light`, `:theme dark`, and `:theme system` set it. The last runtime choice is remembered in `~/.config/quill/state.toml` and overrides `theme` in `config.toml` on the next launch.
 
 **Other:** `gd` (definition / wikilink), `gr` (references), `-` (parent directory), **leader** (Space by default).
 
@@ -112,6 +112,9 @@ Default leader is **Space**. Configurable in `~/.config/quill/config.toml`.
 | `<leader>sf` | fuzzy files in the opened root (gitignore + hidden/VCS skipped) |
 | `<leader>sg` | live grep; results are `file:line` plus snippet |
 | `<leader>ca` | code actions for the cursor or selection |
+| `<leader>tt` | toggle light and dark |
+
+`<leader>t*` is reserved for toggles. `tt` is the appearance toggle; other `t` sequences are left open. **⇧⌘L** is the same toggle, under View → Toggle Light/Dark.
 | ⌘P | alias for find files |
 
 The picker is a native floating panel with a preview.
@@ -147,6 +150,8 @@ Example `~/.config/quill/config.toml` (also under `examples/config.toml`). If `c
 # `font` empty, or a family that is not installed, uses the system font.
 
 leader = " "
+# system follows macOS. light and dark stay put. A later :theme or <leader>tt is remembered.
+theme = "system"
 columnWidth = 70
 fontSize = 16
 font = ""

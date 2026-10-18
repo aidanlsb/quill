@@ -13,6 +13,7 @@ struct QuillConfig: Equatable {
     var fontSize: Double
     /// Family name for the body. Empty, or a family that is not installed, uses the system font.
     var font: String
+    var theme: ThemeChoice
     var shiftWidth: Int
 
     static let `default` = QuillConfig(
@@ -23,6 +24,7 @@ struct QuillConfig: Equatable {
         columnWidth: QuillMetrics.defaultColumn,
         fontSize: QuillMetrics.defaultFontSize,
         font: "",
+        theme: .system,
         shiftWidth: 2
     )
 
@@ -111,6 +113,7 @@ struct QuillConfig: Equatable {
         let column = try int(table["columnWidth"]) ?? QuillConfig.default.columnWidth
         let fontSize = QuillMetrics.fontSize(try double(table["fontSize"]))
         let font = (try string(table["font"]) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let theme = try themeChoice(table["theme"]) ?? QuillConfig.default.theme
         let shift = try int(table["shiftWidth"]) ?? QuillConfig.default.shiftWidth
         return QuillConfig(
             leader: leader,
@@ -120,6 +123,7 @@ struct QuillConfig: Equatable {
             columnWidth: column,
             fontSize: fontSize,
             font: font,
+            theme: theme,
             shiftWidth: shift
         )
     }
@@ -147,6 +151,14 @@ struct QuillConfig: Equatable {
             rootMarkers: try stringArray(table["rootMarkers"]) ?? [".git"],
             env: try stringTable(table["env"]) ?? [:]
         )
+    }
+
+    private static func themeChoice(_ value: TOMLValue?) throws -> ThemeChoice? {
+        guard let value else { return nil }
+        guard case .string(let text) = value, let choice = ThemeChoice.parse(text) else {
+            throw ConfigError("theme must be system, light, or dark")
+        }
+        return choice
     }
 
     private static func string(_ value: TOMLValue?) throws -> String? {
@@ -200,6 +212,7 @@ struct QuillConfig: Equatable {
             "shellCommands": .table(shellCommands.mapValues { .string($0) }),
             "columnWidth": .int(columnWidth),
             "font": .string(font),
+            "theme": .string(theme.rawValue),
             "shiftWidth": .int(shiftWidth),
         ]
         if fontSize.rounded() == fontSize {
@@ -234,6 +247,7 @@ struct QuillConfig: Equatable {
             let fontSize = QuillMetrics.fontSize(try c.decodeIfPresent(Double.self, forKey: .fontSize))
             let font = (try c.decodeIfPresent(String.self, forKey: .font) ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+            let theme = ThemeChoice.parse(try c.decodeIfPresent(String.self, forKey: .theme) ?? "") ?? .system
             let shift = try c.decodeIfPresent(Int.self, forKey: .shiftWidth) ?? QuillConfig.default.shiftWidth
             config = QuillConfig(
                 leader: leader,
@@ -243,12 +257,13 @@ struct QuillConfig: Equatable {
                 columnWidth: column,
                 fontSize: fontSize,
                 font: font,
+                theme: theme,
                 shiftWidth: shift
             )
         }
 
         enum CodingKeys: String, CodingKey {
-            case leader, leaderMaps, shellCommands, lsp, columnWidth, fontSize, font, shiftWidth
+            case leader, leaderMaps, shellCommands, lsp, columnWidth, fontSize, font, theme, shiftWidth
         }
     }
 
@@ -275,6 +290,7 @@ struct QuillConfig: Equatable {
         case "codeAction": return .codeAction
         case "findReferences": return .findReferences
         case "goToDefinition": return .goToDefinition
+        case "toggleTheme": return .toggleTheme
         default: return .command(name)
         }
     }

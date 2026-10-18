@@ -3,6 +3,9 @@
 # installed, and Quill uses the macOS system font. fontSize is points, 10 to 32.
 
 leader = " "
+# system follows macOS. light and dark stay put.
+# :theme, <leader>tt, and View → Toggle Light/Dark remember a choice in state.toml.
+theme = "system"
 columnWidth = 70
 fontSize = 16
 font = ""

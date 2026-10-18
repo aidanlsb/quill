@@ -46,6 +46,10 @@ struct QuillApp: App {
                 Button("Go to Definition") { model.goToDefinition() }
                     .keyboardShortcut("d", modifiers: .command)
             }
+            CommandGroup(after: .sidebar) {
+                Button("Toggle Light/Dark") { model.toggleTheme() }
+                    .keyboardShortcut("l", modifiers: [.command, .shift])
+            }
         }
     }
 }
