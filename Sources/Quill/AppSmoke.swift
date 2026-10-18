@@ -80,6 +80,7 @@ enum AppSmoke {
         checkDefaultType(failures: &failures)
         checkTheme(failures: &failures)
         checkCaretAndScroll(failures: &failures)
+        checkColumnFollowsResize(failures: &failures)
         checkDirectory(failures: &failures)
         if failures.isEmpty {
             fputs("quill smoke passed\n", stderr)
@@ -646,6 +647,182 @@ enum AppSmoke {
         let range = ns.range(of: needle)
         guard range.location != NSNotFound, let storage = tv.textStorage else { return nil }
         return storage.attribute(.foregroundColor, at: range.location, effectiveRange: nil) as? NSColor
+    }
+
+    /// Two real window widths. The check must not call `updateInsets` itself:
+    /// a resize has to recompute the column, or this fails.
+    @MainActor
+    private static func checkColumnFollowsResize(failures: inout [String]) {
+        let measure: CGFloat = 420
+        let height: CGFloat = 520
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 960, height: height))
+        scroll.hasVerticalScroller = false
+        scroll.hasHorizontalScroller = false
+        scroll.autoresizingMask = [.width, .height]
+        let tv = VimTextView(usingTextLayoutManager: true)
+        tv.commonInit()
+        let line = String(repeating: "alpha bravo ", count: 12)
+        let lines = (0..<40).map { "\($0) \(line)" }.joined(separator: "\n")
+        let engine = Engine(text: lines)
+        tv.engine = engine
+        engine.layout = tv.layoutAdapter
+        tv.isDirectoryBuffer = false
+        tv.columnWidth = measure
+        scroll.documentView = tv
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 960, height: height),
+            styleMask: [.titled, .resizable, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = scroll
+        window.makeKeyAndOrderFront(nil)
+        defer {
+            window.orderOut(nil)
+            window.close()
+        }
+        tv.applyTheme(QuillTheme.current(), focus: false)
+        tv.syncFromEngine()
+
+        resizeEditor(window, scroll: scroll, width: 640, height: height)
+        let narrowClip = scroll.contentView.bounds.width
+        assertWritingColumn(tv, clipWidth: narrowClip, label: "column narrow", failures: &failures)
+        let narrowSpan = QuillMetrics.columnSpan(width: narrowClip, column: measure)
+        check(
+            abs(narrowSpan.inset - QuillMetrics.sideGutter) < 1,
+            "column clip \(narrowClip) inset \(narrowSpan.inset) is not the minimum gutter",
+            failures: &failures
+        )
+        check(
+            narrowSpan.column < measure - 10,
+            "column clip \(narrowClip) measure \(narrowSpan.column) did not shrink",
+            failures: &failures
+        )
+        tv.viewDidEndLiveResize()
+        assertWritingColumn(tv, clipWidth: scroll.contentView.bounds.width, label: "column narrow", failures: &failures)
+
+        for _ in 0..<24 {
+            let step = engine.handle(KeyEvent(.character("j")))
+            tv.applyResult(step)
+        }
+        let originBefore = scroll.contentView.bounds.origin.y
+        let caretBefore = caretViewportOffset(tv, scroll: scroll)
+        let cursor = engine.cursor
+        check(originBefore > 20, "column caret origin \(originBefore) did not scroll", failures: &failures)
+        check(caretBefore > 20, "column caret \(caretBefore) was not in view", failures: &failures)
+
+        resizeEditor(window, scroll: scroll, width: 1280, height: height)
+        let wideClip = scroll.contentView.bounds.width
+        assertWritingColumn(tv, clipWidth: wideClip, label: "column wide", failures: &failures)
+        let wideSpan = QuillMetrics.columnSpan(width: wideClip, column: measure)
+        check(
+            abs(wideSpan.column - measure) < 1,
+            "column clip \(wideClip) measure \(wideSpan.column) is not the max",
+            failures: &failures
+        )
+        check(
+            tv.textContainerInset.width > narrowSpan.inset + 30,
+            "column inset did not grow \(tv.textContainerInset.width) from \(narrowSpan.inset) clips \(narrowClip) \(wideClip)",
+            failures: &failures
+        )
+        check(wideClip > narrowClip + 200, "column clip did not widen \(narrowClip) -> \(wideClip)", failures: &failures)
+        let caretLive = caretViewportOffset(tv, scroll: scroll)
+        check(engine.cursor == cursor, "column caret cursor moved to \(engine.cursor)", failures: &failures)
+        check(
+            abs(caretLive - caretBefore) < 12,
+            "column caret \(caretBefore) -> \(caretLive) origin \(originBefore) -> \(scroll.contentView.bounds.origin.y)",
+            failures: &failures
+        )
+        tv.viewDidEndLiveResize()
+        assertWritingColumn(tv, clipWidth: scroll.contentView.bounds.width, label: "column wide", failures: &failures)
+        let caretSettled = caretViewportOffset(tv, scroll: scroll)
+        check(
+            abs(caretSettled - caretBefore) < 12,
+            "column caret \(caretBefore) -> \(caretSettled) after live resize origin \(scroll.contentView.bounds.origin.y)",
+            failures: &failures
+        )
+
+        tv.isDirectoryBuffer = true
+        resizeEditor(window, scroll: scroll, width: 760, height: height)
+        assertDirectoryWidth(tv, scroll: scroll, failures: &failures)
+        let directoryNarrow = tv.textContainer?.size.width ?? 0
+        resizeEditor(window, scroll: scroll, width: 1180, height: height)
+        tv.viewDidEndLiveResize()
+        assertDirectoryWidth(tv, scroll: scroll, failures: &failures)
+        let directoryWide = tv.textContainer?.size.width ?? 0
+        check(
+            directoryWide > directoryNarrow + 150,
+            "directory resize column did not grow \(directoryNarrow) -> \(directoryWide)",
+            failures: &failures
+        )
+    }
+
+    @MainActor
+    private static func resizeEditor(_ window: NSWindow, scroll: NSScrollView, width: CGFloat, height: CGFloat) {
+        window.setContentSize(NSSize(width: width, height: height))
+        scroll.setFrameSize(NSSize(width: width, height: height))
+        scroll.tile()
+        scroll.layoutSubtreeIfNeeded()
+        scroll.documentView?.layoutSubtreeIfNeeded()
+    }
+
+    @MainActor
+    private static func assertWritingColumn(
+        _ tv: VimTextView,
+        clipWidth: CGFloat,
+        label: String,
+        failures: inout [String]
+    ) {
+        let span = QuillMetrics.columnSpan(width: clipWidth, column: tv.columnWidth)
+        let inset = tv.textContainerInset.width
+        let column = tv.textContainer?.size.width ?? 0
+        check(
+            abs(inset - span.inset) < 1,
+            "\(label) inset \(inset) expected \(span.inset) clip \(clipWidth)",
+            failures: &failures
+        )
+        check(
+            abs(column - span.column) < 1,
+            "\(label) measure \(column) expected \(span.column) clip \(clipWidth)",
+            failures: &failures
+        )
+        let left = tv.textContainerOrigin.x
+        let right = tv.bounds.width - left - column
+        check(
+            abs(left - right) < 3,
+            "\(label) not centered left \(left) right \(right) column \(column) view \(tv.bounds.width) clip \(clipWidth)",
+            failures: &failures
+        )
+    }
+
+    @MainActor
+    private static func assertDirectoryWidth(_ tv: VimTextView, scroll: NSScrollView, failures: inout [String]) {
+        let clip = scroll.contentView.bounds.width
+        let inset = tv.textContainerInset.width
+        let column = tv.textContainer?.size.width ?? 0
+        let expected = max(1, clip - QuillMetrics.directoryHorizontalInset * 2)
+        check(
+            abs(inset - QuillMetrics.directoryHorizontalInset) < 0.5,
+            "directory resize inset \(inset) clip \(clip)",
+            failures: &failures
+        )
+        check(
+            abs(column - expected) < 2,
+            "directory resize column \(column) expected \(expected) clip \(clip)",
+            failures: &failures
+        )
+        check(
+            column > tv.columnWidth + 40,
+            "directory resize column \(column) still the prose measure \(tv.columnWidth)",
+            failures: &failures
+        )
+    }
+
+    @MainActor
+    private static func caretViewportOffset(_ tv: VimTextView, scroll: NSScrollView) -> CGFloat {
+        tv.layoutSubtreeIfNeeded()
+        let cell = tv.caretCell(suggested: .zero)
+        return cell.midY - scroll.contentView.bounds.origin.y
     }
 
     @MainActor
