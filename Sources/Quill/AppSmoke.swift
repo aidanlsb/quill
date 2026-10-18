@@ -773,6 +773,15 @@ enum AppSmoke {
 
         let model = AppModel()
         model.open(url: root)
+        model.presentFilePicker()
+        // The index finishes on a task. NSHostingView does not redraw when that
+        // task assigns `picker`, so the panel is hosted only after it is open
+        // and replaced again after each edit.
+        let indexed = waitUntil(seconds: 2) { model.picker != nil }
+        guard indexed else {
+            failures.append("picker did not open (\(model.message))")
+            return
+        }
         let host = NSHostingView(rootView: PickerPanel(model: model))
         host.autoresizingMask = [.width, .height]
         let window = NSWindow(
@@ -786,8 +795,8 @@ enum AppSmoke {
         window.makeKeyAndOrderFront(nil)
         defer { window.orderOut(nil) }
 
-        model.presentFilePicker()
-        let opened = waitUntil(seconds: 1.2) {
+        showPicker(host, window, model)
+        let opened = waitUntil(seconds: 0.8) {
             settle(host, window)
             let hint = queryField(in: host)?.placeholderAttributedString?.string ?? ""
             return hint == "File name"
@@ -822,7 +831,8 @@ enum AppSmoke {
 
         model.handlePicker(.character("n"))
         model.handlePicker(.character("o"))
-        let filtered = waitUntil(seconds: 1) {
+        showPicker(host, window, model)
+        let filtered = waitUntil(seconds: 0.6) {
             settle(host, window)
             let titles = resultTitles(in: host)
             return queryField(in: host)?.stringValue == "no"
@@ -849,7 +859,8 @@ enum AppSmoke {
         }
 
         model.handlePicker(.escape)
-        let leftInsert = waitUntil(seconds: 0.5) {
+        showPicker(host, window, model)
+        let leftInsert = waitUntil(seconds: 0.4) {
             settle(host, window)
             return modeField(in: host)?.stringValue == "NORMAL" && caretView(in: host) == nil
         }
@@ -860,7 +871,8 @@ enum AppSmoke {
 
         model.handlePicker(.character("q"))
         model.presentGrepPicker()
-        let grepOpen = waitUntil(seconds: 0.6) {
+        showPicker(host, window, model)
+        let grepOpen = waitUntil(seconds: 0.4) {
             settle(host, window)
             let hint = queryField(in: host)?.placeholderAttributedString?.string ?? ""
             return hint == "Pattern" && queryField(in: host)?.stringValue.isEmpty == true
@@ -869,8 +881,15 @@ enum AppSmoke {
         for character in "alpha" {
             model.handlePicker(.character(character))
         }
+        var seenGrepTick = model.pickerTick
+        showPicker(host, window, model)
         let grepped = waitUntil(seconds: 1.5) {
-            settle(host, window)
+            if model.pickerTick != seenGrepTick {
+                seenGrepTick = model.pickerTick
+                showPicker(host, window, model)
+            } else {
+                settle(host, window)
+            }
             let hits = resultTitles(in: host)
             return queryField(in: host)?.stringValue == "alpha"
                 && hits.contains { $0.contains("notes.md") }
@@ -889,6 +908,14 @@ enum AppSmoke {
         } else {
             failures.append("grep highlight missing snippet \(hits)")
         }
+    }
+
+    /// `NSHostingView` keeps the tree from its first `rootView`. Replacing it
+    /// publishes the picker's current query, caret, and rows.
+    @MainActor
+    private static func showPicker(_ host: NSHostingView<PickerPanel>, _ window: NSWindow, model: AppModel) {
+        host.rootView = PickerPanel(model: model)
+        settle(host, window)
     }
 
     @MainActor
