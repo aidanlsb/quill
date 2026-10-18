@@ -153,7 +153,7 @@ enum AppSmoke {
         var green: CGFloat = 0
         var blue: CGFloat = 0
         var alpha: CGFloat = 0
-        guard rgb.getRed(&red, green: &green, blue: &blue, alpha: &alpha) else { return 0 }
+        rgb.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
         return red
     }
 
