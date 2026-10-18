@@ -1,10 +1,11 @@
 import AppKit
 import Foundation
+import SwiftUI
 import QuillFS
 import QuillVim
 
 /// In-process check for the behaviors Linux tests cannot see: caret cell size,
-/// real scrolling, and oil-style directory buffers wired through `AppModel`.
+/// real scrolling, oil-style directory buffers, and the picker query field.
 /// Run with `QUILL_SMOKE=1`. Exits the process.
 ///
 /// The checks start from `applicationDidFinishLaunching`. They must not wait
@@ -82,6 +83,7 @@ enum AppSmoke {
         checkCaretAndScroll(failures: &failures)
         checkColumnFollowsResize(failures: &failures)
         checkDirectory(failures: &failures)
+        checkPicker(failures: &failures)
         if failures.isEmpty {
             fputs("quill smoke passed\n", stderr)
             fflush(stderr)
@@ -281,27 +283,38 @@ enum AppSmoke {
 
         let body = NSFont.systemFont(ofSize: 20)
         let heading = NSFont.systemFont(ofSize: 32)
-        let sample = "iiii\nHeading"
+        // "iiii\n\nHeading\n" — body, a blank line, a heading, then the extra line at the end.
+        let sample = "iiii\n\nHeading\n"
         engine.load(text: sample)
         tv.string = sample
         tv.font = body
+        // A non-zero inset makes a caret that forgot textContainerOrigin miss the baseline.
+        tv.textContainerInset = NSSize(width: 12, height: 36)
         let style = NSMutableParagraphStyle()
         style.lineHeightMultiple = 1.65
         let ns = sample as NSString
         let full = NSRange(location: 0, length: ns.length)
         tv.textStorage?.addAttribute(.paragraphStyle, value: style, range: full)
-        tv.textStorage?.addAttribute(.font, value: body, range: NSRange(location: 0, length: 4))
-        let headingAt = 5
+        tv.textStorage?.addAttribute(.font, value: body, range: NSRange(location: 0, length: 6))
+        let headingAt = 6
         tv.textStorage?.addAttribute(
             .font,
             value: heading,
-            range: NSRange(location: headingAt, length: ns.length - headingAt)
+            range: NSRange(location: headingAt, length: 7)
         )
+        tv.textStorage?.addAttribute(.font, value: body, range: NSRange(location: 13, length: 1))
         tv.textLayoutManager?.ensureLayout(for: tv.textLayoutManager!.documentRange)
-        tv.setSelectedRange(NSRange(location: 0, length: 0))
+        tv.layoutSubtreeIfNeeded()
+        window.makeFirstResponder(tv)
         engine.mode = .normal
 
-        let block = tv.caretCell(suggested: .zero)
+        let block = assertCaretGlyph(
+            tv: tv,
+            index: 0,
+            font: body,
+            label: "body",
+            failures: &failures
+        )
         let iAdvance = ceil(("i" as NSString).size(withAttributes: [.font: body]).width)
         let bodyEm = body.ascender - body.descender
         let lineWidth = ("iiii" as NSString).size(withAttributes: [.font: body]).width
@@ -316,19 +329,40 @@ enum AppSmoke {
             )
         }
 
-        tv.setSelectedRange(NSRange(location: headingAt, length: 0))
-        let head = tv.caretCell(suggested: .zero)
+        let blank = assertCaretGlyph(tv: tv, index: 5, font: body, label: "empty", failures: &failures)
+        check(abs(blank.height - bodyEm) < 1.5, "empty caret height \(blank.height) expected em \(bodyEm)", failures: &failures)
+        let space = ceil((" " as NSString).size(withAttributes: [.font: body]).width)
+        check(abs(blank.width - max(1, space)) < 1.5, "empty caret width \(blank.width) expected \(space)", failures: &failures)
+
+        let head = assertCaretGlyph(tv: tv, index: headingAt, font: heading, label: "heading", failures: &failures)
         let hAdvance = ceil(("H" as NSString).size(withAttributes: [.font: heading]).width)
         let headEm = heading.ascender - heading.descender
         check(abs(head.width - max(1, hAdvance)) < 1.5, "heading block width \(head.width) expected \(hAdvance)", failures: &failures)
         check(abs(head.height - headEm) < 1.5, "heading block height \(head.height) expected em \(headEm)", failures: &failures)
         check(head.height > block.height + 2, "heading caret \(head.height) should be taller than body \(block.height)", failures: &failures)
 
+        let endCaret = assertCaretGlyph(tv: tv, index: ns.length, font: body, label: "end", failures: &failures)
+        check(abs(endCaret.height - bodyEm) < 1.5, "end caret height \(endCaret.height) expected em \(bodyEm)", failures: &failures)
+
         engine.mode = .insert
-        let beam = tv.caretCell(suggested: .zero)
-        check(beam.width == 1, "insert beam width \(beam.width)", failures: &failures)
+        let beam = assertCaretGlyph(tv: tv, index: headingAt, font: heading, label: "insert", failures: &failures)
+        let beamWidth = CaretGeometry.beamPointWidth(backingScale: Double(window.backingScaleFactor))
+        check(abs(Double(beam.width) - beamWidth) < 0.2, "insert beam width \(beam.width) expected \(beamWidth)", failures: &failures)
         check(abs(beam.height - headEm) < 1.5, "insert beam height \(beam.height) expected \(headEm)", failures: &failures)
+        check(tv.caretIsBlinking, "insert blink missing", failures: &failures)
+        let endBeam = assertCaretGlyph(tv: tv, index: ns.length, font: body, label: "insert end", failures: &failures)
+        check(
+            CaretGeometry.heightFitsEm(caretHeight: Double(endBeam.height), emHeight: Double(bodyEm)),
+            "insert end caret height \(endBeam.height) is outside 1.3x em \(bodyEm)",
+            failures: &failures
+        )
         engine.mode = .normal
+        _ = assertCaretGlyph(tv: tv, index: 0, font: body, label: "body", failures: &failures)
+        check(!tv.caretIsBlinking, "normal blink", failures: &failures)
+        check(tv.caretIsVisible, "mode switch hid the caret", failures: &failures)
+
+        tv.textContainerInset = NSSize(width: 0, height: 0)
+        tv.layoutSubtreeIfNeeded()
 
         let lines = (0..<80).map { "line \($0) abcdefghij" }.joined(separator: "\n")
         engine.load(text: lines)
@@ -486,6 +520,126 @@ enum AppSmoke {
         let origin = scroll.contentView.bounds.origin.y
         let clip = scroll.contentView.bounds.height
         return "line \(line) col \(column) cursor \(cursor) bufferLines \(engine.buffer.lineCount) textLines \(textLines) visualLines \(tv.layoutAdapter.laidOutLineCount()) doc \(tv.frame.height) clip \(clip) origin \(origin)"
+    }
+
+    /// Measures the caret view, not the geometry helper. Height stays within 1.3× of
+    /// the font em box and the rect sits in that line's glyph bounds, on the baseline
+    /// reported by text segments.
+    @MainActor
+    private static func assertCaretGlyph(
+        tv: VimTextView,
+        index: Int,
+        font: NSFont,
+        label: String,
+        failures: inout [String]
+    ) -> NSRect {
+        let length = (tv.string as NSString).length
+        let utf16 = min(max(0, index), length)
+        tv.setSelectedRange(NSRange(location: utf16, length: 0))
+        tv.layoutSubtreeIfNeeded()
+        let caret = tv.renderedCaretRect()
+        let em = font.ascender - font.descender
+        check(
+            CaretGeometry.heightFitsEm(caretHeight: Double(caret.height), emHeight: Double(em)),
+            "\(label) caret height \(caret.height) is outside 1.3x em \(em)",
+            failures: &failures
+        )
+        guard let glyphs = tv.lineGlyphBounds(atUTF16: utf16) else {
+            failures.append("\(label) glyph bounds missing at \(utf16)")
+            return caret
+        }
+        let caretBox = CaretBox(
+            x: Double(caret.minX),
+            y: Double(caret.minY),
+            width: Double(caret.width),
+            height: Double(caret.height)
+        )
+        let glyphBox = CaretBox(
+            x: Double(glyphs.minX),
+            y: Double(glyphs.minY),
+            width: Double(glyphs.width),
+            height: Double(glyphs.height)
+        )
+        check(
+            CaretGeometry.sitsInGlyphBounds(caret: caretBox, glyph: glyphBox),
+            "\(label) caret \(caret) outside glyph bounds \(glyphs)",
+            failures: &failures
+        )
+        check(abs(glyphs.height - em) < 1.5, "\(label) glyph bounds height \(glyphs.height) expected em \(em)", failures: &failures)
+        if let baseline = segmentBaseline(tv, utf16: utf16, font: font) {
+            let top = baseline.y - font.ascender
+            let bottom = baseline.y - font.descender
+            check(
+                abs(caret.minY - top) < 2.5 && abs(caret.maxY - bottom) < 2.5,
+                "\(label) caret \(caret) missed baseline \(baseline.y) em top \(top) \(baseline.detail)",
+                failures: &failures
+            )
+        } else {
+            failures.append("\(label) caret baseline missing at \(utf16)")
+        }
+        check(tv.caretIsVisible, "\(label) caret hidden", failures: &failures)
+        if let stray = tv.visibleSystemCaretHeight(), stray > em * CaretGeometry.glyphHeightMultiple + 0.75 {
+            failures.append("\(label) system caret height \(stray) is outside 1.3x em \(em)")
+        }
+        return caret
+    }
+
+    /// Baseline in text-view coordinates from `enumerateTextSegments`, independent of
+    /// the line-fragment math the caret view uses. Past a trailing newline, the last
+    /// character's segment is the previous line; the caret belongs on the next one.
+    @MainActor
+    private static func segmentBaseline(_ tv: VimTextView, utf16: Int, font: NSFont) -> (y: CGFloat, detail: String)? {
+        guard let lm = tv.textLayoutManager else { return nil }
+        lm.ensureLayout(for: lm.documentRange)
+        let ns = tv.string as NSString
+        let length = ns.length
+        let index = min(max(0, utf16), length)
+        let doc = lm.documentRange.location
+        let probe = index < length ? index : max(0, length - 1)
+        guard length > 0, let start = lm.location(doc, offsetBy: probe) else { return nil }
+        let end = lm.location(start, offsetBy: 1) ?? lm.documentRange.endLocation
+        guard let range = NSTextRange(location: start, end: end) else { return nil }
+        var frame = CGRect.null
+        var position: CGFloat = 0
+        var found = false
+        lm.enumerateTextSegments(
+            in: range,
+            type: .standard,
+            options: [.rangeNotRequired, .upstreamAffinity]
+        ) { _, segmentFrame, baselinePosition, _ in
+            frame = segmentFrame
+            position = baselinePosition
+            found = true
+            return false
+        }
+        guard found else { return nil }
+        let origin = tv.textContainerOrigin
+        let detail = "segment \(frame) position \(position) origin \(origin)"
+        let trailingNewline = index >= length && (ns.character(at: length - 1) == 10 || ns.character(at: length - 1) == 13)
+        if trailingNewline {
+            let style = (tv.textStorage?.attribute(
+                .paragraphStyle,
+                at: length - 1,
+                effectiveRange: nil
+            ) as? NSParagraphStyle) ?? tv.defaultParagraphStyle ?? NSParagraphStyle.default
+            let baseline = CaretGeometry.extraLineBaseline(
+                previousLineMaxY: Double(frame.maxY),
+                ascender: Double(font.ascender),
+                descender: Double(font.descender),
+                leading: Double(font.leading),
+                lineHeightMultiple: Double(style.lineHeightMultiple),
+                lineSpacing: Double(style.lineSpacing),
+                minimumLineHeight: Double(style.minimumLineHeight),
+                maximumLineHeight: Double(style.maximumLineHeight)
+            )
+            return (origin.y + CGFloat(baseline), detail)
+        }
+        guard let baseline = CaretGeometry.resolvedBaseline(
+            segmentMinY: Double(frame.minY),
+            segmentHeight: Double(max(frame.height, 0.1)),
+            baselinePosition: Double(position)
+        ) else { return nil }
+        return (origin.y + CGFloat(baseline), detail)
     }
 
     @MainActor
@@ -932,6 +1086,261 @@ enum AppSmoke {
             return false
         }
         check(renamed, "save planned \(model.pendingOps.map(\.summary)) instead of a rename", failures: &failures)
+    }
+
+    /// Types into the file picker and live grep, then reads the fields the panel draws.
+    @MainActor
+    private static func checkPicker(failures: inout [String]) {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("quill-picker-\(UUID().uuidString)", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            try Data("alpha notes\n".utf8).write(to: root.appendingPathComponent("notes.md"))
+            try Data("beta ideas\n".utf8).write(to: root.appendingPathComponent("ideas.md"))
+        } catch {
+            failures.append("picker fixture: \(error.localizedDescription)")
+            return
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let model = AppModel()
+        model.open(url: root)
+        model.presentFilePicker()
+        // The index finishes on a task. NSHostingView does not redraw when that
+        // task assigns `picker`, so the panel is hosted only after it is open
+        // and replaced again after each edit.
+        let indexed = waitUntil(seconds: 2) { model.picker != nil }
+        guard indexed else {
+            failures.append("picker did not open (\(model.message))")
+            return
+        }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 640),
+            styleMask: [.titled, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil) }
+        // A new hosting view each time. Assigning rootView on the same
+        // NSHostingView leaves the previous caret in the hierarchy.
+        var host = showPicker(window, model)
+        let opened = waitUntil(seconds: 0.8) {
+            settle(host, window)
+            let hint = queryField(in: host)?.placeholderAttributedString?.string ?? ""
+            return hint == "File name"
+                && modeField(in: host)?.stringValue == "INSERT"
+                && (caretView(in: host)?.bounds.height ?? 0) >= 8
+        }
+        guard opened, let field = queryField(in: host) else {
+            failures.append("picker query field missing \(viewDump(host))")
+            return
+        }
+        let placeholder = field.placeholderAttributedString?.string ?? field.placeholderString ?? ""
+        check(field.stringValue.isEmpty, "picker query was \(field.stringValue) before typing", failures: &failures)
+        check(placeholder == "File name", "picker placeholder \(placeholder)", failures: &failures)
+        if let painted = field.textColor {
+            let drift = abs(brightness(painted) - brightness(model.theme.textColor))
+            let contrast = abs(brightness(painted) - brightness(model.theme.backgroundColor))
+            check(drift < 0.08, "picker query color drift \(drift)", failures: &failures)
+            check(contrast > 0.45, "picker query contrast \(contrast)", failures: &failures)
+        } else {
+            failures.append("picker query color missing")
+        }
+        check(field.font?.isFixedPitch == true, "picker query font \(field.font?.fontName ?? "")", failures: &failures)
+        let mode = modeField(in: host)?.stringValue ?? ""
+        check(mode == "INSERT", "picker mode \(mode)", failures: &failures)
+        guard let caretBefore = caretView(in: host) else {
+            failures.append("picker caret missing \(viewDump(host))")
+            return
+        }
+        check(caretBefore.bounds.height >= 8, "picker caret height \(caretBefore.bounds.height)", failures: &failures)
+        check(caretBefore.bounds.width <= 2, "picker caret width \(caretBefore.bounds.width)", failures: &failures)
+        let caretXBefore = caretBefore.convert(caretBefore.bounds, to: nil).minX
+
+        model.handlePicker(.character("n"))
+        model.handlePicker(.character("o"))
+        host = showPicker(window, model)
+        let filtered = waitUntil(seconds: 0.6) {
+            settle(host, window)
+            let titles = resultTitles(in: host)
+            return queryField(in: host)?.stringValue == "no"
+                && titles.contains { $0.contains("notes.md") }
+                && !titles.contains { $0.contains("ideas.md") }
+        }
+        let shown = queryField(in: host)?.stringValue ?? ""
+        let titles = resultTitles(in: host)
+        check(filtered && shown == "no", "picker query showed \(shown) results \(titles)", failures: &failures)
+        check(titles.contains { $0.contains("notes.md") }, "picker filter missing notes \(titles)", failures: &failures)
+        check(!titles.contains { $0.contains("ideas.md") }, "picker filter kept ideas \(titles)", failures: &failures)
+        if let notes = resultFields(in: host).first(where: { $0.stringValue.contains("notes.md") }) {
+            let matched = attrChannel(notes, utf16: 0)
+            let rest = attrChannel(notes, utf16: 2)
+            check(abs(matched - rest) > 0.12, "picker highlight \(matched) vs \(rest)", failures: &failures)
+        } else {
+            failures.append("picker highlight missing notes row \(titles)")
+        }
+        if let caretAfter = caretView(in: host) {
+            let caretXAfter = caretAfter.convert(caretAfter.bounds, to: nil).minX
+            check(caretXAfter > caretXBefore + 2, "picker caret stayed at \(caretXBefore) -> \(caretXAfter)", failures: &failures)
+        } else {
+            failures.append("picker caret disappeared while typing")
+        }
+
+        model.handlePicker(.escape)
+        host = showPicker(window, model)
+        let leftInsert = waitUntil(seconds: 0.4) {
+            settle(host, window)
+            return modeField(in: host)?.stringValue == "NORMAL" && caretView(in: host) == nil
+        }
+        let normal = modeField(in: host)?.stringValue ?? ""
+        check(leftInsert && normal == "NORMAL", "picker mode \(normal)", failures: &failures)
+        check(queryField(in: host)?.stringValue == "no", "picker query cleared in normal mode", failures: &failures)
+        check(caretView(in: host) == nil, "picker caret still drawn in normal mode", failures: &failures)
+
+        model.handlePicker(.character("q"))
+        model.presentGrepPicker()
+        host = showPicker(window, model)
+        let grepOpen = waitUntil(seconds: 0.4) {
+            settle(host, window)
+            let hint = queryField(in: host)?.placeholderAttributedString?.string ?? ""
+            return hint == "Pattern" && queryField(in: host)?.stringValue.isEmpty == true
+        }
+        check(grepOpen, "grep query field \(queryField(in: host)?.stringValue ?? "missing")", failures: &failures)
+        for character in "alpha" {
+            model.handlePicker(.character(character))
+        }
+        var seenGrepTick = model.pickerTick
+        host = showPicker(window, model)
+        let grepped = waitUntil(seconds: 1.5) {
+            if model.pickerTick != seenGrepTick {
+                seenGrepTick = model.pickerTick
+                host = showPicker(window, model)
+            } else {
+                settle(host, window)
+            }
+            let hits = resultTitles(in: host)
+            return queryField(in: host)?.stringValue == "alpha"
+                && hits.contains { $0.contains("notes.md") }
+                && !hits.contains { $0.contains("ideas.md") }
+        }
+        let grepShown = queryField(in: host)?.stringValue ?? ""
+        let hits = resultTitles(in: host)
+        check(grepped && grepShown == "alpha", "grep query showed \(grepShown) results \(hits)", failures: &failures)
+        check(hits.contains { $0.contains("notes.md") }, "grep results missing notes \(hits)", failures: &failures)
+        check(!hits.contains { $0.contains("ideas.md") }, "grep results kept ideas \(hits)", failures: &failures)
+        if let snippet = fields("quill.picker.snippet", in: host).first(where: { $0.stringValue.localizedCaseInsensitiveContains("alpha") }) {
+            let matched = attrChannel(snippet, utf16: 0)
+            let restIndex = (snippet.stringValue as NSString).length > 6 ? 6 : 1
+            let rest = attrChannel(snippet, utf16: restIndex)
+            check(abs(matched - rest) > 0.12, "grep highlight \(matched) vs \(rest) in \(snippet.stringValue)", failures: &failures)
+        } else {
+            failures.append("grep highlight missing snippet \(hits)")
+        }
+    }
+
+    /// A fresh hosting view shows the picker's current query, caret, and rows.
+    /// Reusing one view left the previous insert-mode caret in the tree.
+    @MainActor
+    private static func showPicker(_ window: NSWindow, _ model: AppModel) -> NSHostingView<PickerPanel> {
+        let host = NSHostingView(rootView: PickerPanel(model: model))
+        host.autoresizingMask = [.width, .height]
+        let bounds = window.contentView?.bounds ?? NSRect(x: 0, y: 0, width: 800, height: 640)
+        window.contentView = host
+        host.frame = bounds
+        settle(host, window)
+        return host
+    }
+
+    @MainActor
+    private static func settle(_ host: NSView, _ window: NSWindow) {
+        host.needsLayout = true
+        host.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+    }
+
+    @MainActor
+    private static func waitUntil(seconds: TimeInterval, _ ready: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        if ready() { return true }
+        while Date() < deadline {
+            // `.default` runs the main-actor task that opens the picker.
+            // `.common` returns immediately and that task never starts.
+            RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.05))
+            if ready() { return true }
+        }
+        return ready()
+    }
+
+    @MainActor
+    private static func queryField(in view: NSView) -> NSTextField? {
+        fields("quill.picker.query", in: view).first
+    }
+
+    @MainActor
+    private static func modeField(in view: NSView) -> NSTextField? {
+        fields("quill.picker.mode", in: view).first
+    }
+
+    @MainActor
+    private static func caretView(in view: NSView) -> NSView? {
+        findView({ $0.accessibilityIdentifier() == "quill.picker.caret" }, in: view)
+    }
+
+    @MainActor
+    private static func resultFields(in view: NSView) -> [NSTextField] {
+        fields("quill.picker.result", in: view)
+    }
+
+    @MainActor
+    private static func resultTitles(in view: NSView) -> [String] {
+        resultFields(in: view).map(\.stringValue)
+    }
+
+    @MainActor
+    private static func fields(_ identifier: String, in view: NSView) -> [NSTextField] {
+        var found: [NSTextField] = []
+        func walk(_ view: NSView) {
+            if let field = view as? NSTextField, field.accessibilityIdentifier() == identifier {
+                found.append(field)
+            }
+            for subview in view.subviews { walk(subview) }
+        }
+        walk(view)
+        return found
+    }
+
+    @MainActor
+    private static func findView(_ match: @MainActor (NSView) -> Bool, in view: NSView) -> NSView? {
+        if match(view) { return view }
+        for subview in view.subviews {
+            if let found = findView(match, in: subview) { return found }
+        }
+        return nil
+    }
+
+    @MainActor
+    private static func attrChannel(_ field: NSTextField, utf16: Int) -> CGFloat {
+        let text = field.attributedStringValue
+        guard utf16 >= 0, utf16 < text.length else { return -1 }
+        let color = text.attribute(.foregroundColor, at: utf16, effectiveRange: nil) as? NSColor
+        guard let color else { return -1 }
+        return brightness(color)
+    }
+
+    @MainActor
+    private static func viewDump(_ view: NSView) -> String {
+        var lines: [String] = []
+        func walk(_ view: NSView, depth: Int) {
+            guard lines.count < 40 else { return }
+            let id = view.accessibilityIdentifier()
+            let text = (view as? NSTextField)?.stringValue ?? ""
+            let pad = String(repeating: " ", count: depth)
+            lines.append("\(pad)\(type(of: view)) id=\(id) text=\(text)")
+            for subview in view.subviews { walk(subview, depth: depth + 1) }
+        }
+        walk(view, depth: 0)
+        return lines.joined(separator: " | ")
     }
 }
 
