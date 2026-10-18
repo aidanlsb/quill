@@ -11,9 +11,30 @@ final class TextKit2Layout: TextLayout, @unchecked Sendable {
     weak var textView: NSTextView?
     private var stickyColumn = -1
     private var stickyX: CGFloat = 0
+    /// Caret offset that `stickyX` was measured from, or the last vertical landing.
+    /// A different offset means the caret moved some other way, so the x is stale.
+    private var goalOrigin = -1
 
     nonisolated func displayColumn(of offset: Int, in buffer: TextBuffer) -> Int {
-        LogicalLineLayout.shared.displayColumn(of: offset, in: buffer)
+        nonisolated(unsafe) let buffer = buffer
+        return MainActor.assumeIsolated {
+            let range = screenRange(at: offset, in: buffer)
+            return max(0, offset - range.lowerBound)
+        }
+    }
+
+    nonisolated func screenLineStart(at offset: Int, in buffer: TextBuffer) -> Int {
+        nonisolated(unsafe) let buffer = buffer
+        return MainActor.assumeIsolated {
+            screenRange(at: offset, in: buffer).lowerBound
+        }
+    }
+
+    nonisolated func screenLineEnd(at offset: Int, in buffer: TextBuffer) -> Int {
+        nonisolated(unsafe) let buffer = buffer
+        return MainActor.assumeIsolated {
+            buffer.lastCursor(in: screenRange(at: offset, in: buffer))
+        }
     }
 
     nonisolated func position(
@@ -62,32 +83,88 @@ final class TextKit2Layout: TextLayout, @unchecked Sendable {
             // Viewport-only or non-monotonic layout cannot be trusted. A bad
             // index here is what pinned `j` on line 1.
             stickyColumn = -1
+            goalOrigin = -1
             return LogicalLineLayout.shared.position(
                 from: offset, displayLines: delta, preferredColumn: preferredColumn, in: buffer
             )
         }
-        var index = lines.lastIndex { line in
-            utf16 >= line.start && utf16 < line.start + line.length
-        } ?? lines.count - 1
-        if preferredColumn != stickyColumn {
+        var index = lineIndex(in: lines, utf16: utf16)
+        if TextBuffer.isEndColumn(preferredColumn) {
             stickyColumn = preferredColumn
-            let local = min(max(0, utf16 - lines[index].start), lines[index].length)
-            stickyX = lines[index].line.locationForCharacter(at: local).x
+            stickyX = .greatestFiniteMagnitude
+        } else if utf16 != goalOrigin || preferredColumn != stickyColumn {
+            stickyColumn = preferredColumn
+            let line = lines[index]
+            let local = min(max(0, utf16 - line.start), max(0, selectableCount(line, buffer: buffer) - 1))
+            stickyX = line.line.locationForCharacter(at: local).x
         }
         index = min(max(0, index + delta), lines.count - 1)
         let line = lines[index]
-        let rawHit = line.line.characterIndex(for: CGPoint(x: stickyX, y: line.line.typographicBounds.midY))
-        // `characterIndex(for:)` is either 0-based in the line or absolute in the
-        // fragment. Stay on this visual line either way — landing on `length`
-        // would be the first character of the next line.
-        let relative: Int
-        if line.localLocation > 0, rawHit >= line.localLocation {
-            relative = rawHit - line.localLocation
-        } else {
-            relative = rawHit
+        let hit = characterOffset(on: line, atX: stickyX, buffer: buffer)
+        let dest = buffer.clampedCursor(line.start + hit, normalMode: true)
+        goalOrigin = dest
+        return dest
+    }
+
+    private func screenRange(at offset: Int, in buffer: TextBuffer) -> Range<Int> {
+        guard let tv = textView, let lm = tv.textLayoutManager else {
+            return logicalRange(at: offset, in: buffer)
         }
-        let hit = min(max(0, relative), max(0, line.length - 1))
-        return buffer.clampedCursor(line.start + hit, normalMode: true)
+        let lines = enumerateVisualLines(layout: lm)
+        guard visualLinesAreUsable(lines, buffer: buffer) else {
+            return logicalRange(at: offset, in: buffer)
+        }
+        let utf16 = min(max(0, offset), (tv.string as NSString).length)
+        let line = lines[lineIndex(in: lines, utf16: utf16)]
+        let end = min(buffer.count, line.start + line.length)
+        return min(line.start, end)..<end
+    }
+
+    private func logicalRange(at offset: Int, in buffer: TextBuffer) -> Range<Int> {
+        if buffer.isEmpty { return 0..<0 }
+        let line = buffer.lineIndex(containing: offset)
+        return buffer.lineContentRange(at: line)
+    }
+
+    private func lineIndex(in lines: [VisualLine], utf16: Int) -> Int {
+        lines.lastIndex { line in
+            utf16 >= line.start && utf16 < line.start + line.length
+        } ?? lines.count - 1
+    }
+
+    /// How many UTF-16 units on this row can hold the caret. The trailing
+    /// newline is in the fragment range and is not one of them.
+    private func selectableCount(_ line: VisualLine, buffer: TextBuffer) -> Int {
+        var length = line.length
+        guard length > 1 else { return max(length, 1) }
+        let last = line.start + length - 1
+        guard last < buffer.count else { return length }
+        let ch = buffer.character(at: last)
+        if ch == "\n" || ch == "\r" {
+            length -= 1
+        }
+        return max(length, 1)
+    }
+
+    /// Index within the visual line whose glyph contains `x`.
+    /// `locationForCharacter(at:)` takes a 0-based index in the line, the same
+    /// index the caret uses. Binary search stays in that space, so a document
+    /// offset from `characterIndex(for:)` cannot clamp the hit to the row's end.
+    private func characterOffset(on line: VisualLine, atX x: CGFloat, buffer: TextBuffer) -> Int {
+        let last = selectableCount(line, buffer: buffer) - 1
+        if last <= 0 { return 0 }
+        var low = 0
+        var high = last
+        while low < high {
+            let mid = (low + high) / 2
+            let nextX = line.line.locationForCharacter(at: mid + 1).x
+            if nextX <= x {
+                low = mid + 1
+            } else {
+                high = mid
+            }
+        }
+        return low
     }
 
     private struct VisualLine {
@@ -95,8 +172,6 @@ final class TextKit2Layout: TextLayout, @unchecked Sendable {
         /// Document UTF-16 offset of the first character on this visual line.
         var start: Int
         var length: Int
-        /// `characterRange.location` inside the fragment. Zero for a paragraph's first visual line.
-        var localLocation: Int
     }
 
     /// How many visual lines TextKit actually produced. Smoke prints this
@@ -130,8 +205,7 @@ final class TextKit2Layout: TextLayout, @unchecked Sendable {
                 lines.append(VisualLine(
                     line: line,
                     start: fragmentStart + range.location,
-                    length: range.length,
-                    localLocation: range.location
+                    length: range.length
                 ))
             }
             return true

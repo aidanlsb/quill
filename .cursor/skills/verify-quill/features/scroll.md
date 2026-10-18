@@ -6,6 +6,7 @@ Trackpad scrolling moves the document. `j` walks display lines and the viewport 
 
 - `scroll-trackpad` moves the clip origin when the document is taller than the window.
 - `scroll-j` lands on line 40 after forty `j` motions from the top and moves the clip origin.
+- `scroll-wrap` moves `j` to the next screen row of a wrapped paragraph, and `k` back to the start. `$` stays on the first screen row. `g$` reaches the end of the paragraph.
 - `scroll-ends` puts `G` near the bottom and `gg` back at the top.
 - `scroll-half-page` moves Ctrl-d by the recorded half-page count and Ctrl-u back.
 
@@ -25,7 +26,7 @@ Preconditions:
 - The smoke is the drive. Do not send a separate `j` through `osascript`.
 
 - **Run the smoke.** Run `Scripts/verify-quill --bin "$bin"`. Exit code is 0.
-- **Read the motion result.** `artifacts/verify-quill/smoke.log` contains `quill smoke passed`. It does not contain `j stopped on line`, `j did not scroll`, `trackpad scroll`, `G left the viewport`, `gg left the viewport`, `Ctrl-d moved`, or `Ctrl-u moved`.
+- **Read the motion result.** `artifacts/verify-quill/smoke.log` contains `quill smoke passed`. It does not contain `j stopped on line`, `j did not scroll`, `trackpad scroll`, `G left the viewport`, `gg left the viewport`, `Ctrl-d moved`, `Ctrl-u moved`, `wrapped paragraph`, `j left the paragraph`, `j did not advance`, `j jumped`, `k returned`, `screen $`, or `g$`.
 - **On failure, read the measurements.** A `FAIL` line includes line, column, cursor, buffer line count, text-view line count, visual line count, document height, clip height, and origin.
 - **Proof.** Keep `artifacts/verify-quill/smoke.log`.
 

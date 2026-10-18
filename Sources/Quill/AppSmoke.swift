@@ -295,6 +295,82 @@ enum AppSmoke {
             "Ctrl-u moved to \(back) from \(after) (\(motionDiag(engine: engine, tv: tv, scroll: scroll)))",
             failures: &failures
         )
+
+        checkWrappedVertical(engine: engine, tv: tv, failures: &failures)
+    }
+
+    /// A long paragraph in a narrow column. `j` must step one screen row and
+    /// stay on that paragraph, not jump to its last character.
+    @MainActor
+    private static func checkWrappedVertical(engine: Engine, tv: VimTextView, failures: inout [String]) {
+        tv.columnWidth = 160
+        tv.updateInsets()
+        let paragraph = String(repeating: "abcdefghi ", count: 30)
+        engine.load(text: paragraph + "\nZ")
+        tv.syncFromEngine()
+        tv.layoutSubtreeIfNeeded()
+        tv.layoutAdapter.ensureFullLayout()
+        let visual = tv.layoutAdapter.laidOutLineCount()
+        check(visual >= 3, "wrapped paragraph laid out \(visual) visual lines", failures: &failures)
+
+        _ = engine.type("0")
+        let start = engine.cursor
+        let first = engine.handle(KeyEvent(.character("j")))
+        tv.applyResult(first)
+        let afterFirst = engine.cursor
+        check(
+            engine.buffer.lineIndex(containing: afterFirst) == 0,
+            "j left the paragraph at \(afterFirst)",
+            failures: &failures
+        )
+        check(afterFirst > start, "j did not advance from \(start)", failures: &failures)
+        let paragraphEnd = paragraph.utf16.count - 1
+        check(
+            afterFirst < paragraphEnd - 20,
+            "j jumped to \(afterFirst) near \(paragraphEnd)",
+            failures: &failures
+        )
+
+        let second = engine.handle(KeyEvent(.character("j")))
+        tv.applyResult(second)
+        check(
+            engine.buffer.lineIndex(containing: engine.cursor) == 0,
+            "j left the paragraph at \(engine.cursor)",
+            failures: &failures
+        )
+        check(engine.cursor > afterFirst, "j did not advance from \(afterFirst)", failures: &failures)
+        check(
+            engine.cursor < paragraphEnd - 20,
+            "j jumped to \(engine.cursor) near \(paragraphEnd)",
+            failures: &failures
+        )
+
+        _ = engine.type("gg")
+        let back = engine.handle(KeyEvent(.character("k")))
+        check(back.beep, "k returned by moving at the top", failures: &failures)
+
+        _ = engine.type("j")
+        let row = engine.cursor
+        _ = engine.type("k")
+        check(
+            engine.cursor == start,
+            "k returned to \(engine.cursor) instead of \(start) from \(row)",
+            failures: &failures
+        )
+
+        _ = engine.type("$")
+        let screenEnd = engine.cursor
+        check(
+            screenEnd > start && screenEnd < 80,
+            "screen $ landed at \(screenEnd)",
+            failures: &failures
+        )
+        _ = engine.type("g$")
+        check(
+            engine.cursor > 200,
+            "g$ landed at \(engine.cursor)",
+            failures: &failures
+        )
     }
 
     @MainActor

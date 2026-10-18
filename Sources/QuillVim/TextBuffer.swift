@@ -3,8 +3,11 @@
 public struct TextBuffer: Equatable {
     private var rope: Rope
     public var cursor: Int
-    /// Preferred display column for j/k (and `$`, which sets a huge value).
+    /// Buffer column remembered across vertical motion.
+    /// `endColumn` means the end of each row (`$`).
     public var preferredColumn: Int
+    /// Larger than any real line. Vertical motion treats this as the row's end.
+    public static let endColumn = Int.max / 4
     public private(set) var lineStarts: [Int]
     public private(set) var anchors: [Anchor]
 
@@ -166,6 +169,25 @@ public struct TextBuffer: Equatable {
     public func column(of offset: Int) -> Int {
         let line = lineIndex(containing: offset)
         return max(0, min(offset, count) - lineStarts[line])
+    }
+
+    public static func isEndColumn(_ column: Int) -> Bool {
+        column >= endColumn
+    }
+
+    /// Last caret offset in `range`. A trailing newline is not a place to sit.
+    public func lastCursor(in range: Range<Int>) -> Int {
+        if range.isEmpty { return range.lowerBound }
+        let start = max(0, range.lowerBound)
+        var end = min(range.upperBound, count)
+        if end > start {
+            let ch = character(at: end - 1)
+            if ch == "\n" || ch == "\r" {
+                end -= 1
+            }
+        }
+        if end <= start { return start }
+        return graphemeStart(before: end)
     }
 
     public func offset(line: Int, column: Int) -> Int {

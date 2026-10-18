@@ -27,6 +27,10 @@ public enum MotionKind: Equatable, Sendable {
     case right
     case down
     case up
+    /// Next buffer line. `gj`. Operators on `j` use this too.
+    case bufferDown
+    /// Previous buffer line. `gk`.
+    case bufferUp
     case word
     case wordEnd
     case wordBack
@@ -36,6 +40,10 @@ public enum MotionKind: Equatable, Sendable {
     case lineStart
     case firstNonBlank
     case lineEnd
+    /// `0` when lines wrap: the left edge of the screen row.
+    case screenLineStart
+    /// `$` when lines wrap: the last character of the screen row.
+    case screenLineEnd
     case fileStart
     case gotoLine
     case find(FindKind)
@@ -77,9 +85,15 @@ enum MotionResolver {
         case .right:
             return horizontal(buffer, delta: n, inclusive: false)
         case .down:
-            return vertical(buffer, layout: layout, delta: n, operatorPending: operatorPending)
+            if operatorPending { return bufferVertical(buffer, delta: n) }
+            return screenVertical(buffer, layout: layout, delta: n)
         case .up:
-            return vertical(buffer, layout: layout, delta: -n, operatorPending: operatorPending)
+            if operatorPending { return bufferVertical(buffer, delta: -n) }
+            return screenVertical(buffer, layout: layout, delta: -n)
+        case .bufferDown:
+            return bufferVertical(buffer, delta: n)
+        case .bufferUp:
+            return bufferVertical(buffer, delta: -n)
         case .word:
             return wordMotion(buffer, count: n, kind: .start, big: false, backward: false)
         case .wordEnd:
@@ -108,6 +122,19 @@ enum MotionResolver {
                 }
             }
             return .move(pos, inclusive: true)
+        case .screenLineStart:
+            return .move(layout.screenLineStart(at: buffer.cursor, in: buffer))
+        case .screenLineEnd:
+            var pos = buffer.cursor
+            if n > 1 {
+                pos = layout.position(
+                    from: pos,
+                    displayLines: n - 1,
+                    preferredColumn: TextBuffer.endColumn,
+                    in: buffer
+                )
+            }
+            return .move(layout.screenLineEnd(at: pos, in: buffer), inclusive: true)
         case .fileStart:
             let line = min(max(0, n - 1), buffer.lineCount - 1)
             return .move(buffer.firstNonBlank(onLine: line), linewise: true)
@@ -163,32 +190,12 @@ enum MotionResolver {
         return .move(dest, inclusive: inclusive)
     }
 
-    private static func vertical(
+    private static func screenVertical(
         _ buffer: TextBuffer,
         layout: any TextLayout,
-        delta: Int,
-        operatorPending: Bool
+        delta: Int
     ) -> ResolvedMotion {
         if buffer.isEmpty { return .fail(0) }
-        if operatorPending {
-            let line = buffer.lineIndex(containing: buffer.cursor)
-            let target = line + delta
-            if target < 0 || target >= buffer.lineCount {
-                return .fail(buffer.cursor)
-            }
-            let col = min(buffer.preferredColumn, Int.max / 4)
-            let preferred = col == Int.max / 4 ? Int.max / 4 : buffer.preferredColumn
-            let content = buffer.lineContentRange(at: target)
-            let pos: Int
-            if content.isEmpty {
-                pos = content.lowerBound
-            } else if preferred >= Int.max / 8 {
-                pos = content.upperBound - 1
-            } else {
-                pos = content.lowerBound + min(preferred, content.count - 1)
-            }
-            return .move(pos, linewise: true)
-        }
         let dest = layout.position(
             from: buffer.cursor,
             displayLines: delta,
@@ -197,6 +204,26 @@ enum MotionResolver {
         )
         if dest == buffer.cursor { return .fail(buffer.cursor) }
         return .move(dest)
+    }
+
+    /// Buffer-line vertical motion. Linewise, so `dj` and `gj` delete whole lines.
+    private static func bufferVertical(_ buffer: TextBuffer, delta: Int) -> ResolvedMotion {
+        if buffer.isEmpty { return .fail(0) }
+        let line = buffer.lineIndex(containing: buffer.cursor)
+        let target = line + delta
+        if target < 0 || target >= buffer.lineCount {
+            return .fail(buffer.cursor)
+        }
+        let content = buffer.lineContentRange(at: target)
+        let pos: Int
+        if content.isEmpty {
+            pos = content.lowerBound
+        } else if TextBuffer.isEndColumn(buffer.preferredColumn) {
+            pos = content.upperBound - 1
+        } else {
+            pos = content.lowerBound + min(buffer.preferredColumn, content.count - 1)
+        }
+        return .move(pos, linewise: true)
     }
 
     private enum WordSeek {
