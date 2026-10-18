@@ -913,7 +913,7 @@ enum AppSmoke {
     /// `NSHostingView` keeps the tree from its first `rootView`. Replacing it
     /// publishes the picker's current query, caret, and rows.
     @MainActor
-    private static func showPicker(_ host: NSHostingView<PickerPanel>, _ window: NSWindow, model: AppModel) {
+    private static func showPicker(_ host: NSHostingView<PickerPanel>, _ window: NSWindow, _ model: AppModel) {
         host.rootView = PickerPanel(model: model)
         settle(host, window)
     }
