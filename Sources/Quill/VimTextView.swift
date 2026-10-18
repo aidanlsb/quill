@@ -16,6 +16,7 @@ final class TextKit2Layout: TextLayout, @unchecked Sendable {
     private var goalOrigin = -1
 
     nonisolated func displayColumn(of offset: Int, in buffer: TextBuffer) -> Int {
+        // quill-concurrency: TextBuffer is not Sendable; assumeIsolated runs on the main actor.
         nonisolated(unsafe) let buffer = buffer
         return MainActor.assumeIsolated {
             let range = screenRange(at: offset, in: buffer)
@@ -24,6 +25,7 @@ final class TextKit2Layout: TextLayout, @unchecked Sendable {
     }
 
     nonisolated func screenLineStart(at offset: Int, in buffer: TextBuffer) -> Int {
+        // quill-concurrency: TextBuffer is not Sendable; assumeIsolated runs on the main actor.
         nonisolated(unsafe) let buffer = buffer
         return MainActor.assumeIsolated {
             screenRange(at: offset, in: buffer).lowerBound
@@ -31,6 +33,7 @@ final class TextKit2Layout: TextLayout, @unchecked Sendable {
     }
 
     nonisolated func screenLineEnd(at offset: Int, in buffer: TextBuffer) -> Int {
+        // quill-concurrency: TextBuffer is not Sendable; assumeIsolated runs on the main actor.
         nonisolated(unsafe) let buffer = buffer
         return MainActor.assumeIsolated {
             buffer.lastCursor(in: screenRange(at: offset, in: buffer))
