@@ -36,6 +36,17 @@ final class DirectoryListingTests: XCTestCase {
         XCTAssertTrue(ops.isEmpty)
     }
 
+    func testMarksRenameCreateAndDelete() {
+        let snap = original([("old.md", false), ("keep", true), ("gone.md", false)], ids: [1, 2, 3])
+        let marks = DirectoryListing.marks(original: snap, lines: [
+            ListingLine(name: "new.md", isDirectory: false, entryID: 1, sourcePath: parent.appendingPathComponent("old.md").path),
+            ListingLine(name: "keep", isDirectory: true, entryID: 2, sourcePath: parent.appendingPathComponent("keep").path),
+            ListingLine(name: "added.md", isDirectory: false),
+        ])
+        XCTAssertEqual(marks.rows, [.renamed(from: "old.md"), .unchanged, .created])
+        XCTAssertEqual(marks.deleted, ["gone.md"])
+    }
+
     func testRename() {
         let snap = original([("old.md", false)], ids: [7])
         let ops = DirectoryListing.plan(original: snap, lines: [

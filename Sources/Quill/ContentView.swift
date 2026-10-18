@@ -10,7 +10,7 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             EditorView(model: model, revision: model.revision)
-                .background(Color(model.theme.backgroundColor))
+                .background(Color(model.isDirectory ? model.theme.directoryBackground : model.theme.backgroundColor))
             if model.picker != nil {
                 PickerPanel(model: model)
             }
@@ -72,9 +72,9 @@ struct StatusBar: View {
         }
         .font(.system(size: 11, design: .monospaced))
         .foregroundStyle(Color(model.theme.dimColor))
-        .padding(.horizontal, QuillMetrics.sideGutter)
+        .padding(.horizontal, model.isDirectory ? 20 : QuillMetrics.sideGutter)
         .padding(.vertical, 10)
-        .background(Color(model.theme.backgroundColor))
+        .background(Color(model.isDirectory ? model.theme.directoryBackground : model.theme.backgroundColor))
     }
 }
 

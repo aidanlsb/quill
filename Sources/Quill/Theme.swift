@@ -47,6 +47,14 @@ enum QuillMetrics {
         }
         return NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
     }
+
+    /// Compact listing face. Smaller than the 16pt prose body so a directory is obviously not a note.
+    static let directoryFontSize: CGFloat = 13
+
+    @MainActor
+    static func directoryFont() -> NSFont {
+        monoFont(ofSize: directoryFontSize)
+    }
 }
 
 struct QuillTheme {
@@ -102,6 +110,11 @@ struct QuillTheme {
         )
     }
 
+    /// A cool shift of the prose background, so a directory is not the writing surface.
+    var directoryBackground: NSColor {
+        backgroundColor.blended(withFraction: 0.08, of: linkColor) ?? backgroundColor
+    }
+
     var bodyAttributes: [NSAttributedString.Key: Any] {
         let para = NSMutableParagraphStyle()
         para.lineHeightMultiple = lineHeight
@@ -117,18 +130,18 @@ struct QuillTheme {
 /// Hidden title bar, no toolbar, window fill matches the editor.
 enum WindowChrome {
     @MainActor
-    static func apply(theme: QuillTheme) {
-        NSApplication.shared.windows.forEach { apply(theme, to: $0) }
+    static func apply(theme: QuillTheme, background: NSColor? = nil) {
+        NSApplication.shared.windows.forEach { apply(theme, to: $0, background: background) }
     }
 
     @MainActor
-    static func apply(_ theme: QuillTheme, to window: NSWindow) {
+    static func apply(_ theme: QuillTheme, to window: NSWindow, background: NSColor? = nil) {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.titlebarSeparatorStyle = .none
         window.styleMask.insert(.fullSizeContentView)
         window.toolbar = nil
-        window.backgroundColor = theme.backgroundColor
+        window.backgroundColor = background ?? theme.backgroundColor
         window.isMovableByWindowBackground = true
     }
 }

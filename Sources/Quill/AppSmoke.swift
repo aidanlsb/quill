@@ -509,8 +509,23 @@ enum AppSmoke {
         tv.engine = model.engine
         model.engine.layout = tv.layoutAdapter
         scroll.documentView = tv
+        tv.isDirectoryBuffer = true
+        tv.directoryURL = root
+        tv.directorySnapshot = model.directorySnapshot
+        tv.applyTheme(model.theme, focus: false)
         tv.syncFromEngine()
         check(tv.string.contains("notes.md"), "text view did not show the directory listing", failures: &failures)
+        let styled = tv.textStorage.flatMap { storage -> NSFont? in
+            guard storage.length > 0 else { return nil }
+            return storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+        }
+        let font = styled ?? tv.font
+        let expected = QuillMetrics.directoryFont()
+        check(
+            font?.fontName == expected.fontName && abs((font?.pointSize ?? 0) - expected.pointSize) < 0.2,
+            "directory view font \(font?.fontName ?? "nil") \(font?.pointSize ?? 0)",
+            failures: &failures
+        )
 
         var guardSteps = 0
         while !model.engine.lineTextUnderCursor().hasPrefix("notes.md"), guardSteps < 10 {
