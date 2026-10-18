@@ -85,7 +85,7 @@ enum AppSmoke {
         )
         let helvetica = QuillTheme.current(fontFamily: "Helvetica")
         check(helvetica.bodyFont.familyName == "Helvetica", "font family \(helvetica.bodyFont.familyName ?? "")", failures: &failures)
-        if let decoded = try? QuillConfig.decode(Data(#"{"font":" Helvetica "}"#.utf8)) {
+        if let decoded = try? QuillConfig.decode(Data("font = \" Helvetica \"\n".utf8)) {
             check(decoded.font == "Helvetica", "font config \(decoded.font)", failures: &failures)
         } else {
             failures.append("font config decode")
