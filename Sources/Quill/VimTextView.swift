@@ -76,7 +76,10 @@ final class TextKit2Layout: TextLayout, @unchecked Sendable {
         let logical = LogicalLineLayout.shared.position(
             from: offset, displayLines: delta, preferredColumn: preferredColumn, in: buffer
         )
-        guard let tv = textView, let lm = tv.textLayoutManager else { return logical }
+        // A motion can run before the view catches the buffer (directory reload).
+        // Laying that stale string out and treating its rows as buffer offsets
+        // deletes the wrong span. Logical lines until the lengths agree.
+        guard viewMatches(buffer), let tv = textView, let lm = tv.textLayoutManager else { return logical }
         let utf16 = min(max(0, offset), (tv.string as NSString).length)
         guard let origin = visualLine(at: utf16, layout: lm) else {
             stickyColumn = -1
@@ -109,7 +112,7 @@ final class TextKit2Layout: TextLayout, @unchecked Sendable {
     }
 
     private func screenRange(at offset: Int, in buffer: TextBuffer) -> Range<Int> {
-        guard let tv = textView, let lm = tv.textLayoutManager else {
+        guard viewMatches(buffer), let tv = textView, let lm = tv.textLayoutManager else {
             return logicalRange(at: offset, in: buffer)
         }
         let utf16 = min(max(0, offset), (tv.string as NSString).length)
@@ -161,6 +164,14 @@ final class TextKit2Layout: TextLayout, @unchecked Sendable {
             ))
         }
         return rows
+    }
+
+    /// Screen rows belong to the view only while it still holds this buffer.
+    /// A directory reload updates the engine first; the previous note's line
+    /// breaks must not be applied to the listing.
+    private func viewMatches(_ buffer: TextBuffer) -> Bool {
+        guard let tv = textView else { return false }
+        return (tv.string as NSString).length == buffer.count
     }
 
     /// Lays out only the fragment that contains `utf16`. `textLayoutFragment(for:)`
