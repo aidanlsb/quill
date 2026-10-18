@@ -23,9 +23,11 @@ Scripts/verify-quill --bin "$bin"
 
 Ready means the process started by this command has exited 0 and `artifacts/verify-quill/smoke.log` contains the line `quill smoke passed`. A process that is merely alive is not ready: without `QUILL_SMOKE=1` the app stays open, and with it the app exits on purpose.
 
+Smoke starts from `applicationDidFinishLaunching`, not from the window's `onAppear`. Launching the binary from a background shell does not activate the app, so SwiftUI may never show a window and `onAppear` never runs. The main thread then sits in the run loop and prints nothing. `QUILL_SMOKE=1` also activates the app and, at `applicationWillFinishLaunching`, arms a watchdog. If the process has not exited after 20 seconds, the watchdog prints whether launch finished, whether a model was attached, whether `onAppear` ran, whether smoke started, the window count, and the activation policy, then exits 2.
+
 Each invocation is its own process. The directory fixture uses a new temporary directory, so two smokes can run at once. Do not point this at `/Applications/Quill.app` unless that bundle is the binary you just built.
 
-There is no server to keep. Teardown is the process exiting. If it is still alive after 30 seconds, the script kills that pid and fails.
+There is no server to keep. Teardown is the process exiting. The app watchdog exits 2 before this script's 30 second kill, so `smoke.log` contains that diagnostic. If the process is still alive after 30 seconds, the script kills that pid and fails.
 
 ## Doctor
 
@@ -44,7 +46,7 @@ A five-second launch without `QUILL_SMOKE` is a separate check already in `.gith
 
 ## Drive
 
-`Scripts/verify-quill` sets `QUILL_SMOKE=1` and runs the binary in the foreground. The smoke builds the same `KeyEvent` values `VimTextView.keyDown` builds and calls `engine.handle`. It does not post OS keyboard events. It does measure the real `NSTextView` caret cell, the clip-view origin, and an `AppModel` directory opened from a temporary folder.
+`Scripts/verify-quill` sets `QUILL_SMOKE=1` and runs the binary in the foreground. The smoke builds the same `KeyEvent` values `VimTextView.keyDown` builds and calls `engine.handle`. It does not post OS keyboard events. It does measure the real `NSTextView` caret cell, the clip-view origin, and an `AppModel` directory opened from a temporary folder. The directory check also reads that text view's font, insets, and background, so the listing has to be monospaced and wider than the writing column.
 
 One run covers every feature in `features/`. Read the feature file before treating a passing log as proof of that feature. A log that contains `FAIL` is a failure even if you only cared about one feature.
 

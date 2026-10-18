@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import QuillFS
 import QuillMarkdown
 import QuillVim
 
@@ -11,9 +12,33 @@ final class TextKit2Layout: TextLayout, @unchecked Sendable {
     weak var textView: NSTextView?
     private var stickyColumn = -1
     private var stickyX: CGFloat = 0
+    /// Caret offset that `stickyX` was measured from, or the last vertical landing.
+    /// A different offset means the caret moved some other way, so the x is stale.
+    private var goalOrigin = -1
 
     nonisolated func displayColumn(of offset: Int, in buffer: TextBuffer) -> Int {
-        LogicalLineLayout.shared.displayColumn(of: offset, in: buffer)
+        // quill-concurrency: TextBuffer is not Sendable; the engine calls this synchronously on the main thread.
+        nonisolated(unsafe) let buffer = buffer
+        return MainActor.assumeIsolated {
+            let range = screenRange(at: offset, in: buffer)
+            return max(0, offset - range.lowerBound)
+        }
+    }
+
+    nonisolated func screenLineStart(at offset: Int, in buffer: TextBuffer) -> Int {
+        // quill-concurrency: TextBuffer is not Sendable; the engine calls this synchronously on the main thread.
+        nonisolated(unsafe) let buffer = buffer
+        return MainActor.assumeIsolated {
+            screenRange(at: offset, in: buffer).lowerBound
+        }
+    }
+
+    nonisolated func screenLineEnd(at offset: Int, in buffer: TextBuffer) -> Int {
+        // quill-concurrency: TextBuffer is not Sendable; the engine calls this synchronously on the main thread.
+        nonisolated(unsafe) let buffer = buffer
+        return MainActor.assumeIsolated {
+            buffer.lastCursor(in: screenRange(at: offset, in: buffer))
+        }
     }
 
     nonisolated func position(
@@ -62,32 +87,88 @@ final class TextKit2Layout: TextLayout, @unchecked Sendable {
             // Viewport-only or non-monotonic layout cannot be trusted. A bad
             // index here is what pinned `j` on line 1.
             stickyColumn = -1
+            goalOrigin = -1
             return LogicalLineLayout.shared.position(
                 from: offset, displayLines: delta, preferredColumn: preferredColumn, in: buffer
             )
         }
-        var index = lines.lastIndex { line in
-            utf16 >= line.start && utf16 < line.start + line.length
-        } ?? lines.count - 1
-        if preferredColumn != stickyColumn {
+        var index = lineIndex(in: lines, utf16: utf16)
+        if TextBuffer.isEndColumn(preferredColumn) {
             stickyColumn = preferredColumn
-            let local = min(max(0, utf16 - lines[index].start), lines[index].length)
-            stickyX = lines[index].line.locationForCharacter(at: local).x
+            stickyX = .greatestFiniteMagnitude
+        } else if utf16 != goalOrigin || preferredColumn != stickyColumn {
+            stickyColumn = preferredColumn
+            let line = lines[index]
+            let local = min(max(0, utf16 - line.start), max(0, selectableCount(line, buffer: buffer) - 1))
+            stickyX = line.line.locationForCharacter(at: local).x
         }
         index = min(max(0, index + delta), lines.count - 1)
         let line = lines[index]
-        let rawHit = line.line.characterIndex(for: CGPoint(x: stickyX, y: line.line.typographicBounds.midY))
-        // `characterIndex(for:)` is either 0-based in the line or absolute in the
-        // fragment. Stay on this visual line either way — landing on `length`
-        // would be the first character of the next line.
-        let relative: Int
-        if line.localLocation > 0, rawHit >= line.localLocation {
-            relative = rawHit - line.localLocation
-        } else {
-            relative = rawHit
+        let hit = characterOffset(on: line, atX: stickyX, buffer: buffer)
+        let dest = buffer.clampedCursor(line.start + hit, normalMode: true)
+        goalOrigin = dest
+        return dest
+    }
+
+    private func screenRange(at offset: Int, in buffer: TextBuffer) -> Range<Int> {
+        guard let tv = textView, let lm = tv.textLayoutManager else {
+            return logicalRange(at: offset, in: buffer)
         }
-        let hit = min(max(0, relative), max(0, line.length - 1))
-        return buffer.clampedCursor(line.start + hit, normalMode: true)
+        let lines = enumerateVisualLines(layout: lm)
+        guard visualLinesAreUsable(lines, buffer: buffer) else {
+            return logicalRange(at: offset, in: buffer)
+        }
+        let utf16 = min(max(0, offset), (tv.string as NSString).length)
+        let line = lines[lineIndex(in: lines, utf16: utf16)]
+        let end = min(buffer.count, line.start + line.length)
+        return min(line.start, end)..<end
+    }
+
+    private func logicalRange(at offset: Int, in buffer: TextBuffer) -> Range<Int> {
+        if buffer.isEmpty { return 0..<0 }
+        let line = buffer.lineIndex(containing: offset)
+        return buffer.lineContentRange(at: line)
+    }
+
+    private func lineIndex(in lines: [VisualLine], utf16: Int) -> Int {
+        lines.lastIndex { line in
+            utf16 >= line.start && utf16 < line.start + line.length
+        } ?? lines.count - 1
+    }
+
+    /// How many UTF-16 units on this row can hold the caret. The trailing
+    /// newline is in the fragment range and is not one of them.
+    private func selectableCount(_ line: VisualLine, buffer: TextBuffer) -> Int {
+        var length = line.length
+        guard length > 1 else { return max(length, 1) }
+        let last = line.start + length - 1
+        guard last < buffer.count else { return length }
+        let ch = buffer.character(at: last)
+        if ch == "\n" || ch == "\r" {
+            length -= 1
+        }
+        return max(length, 1)
+    }
+
+    /// Index within the visual line whose glyph contains `x`.
+    /// `locationForCharacter(at:)` takes a 0-based index in the line, the same
+    /// index the caret uses. Binary search stays in that space, so a document
+    /// offset from `characterIndex(for:)` cannot clamp the hit to the row's end.
+    private func characterOffset(on line: VisualLine, atX x: CGFloat, buffer: TextBuffer) -> Int {
+        let last = selectableCount(line, buffer: buffer) - 1
+        if last <= 0 { return 0 }
+        var low = 0
+        var high = last
+        while low < high {
+            let mid = (low + high) / 2
+            let nextX = line.line.locationForCharacter(at: mid + 1).x
+            if nextX <= x {
+                low = mid + 1
+            } else {
+                high = mid
+            }
+        }
+        return low
     }
 
     private struct VisualLine {
@@ -95,8 +176,6 @@ final class TextKit2Layout: TextLayout, @unchecked Sendable {
         /// Document UTF-16 offset of the first character on this visual line.
         var start: Int
         var length: Int
-        /// `characterRange.location` inside the fragment. Zero for a paragraph's first visual line.
-        var localLocation: Int
     }
 
     /// How many visual lines TextKit actually produced. Smoke prints this
@@ -130,8 +209,7 @@ final class TextKit2Layout: TextLayout, @unchecked Sendable {
                 lines.append(VisualLine(
                     line: line,
                     start: fragmentStart + range.location,
-                    length: range.length,
-                    localLocation: range.location
+                    length: range.length
                 ))
             }
             return true
@@ -167,6 +245,10 @@ final class VimTextView: NSTextView {
     var layoutAdapter = TextKit2Layout()
     weak var vimDelegate: VimTextViewDelegate?
     var isDirectoryBuffer = false
+    var directoryURL: URL?
+    var directoryEntries: [DirEntry] = []
+    var directoryHeaderText = ""
+    var directoryGhostHeight: CGFloat = 0
     var focusMode = false
     var columnWidth: CGFloat = 640
     var theme = QuillTheme.current()
@@ -212,22 +294,33 @@ final class VimTextView: NSTextView {
     func applyTheme(_ theme: QuillTheme, focus: Bool) {
         self.theme = theme
         self.focusMode = focus
-        backgroundColor = theme.backgroundColor
+        let directory = isDirectoryBuffer
+        let painted = directory ? theme.directoryBackgroundColor : theme.backgroundColor
+        backgroundColor = painted
         // TextKit 2 draws NSTextInsertionIndicator from this color. Keep it clear;
-        // CaretChrome is the cursor, tinted to match the selection.
+        // CaretChrome is the cursor, tinted to match the painted background.
         insertionPointColor = .clear
-        let accent = CaretInk.accent(for: theme.backgroundColor)
+        let accent = CaretInk.accent(for: painted)
         selectedTextAttributes = [
             .backgroundColor: accent.withAlphaComponent(0.22),
             .foregroundColor: theme.textColor,
         ]
         defaultParagraphStyle = {
             let p = NSMutableParagraphStyle()
-            p.lineHeightMultiple = theme.lineHeight
+            if directory {
+                p.alignment = .left
+                p.lineHeightMultiple = QuillMetrics.directoryLineHeight
+            } else {
+                p.lineHeightMultiple = theme.lineHeight
+            }
             return p
         }()
-        font = theme.bodyFont
+        font = directory ? theme.directoryFont : theme.bodyFont
         textColor = theme.textColor
+        if !directory {
+            directoryGhostHeight = 0
+            directoryHeaderText = ""
+        }
         updateInsets()
         queueRestyle()
         placeCaret()
@@ -235,7 +328,14 @@ final class VimTextView: NSTextView {
 
     func updateInsets() {
         guard let clip = enclosingScrollView?.contentView else { return }
-        let width = clip.bounds.width
+        let width = max(clip.bounds.width, 1)
+        if isDirectoryBuffer {
+            let inset = QuillMetrics.directoryHorizontalInset
+            let vertical = QuillMetrics.directoryHeaderHeight + QuillMetrics.directoryHeaderGap
+            textContainerInset = NSSize(width: inset, height: vertical)
+            textContainer?.size = NSSize(width: max(1, width - inset * 2), height: CGFloat.greatestFiniteMagnitude)
+            return
+        }
         let vertical = focusMode ? QuillMetrics.focusVerticalInset : QuillMetrics.verticalInset
         let span = QuillMetrics.columnSpan(width: width, column: columnWidth)
         textContainerInset = NSSize(width: span.inset, height: vertical)
@@ -352,12 +452,29 @@ final class VimTextView: NSTextView {
         placeCaret(forcingLayout: false)
     }
 
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard isDirectoryBuffer, engine != nil else { return }
+        drawDirectoryDecorations()
+    }
+
+    override func drawBackground(in rect: NSRect) {
+        guard isDirectoryBuffer else {
+            super.drawBackground(in: rect)
+            return
+        }
+        drawDirectoryBackground(in: rect)
+    }
+
     override func setSelectedRange(
         _ charRange: NSRange,
         affinity: NSSelectionAffinity,
         stillSelecting stillSelectingFlag: Bool
     ) {
         super.setSelectedRange(charRange, affinity: affinity, stillSelecting: stillSelectingFlag)
+        if isDirectoryBuffer {
+            needsDisplay = true
+        }
         placeCaret()
     }
 
@@ -445,12 +562,24 @@ final class VimTextView: NSTextView {
     }
 
     func queueRestyle(dirty: Int? = nil) {
+        if isDirectoryBuffer {
+            directoryGhostHeight = restyleDirectoryBuffer()
+            needsDisplay = true
+            noteContentSizeChanged()
+            return
+        }
         guard !restyleQueued else { return }
         restyleQueued = true
         let dirty = dirty
         Task { @MainActor [weak self] in
             guard let self, let storage = self.textStorage else { return }
             self.restyleQueued = false
+            if self.isDirectoryBuffer {
+                self.directoryGhostHeight = self.restyleDirectoryBuffer()
+                self.needsDisplay = true
+                self.noteContentSizeChanged()
+                return
+            }
             self.tokenizer.replace(text: storage.string, dirtyUTF16: dirty ?? 0)
             MarkdownStyler.restyle(
                 storage,
@@ -527,9 +656,10 @@ final class VimTextView: NSTextView {
         let index = caretUTF16()
         guard let cell = caretRect(forcingLayout: forcingLayout) else { return }
         let show = window == nil || window?.firstResponder === self || window?.firstResponder == nil
+        let painted = isDirectoryBuffer ? theme.directoryBackgroundColor : theme.backgroundColor
         if caretChrome.superview === self,
            caretChrome.isHidden == !show,
-           placedCaretMatches(cell, index: index) {
+           placedCaretMatches(cell, index: index, painted: painted) {
             return
         }
         if caretChrome.superview !== self {
@@ -538,14 +668,14 @@ final class VimTextView: NSTextView {
             orderingCaret = false
         }
         caretChrome.frame = cell
-        let accent = CaretInk.accent(for: theme.backgroundColor)
+        let accent = CaretInk.accent(for: painted)
         caretChrome.accent = accent
         caretChrome.blockAlpha = CGFloat(CaretGeometry.blockFillAlpha)
         let shapeIsBeam = engine.mode == .insert
         caretChrome.kind = shapeIsBeam ? .beam : .block
         if shapeIsBeam {
             caretChrome.glyph = nil
-        } else if let redraw = CaretInk.glyphRedraw(text: theme.textColor, accent: accent, background: theme.backgroundColor),
+        } else if let redraw = CaretInk.glyphRedraw(text: theme.textColor, accent: accent, background: painted),
                   let glyph = caretGlyph(atUTF16: index) {
             caretChrome.blockAlpha = 0.86
             caretChrome.glyph = glyph
@@ -559,13 +689,19 @@ final class VimTextView: NSTextView {
         caretChrome.setBlinking(shapeIsBeam && show)
         placedMode = engine.mode
         placedIndex = index
+        placedPainted = painted.caretRGB()
     }
 
     private var placedMode: Mode?
     private var placedIndex = -1
+    private var placedPainted: CaretRGB?
 
-    private func placedCaretMatches(_ cell: NSRect, index: Int) -> Bool {
+    private func placedCaretMatches(_ cell: NSRect, index: Int, painted: NSColor) -> Bool {
         guard placedMode == engine.mode, placedIndex == index else { return false }
+        guard let previous = placedPainted, let next = painted.caretRGB() else { return false }
+        guard abs(previous.r - next.r) < 0.01,
+              abs(previous.g - next.g) < 0.01,
+              abs(previous.b - next.b) < 0.01 else { return false }
         let frame = caretChrome.frame
         return abs(frame.minX - cell.minX) < 0.4
             && abs(frame.minY - cell.minY) < 0.4
@@ -685,6 +821,9 @@ final class VimTextView: NSTextView {
     }
 
     private func rowHeight() -> CGFloat {
+        if isDirectoryBuffer {
+            return QuillMetrics.directoryRowHeight(for: font ?? theme.directoryFont)
+        }
         let caretFont = font ?? theme.bodyFont
         return max(1, (caretFont.ascender - caretFont.descender) * theme.lineHeight)
     }
@@ -699,7 +838,8 @@ final class VimTextView: NSTextView {
             layoutAdapter.ensureFullLayout()
             used = (textLayoutManager?.usageBoundsForTextContainer.height ?? 0) + inset
         }
-        return max(clip, ceil(used), ceil(estimated))
+        let ghosts = isDirectoryBuffer ? directoryGhostHeight : 0
+        return max(clip, ceil(used), ceil(estimated)) + ghosts
     }
 
     private func font(atUTF16 index: Int) -> NSFont {
@@ -899,6 +1039,10 @@ struct EditorView: NSViewRepresentable {
         scroll.documentView = tv
         context.coordinator.textView = tv
         context.coordinator.model = model
+        tv.columnWidth = model.theme.columnWidth
+        tv.isDirectoryBuffer = model.isDirectory
+        tv.directoryURL = model.isDirectory ? model.fileURL : nil
+        tv.directoryEntries = model.isDirectory ? (model.directorySnapshot?.entries ?? []) : []
         tv.applyTheme(model.theme, focus: model.focusMode)
         tv.syncFromEngine()
         context.coordinator.syncedRevision = revision
@@ -910,12 +1054,26 @@ struct EditorView: NSViewRepresentable {
         tv.engine = model.engine
         _ = revision
         tv.columnWidth = model.theme.columnWidth
+        let entries = model.isDirectory ? (model.directorySnapshot?.entries ?? []) : []
+        let url = model.isDirectory ? model.fileURL : nil
+        let directoryChanged = tv.isDirectoryBuffer != model.isDirectory
+            || tv.directoryURL != url
+            || tv.directoryEntries != entries
         tv.isDirectoryBuffer = model.isDirectory
+        tv.directoryURL = url
+        tv.directoryEntries = entries
         let diagnostics = model.nsDiagnosticRanges()
         let diagnosticsChanged = tv.diagnosticRanges.map(\.0) != diagnostics.map(\.0)
         if diagnosticsChanged { tv.diagnosticRanges = diagnostics }
         WindowChrome.apply(theme: model.theme)
-        if tv.appliedThemeID != model.themeIdentity || tv.appliedFocus != model.focusMode {
+        if model.isDirectory {
+            scroll.drawsBackground = true
+            scroll.backgroundColor = model.theme.directoryBackgroundColor
+            tv.window?.backgroundColor = model.theme.directoryBackgroundColor
+        } else {
+            scroll.drawsBackground = false
+        }
+        if tv.appliedThemeID != model.themeIdentity || tv.appliedFocus != model.focusMode || directoryChanged {
             tv.applyTheme(model.theme, focus: model.focusMode)
             tv.appliedThemeID = model.themeIdentity
             tv.appliedFocus = model.focusMode

@@ -117,13 +117,14 @@ extension NSColor {
         self.init(srgbRed: rgb.r, green: rgb.g, blue: rgb.b, alpha: 1)
     }
 
-    fileprivate func caretRGB() -> CaretRGB? {
+    func caretRGB() -> CaretRGB? {
         guard let rgb = usingColorSpace(.sRGB) else { return nil }
         var red: CGFloat = 0
         var green: CGFloat = 0
         var blue: CGFloat = 0
         var alpha: CGFloat = 0
-        guard rgb.getRed(&red, green: &green, blue: &blue, alpha: &alpha) else { return nil }
+        // `getRed` fills the components and returns Void. An sRGB color always has them.
+        rgb.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
         return CaretRGB(r: Double(red), g: Double(green), b: Double(blue))
     }
 }

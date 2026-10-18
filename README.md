@@ -70,7 +70,7 @@ Own engine: parse **count → operator → motion or text object**. Motions retu
 
 **Modes:** normal, insert, visual, visual-line.
 
-**Motions:** `h j k l` (`j`/`k` are display-line in the app, buffer-line when used as operators), `w b e W B E`, `0 ^ $`, `gg G`, `f t F T ; ,`, `{ }`, `( )`, `/ ? n N`.
+**Motions:** `h j k l` (`j`/`k` follow screen rows and keep the screen column; `gj`/`gk` are buffer lines), `w b e W B E`, `0 ^ $` (`0`/`$` are the screen row; `g0`/`g$` are the buffer line), `gg G`, `f t F T ; ,`, `{ }`, `( )`, `/ ? n N`.
 
 **Operators:** `d c y > <` with counts and any motion. `cw` behaves like `ce`. Inclusive/exclusive and linewise/charwise are implemented, including the exclusive-motion-at-column-0 exception.
 
@@ -84,7 +84,7 @@ Own engine: parse **count → operator → motion or text object**. Motions retu
 
 **Other:** `gd` (definition / wikilink), `gr` (references), `-` (parent directory), **leader** (Space by default).
 
-`j`/`k` as operators stay linewise (vim `dj`). In normal/visual they follow wrapped display lines.
+`j`/`k` in normal and visual mode move by screen row and keep the horizontal position, including across a short row. `gj`/`gk` move by buffer line. `0`/`$` are the screen row; `g0`/`g$` are the buffer line. Operators stay on buffer lines (`dj`). `d$` deletes to the end of the screen row.
 
 ## Directory buffers (oil-style)
 

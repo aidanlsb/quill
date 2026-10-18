@@ -132,4 +132,108 @@ final class MotionTests: XCTestCase {
         e.type("k")
         XCTAssertEqual(e.cursor, 0)
     }
+
+    func testDisplayLineJKKeepsScreenColumn() {
+        let layout = WrapLayout(width: 4)
+        // abcd / efgh / ij
+        let e = vim("a█bcdefghij", keys: "jj", layout: layout)
+        XCTAssertEqual(e.cursor, 9)
+        e.type("k")
+        XCTAssertEqual(e.cursor, 5)
+        e.type("k")
+        XCTAssertEqual(e.cursor, 1)
+    }
+
+    func testJFromContinuationStartStaysOnTheLeftEdge() {
+        let layout = WrapLayout(width: 4)
+        // 4l sits on the left edge of the second screen row. The buffer column
+        // is 4, which used to clamp to the last cell of the next row.
+        let e = vim("█abcdefghij", keys: "4lj", layout: layout)
+        XCTAssertEqual(e.cursor, 8)
+        e.type("k")
+        XCTAssertEqual(e.cursor, 4)
+        e.type("k")
+        XCTAssertEqual(e.cursor, 0)
+    }
+
+    func testJFromShortLineRemembersTheScreenColumn() {
+        let layout = WrapLayout(width: 4)
+        // Column 4 is the left edge. j lands on the only character of the next
+        // line and must not turn the following j into "end of the line".
+        let e = vim("█abcdef\nX\nabcdefgh", keys: "4ljj", layout: layout)
+        XCTAssertEqual(e.cursor, 9)
+    }
+
+    func testKFromNextParagraphKeepsTheScreenColumn() {
+        let layout = WrapLayout(width: 4)
+        let e = vim("█abcdef\nXYZW", keys: "4ljk", layout: layout)
+        XCTAssertEqual(e.cursor, 4)
+    }
+
+    func testKOnPreviousParagraphLastRow() {
+        let layout = WrapLayout(width: 4)
+        let e = vim("abcdefghij\n█X", keys: "k", layout: layout)
+        XCTAssertEqual(e.cursor, 8)
+    }
+
+    func testShortRowDoesNotForgetTheColumn() {
+        let layout = WrapLayout(width: 4)
+        let e = vim("ab█cd\nxy\nABCDEFGH", keys: "jj", layout: layout)
+        XCTAssertEqual(e.cursor, 10)
+        e.type("kk")
+        XCTAssertEqual(e.cursor, 2)
+    }
+
+    func testScreenDollarAndZero() {
+        let layout = WrapLayout(width: 4)
+        let e = vim("█abcdefghij", keys: "$", layout: layout)
+        XCTAssertEqual(e.cursor, 3)
+        e.type("j")
+        XCTAssertEqual(e.cursor, 7)
+        e.type("j")
+        XCTAssertEqual(e.cursor, 9)
+        e.type("0")
+        XCTAssertEqual(e.cursor, 8)
+        e.type("g0")
+        XCTAssertEqual(e.cursor, 0)
+        e.type("g$")
+        XCTAssertEqual(e.cursor, 9)
+    }
+
+    func testDollarThenJHugsTheEnd() {
+        XCTAssertVim("█abc\nxyz", keys: "$j", "abc\nxy█z")
+    }
+
+    func testBufferLineMotions() {
+        let layout = WrapLayout(width: 4)
+        let down = vim("█abcdefghij\nXYZ", keys: "gj", layout: layout)
+        XCTAssertEqual(down.cursor, 11)
+        let column = vim("a█bcdefghij\nXYZW", keys: "gj", layout: layout)
+        XCTAssertEqual(column.cursor, 12)
+        let up = vim("abcdef█ghij", keys: "g0", layout: layout)
+        XCTAssertEqual(up.cursor, 0)
+        up.type("g$")
+        XCTAssertEqual(up.cursor, 9)
+    }
+
+    func testDjStaysOnBufferLines() {
+        let layout = WrapLayout(width: 4)
+        let e = vim("█abcdefghij\nXYZ\nQ", keys: "dj", layout: layout)
+        XCTAssertEqual(e.text, "Q")
+        XCTAssertEqual(e.cursor, 0)
+    }
+
+    func testDeleteToScreenEnd() {
+        let layout = WrapLayout(width: 4)
+        let e = vim("█abcdefghij", keys: "d$", layout: layout)
+        XCTAssertEqual(e.text, "efghij")
+        XCTAssertEqual(e.cursor, 0)
+    }
+
+    func testInsertDownKeepsTheColumnAcrossAShortLine() {
+        let layout = WrapLayout(width: 4)
+        let e = vim("ab█cd\nxy\nABCDEFGH", keys: "i<Down><Down>", layout: layout)
+        XCTAssertEqual(e.mode, .insert)
+        XCTAssertEqual(e.cursor, 10)
+    }
 }

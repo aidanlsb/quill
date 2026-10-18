@@ -111,7 +111,7 @@ public final class Engine {
 
     public func load(text: String, cursor: Int = 0) {
         buffer = TextBuffer(text: text, cursor: cursor)
-        buffer.preferredColumn = buffer.column(of: buffer.cursor)
+        capturePreferredColumn()
         mode = .normal
         isModified = false
         undoStack = []
@@ -152,7 +152,7 @@ public final class Engine {
         replace(range, with: text)
         let width = buffer.measure(text)
         buffer.cursor = buffer.clampedCursor(range.lowerBound + width, normalMode: mode != .insert)
-        buffer.preferredColumn = buffer.column(of: buffer.cursor)
+        capturePreferredColumn()
         if !nested { commitTransaction() }
         return finishStroke(EngineResult(didChangeText: true, beep: false, actions: []), cursorBefore: before)
     }
@@ -181,7 +181,7 @@ public final class Engine {
         if let earliest = applyOrder.last {
             let width = buffer.measure(earliest.replacement)
             buffer.cursor = buffer.clampedCursor(earliest.range.lowerBound + width, normalMode: mode != .insert)
-            buffer.preferredColumn = buffer.column(of: buffer.cursor)
+            capturePreferredColumn()
         }
         if !nested { commitTransaction() }
         return finishStroke(EngineResult(didChangeText: true, beep: false, actions: []), cursorBefore: before)
@@ -204,12 +204,12 @@ public final class Engine {
         visualAnchor = min(anchor, buffer.count)
         mode = .visual
         buffer.cursor = buffer.clampedCursor(max(anchor, caret), normalMode: true)
-        buffer.preferredColumn = buffer.column(of: buffer.cursor)
+        capturePreferredColumn()
     }
 
     public func moveCursor(to offset: Int) {
         buffer.cursor = buffer.clampedCursor(offset, normalMode: mode != .insert)
-        buffer.preferredColumn = buffer.column(of: buffer.cursor)
+        capturePreferredColumn()
     }
 
     @discardableResult
@@ -397,6 +397,18 @@ public final class Engine {
                 count = n
                 return applyMotion(.fileStart, find: nil)
             }
+            if ch == "j" {
+                return applyMotion(.bufferDown, find: nil)
+            }
+            if ch == "k" {
+                return applyMotion(.bufferUp, find: nil)
+            }
+            if ch == "0" {
+                return applyMotion(.lineStart, find: nil)
+            }
+            if ch == "$" {
+                return applyMotion(.lineEnd, find: nil)
+            }
             if ch == "d", operatorKind == nil, !mode.isVisual {
                 resetParser()
                 return EngineResult(didChangeText: false, beep: false, actions: [.goToDefinition])
@@ -419,7 +431,7 @@ public final class Engine {
 
         if ch.isNumber, let digit = ch.wholeNumberValue {
             if ch == "0" && count == nil {
-                return applyMotion(.lineStart, find: nil)
+                return applyMotion(.screenLineStart, find: nil)
             }
             count = (count ?? 0) * 10 + digit
             return .noop
@@ -480,7 +492,7 @@ public final class Engine {
         case "^":
             return applyMotion(.firstNonBlank, find: nil)
         case "$":
-            return applyMotion(.lineEnd, find: nil)
+            return applyMotion(.screenLineEnd, find: nil)
         case "{":
             return applyMotion(.paragraph(forward: false), find: nil)
         case "}":
@@ -544,9 +556,9 @@ public final class Engine {
         case "O":
             return beginInsert(.O)
         case "D":
-            return applyNamedCommand(motion: .lineEnd, op: .delete)
+            return applyNamedCommand(motion: .screenLineEnd, op: .delete)
         case "C":
-            return applyNamedCommand(motion: .lineEnd, op: .change)
+            return applyNamedCommand(motion: .screenLineEnd, op: .change)
         case "Y":
             return applyNamedCommand(linewise: true, op: .yank)
         case ":":
@@ -742,13 +754,18 @@ public final class Engine {
 
     private func updatePreferredColumn(after kind: MotionKind) {
         switch kind {
-        case .up, .down:
+        case .up, .down, .bufferUp, .bufferDown:
             break
-        case .lineEnd:
-            buffer.preferredColumn = Int.max / 4
+        case .screenLineEnd:
+            buffer.preferredColumn = TextBuffer.endColumn
         default:
-            buffer.preferredColumn = buffer.column(of: buffer.cursor)
+            capturePreferredColumn()
         }
+    }
+
+    /// Remember the caret's buffer column. The layout turns it into a screen column.
+    private func capturePreferredColumn() {
+        buffer.preferredColumn = buffer.column(of: buffer.cursor)
     }
 
     private func applyTextObject(_ object: TextObjectKind) -> EngineResult {
@@ -850,7 +867,7 @@ public final class Engine {
             }
             replace(range, with: "")
             buffer.cursor = buffer.clampedCursor(range.lowerBound, normalMode: op == .delete)
-            buffer.preferredColumn = buffer.column(of: buffer.cursor)
+            capturePreferredColumn()
             if op == .change {
                 lastRepeatable = .operate(.change, count: n, target: target, inserted: nil)
                 enterInsertMode(.change)
@@ -932,7 +949,7 @@ public final class Engine {
             jumpBack.append(buffer.cursor)
             buffer.cursor = buffer.clampedCursor(pos, normalMode: mode != .insert)
         }
-        buffer.preferredColumn = buffer.column(of: buffer.cursor)
+        capturePreferredColumn()
         return .noop
     }
 
@@ -945,6 +962,7 @@ public final class Engine {
         }
         insertCount = effectiveCount()
         prepareInsertPosition(kind)
+        capturePreferredColumn()
         lastRepeatable = .insert(kind: kind, text: "", count: insertCount)
         enterInsertMode(kind)
         resetParser()
@@ -1010,37 +1028,43 @@ public final class Engine {
         case .enter:
             replace(buffer.cursor..<buffer.cursor, with: "\n")
             buffer.cursor += 1
+            capturePreferredColumn()
             return EngineResult(didChangeText: true, beep: false, actions: [])
         case .backspace:
             if buffer.cursor == 0 { return beepResult() }
             let start = buffer.graphemeStart(before: buffer.cursor)
             replace(start..<buffer.cursor, with: "")
             buffer.cursor = start
+            capturePreferredColumn()
             return EngineResult(didChangeText: true, beep: false, actions: [])
         case .delete:
             if buffer.cursor >= buffer.count { return beepResult() }
             let end = buffer.graphemeSpan(containing: buffer.cursor).upperBound
             replace(buffer.cursor..<end, with: "")
+            capturePreferredColumn()
             return EngineResult(didChangeText: true, beep: false, actions: [])
         case .tab:
             let tab = String(repeating: " ", count: max(1, shiftWidth))
             replace(buffer.cursor..<buffer.cursor, with: tab)
             buffer.cursor += buffer.measure(tab)
+            capturePreferredColumn()
             return EngineResult(didChangeText: true, beep: false, actions: [])
         case .left:
             buffer.cursor = buffer.graphemeStart(before: buffer.cursor)
+            capturePreferredColumn()
             return .noop
         case .right:
             if buffer.cursor < buffer.count {
                 buffer.cursor = buffer.graphemeSpan(containing: buffer.cursor).upperBound
             }
+            capturePreferredColumn()
             return .noop
         case .up, .down:
             let delta = event.key == .up ? -1 : 1
             buffer.cursor = layout.position(
                 from: buffer.cursor,
                 displayLines: delta,
-                preferredColumn: buffer.column(of: buffer.cursor),
+                preferredColumn: buffer.preferredColumn,
                 in: buffer
             )
             return .noop
@@ -1057,6 +1081,7 @@ public final class Engine {
         if text.isEmpty { return .noop }
         replace(buffer.cursor..<buffer.cursor, with: text)
         buffer.cursor += buffer.measure(text)
+        capturePreferredColumn()
         return EngineResult(didChangeText: true, beep: false, actions: [])
     }
 
@@ -1088,7 +1113,7 @@ public final class Engine {
             }
         }
         buffer.clampCursor(normalMode: true)
-        buffer.preferredColumn = buffer.column(of: buffer.cursor)
+        capturePreferredColumn()
         commitTransaction()
         if !inserted.isEmpty {
             registers.lastInsert = Register(text: inserted, style: .characterwise)
@@ -1359,7 +1384,7 @@ public final class Engine {
             }
         }
         buffer.cursor = buffer.firstNonBlank(onLine: startLine)
-        buffer.preferredColumn = buffer.column(of: buffer.cursor)
+        capturePreferredColumn()
     }
 
     // MARK: Repeat / undo
@@ -1489,7 +1514,7 @@ public final class Engine {
             strokeEdits.append(TextEdit(range: lower..<upper, replacement: edit.replacement))
         }
         buffer.cursor = buffer.clampedCursor(cursor, normalMode: true)
-        buffer.preferredColumn = buffer.column(of: buffer.cursor)
+        capturePreferredColumn()
     }
 
     // MARK: Search / ex
@@ -1623,7 +1648,7 @@ public final class Engine {
         }) else { return beepResult() }
         recordJump(from: buffer.cursor)
         buffer.cursor = buffer.clampedCursor(anchor.offset, normalMode: true)
-        buffer.preferredColumn = buffer.column(of: buffer.cursor)
+        capturePreferredColumn()
         return .noop
     }
 

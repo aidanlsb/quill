@@ -17,6 +17,7 @@ struct QuillApp: App {
                     model.consumeLaunchArguments(Array(CommandLine.arguments.dropFirst()))
                     NSApplication.shared.windows.forEach { $0.delegate = appDelegate }
                     WindowChrome.apply(theme: model.theme)
+                    AppSmoke.noteWindowAppeared()
                     AppSmoke.runIfRequested(model: model)
                 }
                 .onOpenURL { url in
@@ -62,6 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func attach(_ model: AppModel) {
         self.model = model
         drainPending()
+        AppSmoke.noteAttachedModel()
     }
 
     func applicationWillFinishLaunching(_ notification: Notification) {
@@ -71,6 +73,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             forEventClass: AEEventClass(kInternetEventClass),
             andEventID: AEEventID(kAEGetURL)
         )
+        // A background shell does not activate the app, so the SwiftUI window
+        // may never appear. Arm the smoke watchdog before that wait.
+        AppSmoke.prepareIfRequested()
     }
 
     /// Apple events arrive on the main thread, sometimes before SwiftUI has
@@ -102,10 +107,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         drainPending()
+        // Do not wait for onAppear. That callback is the only thing that used
+        // to start smoke, and it never runs when no window becomes key.
+        AppSmoke.launchDidFinish(model: model)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        true
+        // Smoke opens its own windows before the SwiftUI window exists, then
+        // releases them. Closing that last window must not terminate the process
+        // mid-check. Smoke exits on its own.
+        ProcessInfo.processInfo.environment["QUILL_SMOKE"] != "1"
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

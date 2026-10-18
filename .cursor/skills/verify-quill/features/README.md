@@ -16,6 +16,7 @@ This directory is the maintained source for verifying Quill's user-facing editor
 - Each run is a new process and a new temporary directory.
 - The harness calls `engine.handle` with the same key events as `keyDown`. It does not post OS key events.
 - Treat a line starting with `FAIL` as a failed feature. The rest of the log is not a pass for that feature.
+- A log that contains `quill smoke watchdog: exiting 2` is a failed launch. Smoke did not finish within 20 seconds.
 - Leave `artifacts/verify-quill/smoke.log` in place.
 
 ## Proof and skip reporting
@@ -34,5 +35,5 @@ Each feature file has an H1, one paragraph, then four H2 sections: `Sub-features
 
 - [Caret](caret.md) covers the normal-mode block, the insert-mode beam, and the default 16pt type scale.
 - [Scrolling](scroll.md) covers trackpad scrolling and cursor-follow with `j`, `G`, `gg`, and half-page motions.
-- [Directory buffer](directory.md) covers opening a folder, Enter, parent, and a rename that asks before writing.
+- [Directory buffer](directory.md) covers opening a folder, the mono listing layout, Enter, parent, and a rename that asks before writing.
 - [Theme](theme.md) covers light, dark, and system, including `:theme` and `<leader>tt`.
