@@ -1,9 +1,10 @@
 import AppKit
 import Foundation
+import SwiftUI
 import QuillVim
 
 /// In-process check for the behaviors Linux tests cannot see: caret cell size,
-/// real scrolling, and oil-style directory buffers wired through `AppModel`.
+/// real scrolling, oil-style directory buffers, and the picker query field.
 /// Run with `QUILL_SMOKE=1`. Exits the process.
 ///
 /// The checks start from `applicationDidFinishLaunching`. They must not wait
@@ -80,6 +81,7 @@ enum AppSmoke {
         checkTheme(failures: &failures)
         checkCaretAndScroll(failures: &failures)
         checkDirectory(failures: &failures)
+        checkPicker(failures: &failures)
         if failures.isEmpty {
             fputs("quill smoke passed\n", stderr)
             fflush(stderr)
@@ -554,6 +556,230 @@ enum AppSmoke {
             return false
         }
         check(renamed, "save planned \(model.pendingOps.map(\.summary)) instead of a rename", failures: &failures)
+    }
+
+    /// Types into the file picker and live grep, then reads the fields the panel draws.
+    @MainActor
+    private static func checkPicker(failures: inout [String]) {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("quill-picker-\(UUID().uuidString)", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            try Data("alpha notes\n".utf8).write(to: root.appendingPathComponent("notes.md"))
+            try Data("beta ideas\n".utf8).write(to: root.appendingPathComponent("ideas.md"))
+        } catch {
+            failures.append("picker fixture: \(error.localizedDescription)")
+            return
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let model = AppModel()
+        model.open(url: root)
+        let host = NSHostingView(rootView: PickerPanel(model: model))
+        host.autoresizingMask = [.width, .height]
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 640),
+            styleMask: [.titled, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = host
+        host.frame = window.contentView?.bounds ?? host.frame
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil) }
+
+        model.presentFilePicker()
+        let opened = waitUntil(seconds: 1.2) {
+            settle(host, window)
+            let hint = queryField(in: host)?.placeholderAttributedString?.string ?? ""
+            return hint == "File name"
+                && modeField(in: host)?.stringValue == "INSERT"
+                && (caretView(in: host)?.bounds.height ?? 0) >= 8
+        }
+        guard opened, let field = queryField(in: host) else {
+            failures.append("picker query field missing \(viewDump(host))")
+            return
+        }
+        let placeholder = field.placeholderAttributedString?.string ?? field.placeholderString ?? ""
+        check(field.stringValue.isEmpty, "picker query was \(field.stringValue) before typing", failures: &failures)
+        check(placeholder == "File name", "picker placeholder \(placeholder)", failures: &failures)
+        if let painted = field.textColor {
+            let drift = abs(brightness(painted) - brightness(model.theme.textColor))
+            let contrast = abs(brightness(painted) - brightness(model.theme.backgroundColor))
+            check(drift < 0.08, "picker query color drift \(drift)", failures: &failures)
+            check(contrast > 0.45, "picker query contrast \(contrast)", failures: &failures)
+        } else {
+            failures.append("picker query color missing")
+        }
+        check(field.font?.isFixedPitch == true, "picker query font \(field.font?.fontName ?? "")", failures: &failures)
+        let mode = modeField(in: host)?.stringValue ?? ""
+        check(mode == "INSERT", "picker mode \(mode)", failures: &failures)
+        guard let caretBefore = caretView(in: host) else {
+            failures.append("picker caret missing \(viewDump(host))")
+            return
+        }
+        check(caretBefore.bounds.height >= 8, "picker caret height \(caretBefore.bounds.height)", failures: &failures)
+        check(caretBefore.bounds.width <= 2, "picker caret width \(caretBefore.bounds.width)", failures: &failures)
+        let caretXBefore = caretBefore.convert(caretBefore.bounds, to: nil).minX
+
+        model.handlePicker(.character("n"))
+        model.handlePicker(.character("o"))
+        let filtered = waitUntil(seconds: 1) {
+            settle(host, window)
+            let titles = resultTitles(in: host)
+            return queryField(in: host)?.stringValue == "no"
+                && titles.contains { $0.contains("notes.md") }
+                && !titles.contains { $0.contains("ideas.md") }
+        }
+        let shown = queryField(in: host)?.stringValue ?? ""
+        let titles = resultTitles(in: host)
+        check(filtered && shown == "no", "picker query showed \(shown) results \(titles)", failures: &failures)
+        check(titles.contains { $0.contains("notes.md") }, "picker filter missing notes \(titles)", failures: &failures)
+        check(!titles.contains { $0.contains("ideas.md") }, "picker filter kept ideas \(titles)", failures: &failures)
+        if let notes = resultFields(in: host).first(where: { $0.stringValue.contains("notes.md") }) {
+            let matched = attrChannel(notes, utf16: 0)
+            let rest = attrChannel(notes, utf16: 2)
+            check(abs(matched - rest) > 0.12, "picker highlight \(matched) vs \(rest)", failures: &failures)
+        } else {
+            failures.append("picker highlight missing notes row \(titles)")
+        }
+        if let caretAfter = caretView(in: host) {
+            let caretXAfter = caretAfter.convert(caretAfter.bounds, to: nil).minX
+            check(caretXAfter > caretXBefore + 2, "picker caret stayed at \(caretXBefore) -> \(caretXAfter)", failures: &failures)
+        } else {
+            failures.append("picker caret disappeared while typing")
+        }
+
+        model.handlePicker(.escape)
+        let leftInsert = waitUntil(seconds: 0.5) {
+            settle(host, window)
+            return modeField(in: host)?.stringValue == "NORMAL" && caretView(in: host) == nil
+        }
+        let normal = modeField(in: host)?.stringValue ?? ""
+        check(leftInsert && normal == "NORMAL", "picker mode \(normal)", failures: &failures)
+        check(queryField(in: host)?.stringValue == "no", "picker query cleared in normal mode", failures: &failures)
+        check(caretView(in: host) == nil, "picker caret still drawn in normal mode", failures: &failures)
+
+        model.handlePicker(.character("q"))
+        model.presentGrepPicker()
+        let grepOpen = waitUntil(seconds: 0.6) {
+            settle(host, window)
+            let hint = queryField(in: host)?.placeholderAttributedString?.string ?? ""
+            return hint == "Pattern" && queryField(in: host)?.stringValue.isEmpty == true
+        }
+        check(grepOpen, "grep query field \(queryField(in: host)?.stringValue ?? "missing")", failures: &failures)
+        for character in "alpha" {
+            model.handlePicker(.character(character))
+        }
+        let grepped = waitUntil(seconds: 1.5) {
+            settle(host, window)
+            let hits = resultTitles(in: host)
+            return queryField(in: host)?.stringValue == "alpha"
+                && hits.contains { $0.contains("notes.md") }
+                && !hits.contains { $0.contains("ideas.md") }
+        }
+        let grepShown = queryField(in: host)?.stringValue ?? ""
+        let hits = resultTitles(in: host)
+        check(grepped && grepShown == "alpha", "grep query showed \(grepShown) results \(hits)", failures: &failures)
+        check(hits.contains { $0.contains("notes.md") }, "grep results missing notes \(hits)", failures: &failures)
+        check(!hits.contains { $0.contains("ideas.md") }, "grep results kept ideas \(hits)", failures: &failures)
+        if let snippet = fields("quill.picker.snippet", in: host).first(where: { $0.stringValue.localizedCaseInsensitiveContains("alpha") }) {
+            let matched = attrChannel(snippet, utf16: 0)
+            let restIndex = (snippet.stringValue as NSString).length > 6 ? 6 : 1
+            let rest = attrChannel(snippet, utf16: restIndex)
+            check(abs(matched - rest) > 0.12, "grep highlight \(matched) vs \(rest) in \(snippet.stringValue)", failures: &failures)
+        } else {
+            failures.append("grep highlight missing snippet \(hits)")
+        }
+    }
+
+    @MainActor
+    private static func settle(_ host: NSView, _ window: NSWindow) {
+        host.needsLayout = true
+        host.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+    }
+
+    @MainActor
+    private static func waitUntil(seconds: TimeInterval, _ ready: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        if ready() { return true }
+        while Date() < deadline {
+            RunLoop.main.run(mode: .common, before: Date().addingTimeInterval(0.02))
+            if ready() { return true }
+        }
+        return ready()
+    }
+
+    @MainActor
+    private static func queryField(in view: NSView) -> NSTextField? {
+        fields("quill.picker.query", in: view).first
+    }
+
+    @MainActor
+    private static func modeField(in view: NSView) -> NSTextField? {
+        fields("quill.picker.mode", in: view).first
+    }
+
+    @MainActor
+    private static func caretView(in view: NSView) -> NSView? {
+        findView({ $0.accessibilityIdentifier == "quill.picker.caret" }, in: view)
+    }
+
+    @MainActor
+    private static func resultFields(in view: NSView) -> [NSTextField] {
+        fields("quill.picker.result", in: view)
+    }
+
+    @MainActor
+    private static func resultTitles(in view: NSView) -> [String] {
+        resultFields(in: view).map(\.stringValue)
+    }
+
+    @MainActor
+    private static func fields(_ identifier: String, in view: NSView) -> [NSTextField] {
+        var found: [NSTextField] = []
+        func walk(_ view: NSView) {
+            if let field = view as? NSTextField, field.accessibilityIdentifier == identifier {
+                found.append(field)
+            }
+            for subview in view.subviews { walk(subview) }
+        }
+        walk(view)
+        return found
+    }
+
+    @MainActor
+    private static func findView(_ match: (NSView) -> Bool, in view: NSView) -> NSView? {
+        if match(view) { return view }
+        for subview in view.subviews {
+            if let found = findView(match, in: subview) { return found }
+        }
+        return nil
+    }
+
+    @MainActor
+    private static func attrChannel(_ field: NSTextField, utf16: Int) -> CGFloat {
+        let text = field.attributedStringValue
+        guard utf16 >= 0, utf16 < text.length else { return -1 }
+        let color = text.attribute(.foregroundColor, at: utf16, effectiveRange: nil) as? NSColor
+        guard let color else { return -1 }
+        return brightness(color)
+    }
+
+    @MainActor
+    private static func viewDump(_ view: NSView) -> String {
+        var lines: [String] = []
+        func walk(_ view: NSView, depth: Int) {
+            guard lines.count < 40 else { return }
+            let id = view.accessibilityIdentifier ?? ""
+            let text = (view as? NSTextField)?.stringValue ?? ""
+            let pad = String(repeating: " ", count: depth)
+            lines.append("\(pad)\(type(of: view)) id=\(id) text=\(text)")
+            for subview in view.subviews { walk(subview, depth: depth + 1) }
+        }
+        walk(view, depth: 0)
+        return lines.joined(separator: " | ")
     }
 }
 

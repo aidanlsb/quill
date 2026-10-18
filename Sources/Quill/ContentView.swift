@@ -1,7 +1,6 @@
 import AppKit
 import SwiftUI
 import QuillFS
-import QuillSearch
 import QuillWorkspace
 
 struct ContentView: View {
@@ -154,123 +153,6 @@ struct ConfirmSheet: View {
         }
         .padding(20)
         .frame(width: 480, height: 320)
-    }
-}
-
-struct PickerPanel: View {
-    var model: AppModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            if let picker = model.picker {
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    Text("> " + picker.promptDisplay)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    Text(picker.status)
-                }
-                .font(.system(size: 13, design: .monospaced))
-                .foregroundStyle(Color(model.theme.dimColor))
-                .padding(.horizontal, QuillMetrics.sideGutter)
-                .padding(.top, QuillMetrics.verticalInset)
-
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 0) {
-                            ForEach(Array(picker.items.enumerated()), id: \.offset) { index, item in
-                                HStack(alignment: .firstTextBaseline, spacing: 16) {
-                                    Text(item.title)
-                                        .font(.system(size: 15, design: .monospaced))
-                                        .foregroundStyle(Color(model.theme.textColor))
-                                    if !item.subtitle.isEmpty {
-                                        Text(item.subtitle)
-                                            .font(.system(size: 12, design: .monospaced))
-                                            .foregroundStyle(Color(model.theme.dimColor))
-                                            .lineLimit(1)
-                                    }
-                                    Spacer(minLength: 0)
-                                }
-                                .padding(.vertical, 4)
-                                .background(
-                                    index == picker.selectedIndex
-                                        ? Color(model.theme.textColor).opacity(0.08)
-                                        : Color.clear
-                                )
-                                .id(index)
-                            }
-                        }
-                        .padding(.horizontal, QuillMetrics.sideGutter)
-                    }
-                    .onChange(of: picker.selectedIndex) { _, idx in
-                        proxy.scrollTo(idx, anchor: .center)
-                    }
-                    .id(model.pickerTick)
-                }
-
-                if let preview = picker.selected?.preview, !preview.isEmpty {
-                    Text(preview)
-                        .font(.system(size: 13, design: .monospaced))
-                        .foregroundStyle(Color(model.theme.dimColor))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, QuillMetrics.sideGutter)
-                        .textSelection(.enabled)
-                }
-            }
-        }
-        .padding(.bottom, QuillMetrics.verticalInset)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Color(model.theme.backgroundColor).ignoresSafeArea())
-        .background(PickerKeyCatcher(model: model))
-    }
-}
-
-/// Hidden view that receives key events while the picker is open.
-struct PickerKeyCatcher: NSViewRepresentable {
-    var model: AppModel
-
-    func makeNSView(context: Context) -> PickerKeyView {
-        let v = PickerKeyView()
-        v.model = model
-        Task { @MainActor in
-            v.window?.makeFirstResponder(v)
-        }
-        return v
-    }
-
-    func updateNSView(_ nsView: PickerKeyView, context: Context) {
-        nsView.model = model
-        Task { @MainActor in
-            if nsView.window?.firstResponder !== nsView {
-                nsView.window?.makeFirstResponder(nsView)
-            }
-        }
-    }
-}
-
-final class PickerKeyView: NSView {
-    var model: AppModel?
-
-    override var acceptsFirstResponder: Bool { true }
-
-    override func keyDown(with event: NSEvent) {
-        guard let model else { return }
-        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        if flags.contains(.control), let ch = event.charactersIgnoringModifiers?.lowercased().first {
-            model.handlePicker(.ctrl(ch))
-            return
-        }
-        switch event.keyCode {
-        case 53: model.handlePicker(.escape)
-        case 36, 76: model.handlePicker(.enter)
-        case 51: model.handlePicker(.backspace)
-        case 125: model.handlePicker(.down)
-        case 126: model.handlePicker(.up)
-        case 123: model.handlePicker(.left)
-        case 124: model.handlePicker(.right)
-        default:
-            if let ch = event.characters?.first {
-                model.handlePicker(.character(ch))
-            }
-        }
     }
 }
 
