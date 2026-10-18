@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import QuillFS
+import QuillMarkdown
 import QuillVim
 
 /// In-process check for the behaviors Linux tests cannot see: caret cell size,
@@ -79,6 +80,7 @@ enum AppSmoke {
         var failures: [String] = []
         checkDefaultType(failures: &failures)
         checkTheme(failures: &failures)
+        checkTables(failures: &failures)
         checkCaretAndScroll(failures: &failures)
         checkDirectory(failures: &failures)
         if failures.isEmpty {
@@ -752,6 +754,150 @@ enum AppSmoke {
             return false
         }
         check(renamed, "save planned \(model.pendingOps.map(\.summary)) instead of a rename", failures: &failures)
+    }
+
+    @MainActor
+    private static func checkTables(failures: inout [String]) {
+        let fenced = """
+        | Keep | Me |
+        | :--- | -: |
+        | Ada | 1 |
+
+        ```
+        | Skip | Me |
+        | --- | --- |
+        | x | y |
+        ```
+        """
+        let blocks = MarkdownTables.blocks(in: fenced)
+        check(blocks.count == 1, "table detect \(blocks.count)", failures: &failures)
+        check(blocks.first?.columns.map(\.align) == [.left, .right], "table align", failures: &failures)
+        check(blocks.first?.rows.map(\.role) == [.header, .separator, .body], "table detect roles", failures: &failures)
+
+        let ragged = "| A | Q |\n| :- | -: |\n| c | 1 |\n| d | 12 |"
+        let block = MarkdownTables.blocks(in: ragged).first
+        let short = block?.rows.dropFirst(2).first?.cells.last
+        check(short?.leadingPad ?? 0 > 0, "table align pad \(short?.leadingPad ?? -1)", failures: &failures)
+
+        let light = QuillTheme.current(scheme: .light)
+        let dark = QuillTheme.current(scheme: .dark)
+        check(light.tableBackground.alphaComponent > 0.02, "table background light", failures: &failures)
+        check(dark.tableBackground.alphaComponent > 0.02, "table background dark", failures: &failures)
+        check(
+            abs(light.tableBackground.alphaComponent - dark.tableBackground.alphaComponent) > 0.001
+                || brightness(light.tableBackground) != brightness(dark.tableBackground),
+            "table background theme",
+            failures: &failures
+        )
+        check(light.tableHeaderRule.alphaComponent > light.tableRowRule.alphaComponent, "table rule weight", failures: &failures)
+
+        let storage = NSTextStorage(string: ragged)
+        MarkdownStyler.restyle(storage, theme: light, spans: [])
+        guard let painted = block, let pipe = painted.rows[0].pipes.first, let header = painted.rows[0].cells.first else {
+            failures.append("table detect header")
+            return
+        }
+        let headerFont = storage.attribute(.font, at: header.text.lowerBound, effectiveRange: nil) as? NSFont
+        check(headerFont?.isFixedPitch == true, "table header pitch", failures: &failures)
+        check(fontWeight(headerFont ?? light.bodyFont) >= 0.28, "table header weight", failures: &failures)
+        let body = painted.rows[2].cells[0]
+        let bodyFont = storage.attribute(.font, at: body.text.lowerBound, effectiveRange: nil) as? NSFont
+        check(bodyFont?.isFixedPitch == true, "table body pitch", failures: &failures)
+        check(fontWeight(bodyFont ?? light.bodyFont) < 0.2, "table body weight", failures: &failures)
+        check(
+            sameColor(storage.attribute(.foregroundColor, at: pipe.lowerBound, effectiveRange: nil) as? NSColor, light.syntaxColor),
+            "table pipe",
+            failures: &failures
+        )
+        check(
+            sameColor(storage.attribute(.backgroundColor, at: body.text.lowerBound, effectiveRange: nil) as? NSColor, light.tableBackground),
+            "table background",
+            failures: &failures
+        )
+        let headerUnderline = storage.attribute(.underlineStyle, at: header.text.lowerBound, effectiveRange: nil) as? NSNumber
+        let bodyUnderline = storage.attribute(.underlineStyle, at: body.text.lowerBound, effectiveRange: nil) as? NSNumber
+        check(headerUnderline?.intValue == NSUnderlineStyle.single.rawValue, "table rule header", failures: &failures)
+        check(bodyUnderline?.intValue == NSUnderlineStyle.single.rawValue, "table rule row", failures: &failures)
+        let para = storage.attribute(.paragraphStyle, at: body.text.lowerBound, effectiveRange: nil) as? NSParagraphStyle
+        check(para?.lineBreakMode == .byClipping, "table nowrap", failures: &failures)
+        if let pipeIndex = short?.precedingPipe {
+            let kern = (storage.attribute(.kern, at: pipeIndex, effectiveRange: nil) as? NSNumber)?.doubleValue ?? 0
+            check(kern > 0.5, "table align kern \(kern)", failures: &failures)
+        } else {
+            failures.append("table align kern")
+        }
+
+        let wide = String(repeating: "b", count: 80)
+        let sample = "| A | \(wide) |\n| - | - |\n| c | d |"
+        let measured = (sample as NSString).size(withAttributes: [.font: light.monoFont]).width
+        check(measured > 140, "table nowrap sample \(measured)", failures: &failures)
+        let tv = NSTextView(usingTextLayoutManager: true)
+        tv.isHorizontallyResizable = false
+        tv.isVerticallyResizable = true
+        tv.textContainerInset = .zero
+        tv.textContainer?.lineFragmentPadding = 0
+        tv.textContainer?.widthTracksTextView = false
+        tv.textContainer?.heightTracksTextView = false
+        tv.textContainer?.size = NSSize(width: 80, height: 10_000)
+        tv.frame = NSRect(x: 0, y: 0, width: 80, height: 240)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 80, height: 240),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = tv
+        tv.frame = window.contentView?.bounds ?? tv.frame
+        tv.textContainer?.size = NSSize(width: 80, height: 10_000)
+        tv.string = sample
+        if let textStorage = tv.textStorage {
+            MarkdownStyler.restyle(textStorage, theme: light, spans: [])
+        }
+        tv.layoutSubtreeIfNeeded()
+        let fragments = lineFragmentCount(tv)
+        check(fragments == 3, "table nowrap \(fragments)", failures: &failures)
+
+        let command = Engine(text: ragged).type(":TableFormat<CR>")
+        check(
+            command.actions == [.formatTables(startLine: nil, endLine: nil, quiet: false)],
+            "table command \(command.actions)",
+            failures: &failures
+        )
+        check(QuillConfig.default.formatTablesOnInsertLeave == false, "table format config", failures: &failures)
+        if let decoded = try? QuillConfig.decode(Data("formatTablesOnInsertLeave = true\n".utf8)) {
+            check(decoded.formatTablesOnInsertLeave, "table format config on", failures: &failures)
+        } else {
+            failures.append("table format config on")
+        }
+        check(
+            (try? QuillConfig.decode(Data("formatTablesOnInsertLeave = \"yes\"\n".utf8))) == nil,
+            "table format config name",
+            failures: &failures
+        )
+    }
+
+    @MainActor
+    private static func lineFragmentCount(_ textView: NSTextView) -> Int {
+        guard let layout = textView.textLayoutManager else { return -1 }
+        layout.ensureLayout(for: layout.documentRange)
+        var count = 0
+        layout.enumerateTextLayoutFragments(from: layout.documentRange.location, options: [.ensuresLayout]) { fragment in
+            count += fragment.textLineFragments.filter { $0.characterRange.length > 0 }.count
+            return true
+        }
+        return count
+    }
+
+    @MainActor
+    private static func sameColor(_ color: NSColor?, _ expected: NSColor) -> Bool {
+        guard let color, let left = color.usingColorSpace(.sRGB), let right = expected.usingColorSpace(.sRGB) else {
+            return false
+        }
+        var lr: CGFloat = 0, lg: CGFloat = 0, lb: CGFloat = 0, la: CGFloat = 0
+        var rr: CGFloat = 0, rg: CGFloat = 0, rb: CGFloat = 0, ra: CGFloat = 0
+        left.getRed(&lr, green: &lg, blue: &lb, alpha: &la)
+        right.getRed(&rr, green: &rg, blue: &rb, alpha: &ra)
+        return abs(lr - rr) < 0.02 && abs(lg - rg) < 0.02 && abs(lb - rb) < 0.02 && abs(la - ra) < 0.02
     }
 }
 

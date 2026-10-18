@@ -94,6 +94,9 @@ public enum HostAction: Equatable, Sendable {
     case setTheme(ThemeChoice)
     /// `:theme` with no argument, and `<leader>tt`.
     case toggleTheme
+    /// `:TableFormat`. Nil line bounds mean the table under the cursor.
+    /// Inclusive 0-based lines when set. `quiet` skips the status when no table matches.
+    case formatTables(startLine: Int?, endLine: Int?, quiet: Bool)
 }
 
 public struct EngineResult: Equatable, Sendable {

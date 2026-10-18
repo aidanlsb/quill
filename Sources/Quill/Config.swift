@@ -15,6 +15,8 @@ struct QuillConfig: Equatable {
     var font: String
     var theme: ThemeChoice
     var shiftWidth: Int
+    /// Pad the GFM table under the cursor when leaving insert mode. `:TableFormat` always works.
+    var formatTablesOnInsertLeave: Bool
 
     static let `default` = QuillConfig(
         leader: " ",
@@ -25,7 +27,8 @@ struct QuillConfig: Equatable {
         fontSize: QuillMetrics.defaultFontSize,
         font: "",
         theme: .system,
-        shiftWidth: 2
+        shiftWidth: 2,
+        formatTablesOnInsertLeave: false
     )
 
     static func load() -> QuillConfig {
@@ -115,6 +118,7 @@ struct QuillConfig: Equatable {
         let font = (try string(table["font"]) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let theme = try themeChoice(table["theme"]) ?? QuillConfig.default.theme
         let shift = try int(table["shiftWidth"]) ?? QuillConfig.default.shiftWidth
+        let formatTables = try bool(table["formatTablesOnInsertLeave"]) ?? QuillConfig.default.formatTablesOnInsertLeave
         return QuillConfig(
             leader: leader,
             leaderMaps: maps,
@@ -124,7 +128,8 @@ struct QuillConfig: Equatable {
             fontSize: fontSize,
             font: font,
             theme: theme,
-            shiftWidth: shift
+            shiftWidth: shift,
+            formatTablesOnInsertLeave: formatTables
         )
     }
 
@@ -159,6 +164,12 @@ struct QuillConfig: Equatable {
             throw ConfigError("theme must be system, light, or dark")
         }
         return choice
+    }
+
+    private static func bool(_ value: TOMLValue?) throws -> Bool? {
+        guard let value else { return nil }
+        guard case .bool(let flag) = value else { throw ConfigError("expected a boolean") }
+        return flag
     }
 
     private static func string(_ value: TOMLValue?) throws -> String? {
@@ -214,6 +225,7 @@ struct QuillConfig: Equatable {
             "font": .string(font),
             "theme": .string(theme.rawValue),
             "shiftWidth": .int(shiftWidth),
+            "formatTablesOnInsertLeave": .bool(formatTablesOnInsertLeave),
         ]
         if fontSize.rounded() == fontSize {
             table["fontSize"] = .int(Int(fontSize))
@@ -249,6 +261,8 @@ struct QuillConfig: Equatable {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let theme = ThemeChoice.parse(try c.decodeIfPresent(String.self, forKey: .theme) ?? "") ?? .system
             let shift = try c.decodeIfPresent(Int.self, forKey: .shiftWidth) ?? QuillConfig.default.shiftWidth
+            let formatTables = try c.decodeIfPresent(Bool.self, forKey: .formatTablesOnInsertLeave)
+                ?? QuillConfig.default.formatTablesOnInsertLeave
             config = QuillConfig(
                 leader: leader,
                 leaderMaps: maps,
@@ -258,12 +272,14 @@ struct QuillConfig: Equatable {
                 fontSize: fontSize,
                 font: font,
                 theme: theme,
-                shiftWidth: shift
+                shiftWidth: shift,
+                formatTablesOnInsertLeave: formatTables
             )
         }
 
         enum CodingKeys: String, CodingKey {
             case leader, leaderMaps, shellCommands, lsp, columnWidth, fontSize, font, theme, shiftWidth
+            case formatTablesOnInsertLeave
         }
     }
 
@@ -272,6 +288,7 @@ struct QuillConfig: Equatable {
             engine.leaderKey = ch
         }
         engine.shiftWidth = shiftWidth
+        engine.formatTablesOnInsertLeave = formatTablesOnInsertLeave
         // Overlay config onto the engine defaults so `ca` survives a config that only lists sf/sg.
         var maps = engine.leaderBindings
         for (seq, name) in leaderMaps {

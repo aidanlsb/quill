@@ -87,6 +87,9 @@ struct QuillTheme {
     var directoryCreatedColor: NSColor
     var directoryRenamedColor: NSColor
     var directoryDeletedColor: NSColor
+    var tableBackground: NSColor
+    var tableHeaderRule: NSColor
+    var tableRowRule: NSColor
 
     @MainActor
     static func current(
@@ -146,8 +149,35 @@ struct QuillTheme {
                 : NSColor(calibratedRed: 0.62, green: 0.46, blue: 0.24, alpha: 1),
             directoryDeletedColor: dark
                 ? NSColor(calibratedRed: 0.78, green: 0.52, blue: 0.48, alpha: 1)
-                : NSColor(calibratedRed: 0.55, green: 0.32, blue: 0.30, alpha: 1)
+                : NSColor(calibratedRed: 0.55, green: 0.32, blue: 0.30, alpha: 1),
+            tableBackground: dark
+                ? NSColor(calibratedWhite: 1, alpha: 0.045)
+                : NSColor(calibratedWhite: 0, alpha: 0.04),
+            tableHeaderRule: dark
+                ? NSColor(calibratedWhite: 1, alpha: 0.32)
+                : NSColor(calibratedWhite: 0, alpha: 0.28),
+            tableRowRule: dark
+                ? NSColor(calibratedWhite: 1, alpha: 0.12)
+                : NSColor(calibratedWhite: 0, alpha: 0.10)
         )
+    }
+
+    /// Semibold mono so the header reads as emphasis and columns stay aligned.
+    @MainActor
+    func tableHeaderFont() -> NSFont {
+        let font = NSFont.monospacedSystemFont(ofSize: monoFont.pointSize, weight: .semibold)
+        return font.isFixedPitch ? font : monoFont
+    }
+
+    /// Table lines do not wrap. A wide row clips at the column instead of breaking the grid.
+    @MainActor
+    func tableParagraphStyle() -> NSParagraphStyle {
+        let para = NSMutableParagraphStyle()
+        para.lineHeightMultiple = lineHeight
+        para.paragraphSpacing = 0
+        para.lineBreakMode = .byClipping
+        para.allowsDefaultTighteningForTruncation = false
+        return para
     }
 
     var bodyAttributes: [NSAttributedString.Key: Any] {
@@ -214,6 +244,7 @@ enum MarkdownStyler {
             let dimmed = focus && (range.location >= focusRange.upperBound || NSMaxRange(range) <= focusRange.lowerBound)
             apply(span.token, range: range, theme: theme, storage: storage, dimmed: dimmed)
         }
+        applyTables(storage, theme: theme, limit: limit, focus: focus, focusRange: focusRange, spans: spans)
         for (range, severity) in diagnostics {
             guard NSMaxRange(range) <= storage.length else { continue }
             let color: NSColor = severity <= 1 ? .systemRed : .systemOrange

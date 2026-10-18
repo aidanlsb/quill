@@ -293,6 +293,8 @@ final class AppModel {
             setTheme(choice)
         case .toggleTheme:
             toggleTheme()
+        case .formatTables(let startLine, let endLine, let quiet):
+            formatTables(startLine: startLine, endLine: endLine, quiet: quiet)
         case .command(let name):
             if name == "split" || name == "vsplit" {
                 message = "Split the window from the view layer once a second EditorWindow is attached"
@@ -303,6 +305,25 @@ final class AppModel {
                 message = "No mapping for \(name)"
             }
         }
+    }
+
+    private func formatTables(startLine: Int?, endLine: Int?, quiet: Bool) {
+        guard !isDirectory else { return }
+        let scope: TableScope
+        if let startLine, let endLine {
+            scope = .lines(min(startLine, endLine)...max(startLine, endLine))
+        } else {
+            scope = .cursor
+        }
+        let plan = MarkdownTables.plan(in: engine.text, scope: scope, cursor: engine.cursor)
+        guard plan.matched else {
+            if !quiet { message = "Not a table" }
+            return
+        }
+        guard !plan.rewrites.isEmpty else { return }
+        let edits = plan.rewrites.map { TextEdit(range: $0.range, replacement: $0.replacement) }
+        let result = engine.applyHostEdits(edits, cursor: plan.cursor)
+        handleEngineResult(result)
     }
 
     func save() {

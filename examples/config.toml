@@ -10,6 +10,8 @@ columnWidth = 70
 fontSize = 16
 font = ""
 shiftWidth = 2
+# Pad the GFM table under the cursor when leaving insert mode. :TableFormat always works.
+# formatTablesOnInsertLeave = true
 
 [leaderMaps]
 sf = "findFiles"

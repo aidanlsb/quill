@@ -37,3 +37,4 @@ Each feature file has an H1, one paragraph, then four H2 sections: `Sub-features
 - [Scrolling](scroll.md) covers trackpad scrolling and cursor-follow with `j`, `G`, `gg`, and half-page motions.
 - [Directory buffer](directory.md) covers opening a folder, the mono listing layout, Enter, parent, and a rename that asks before writing.
 - [Theme](theme.md) covers light, dark, and system, including `:theme` and `<leader>tt`.
+- [Tables](tables.md) covers GFM table styling, alignment, clipping, and `:TableFormat`.

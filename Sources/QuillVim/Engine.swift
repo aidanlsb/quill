@@ -7,6 +7,8 @@ public final class Engine {
     public var layout: any TextLayout
     public var clipboard: any Clipboard
     public var shiftWidth: Int = 2
+    /// When true, leaving insert mode asks the host to pad the table under the cursor.
+    public var formatTablesOnInsertLeave = false
     /// When true, Enter in normal mode asks the host to open the current line
     /// (directory listings) instead of moving down.
     public var openOnEnter: Bool = false
@@ -161,7 +163,7 @@ public final class Engine {
     /// Ranges are against the original text. They are applied end-to-start.
     /// An empty list does not mark the buffer modified.
     @discardableResult
-    public func applyHostEdits(_ edits: [TextEdit]) -> EngineResult {
+    public func applyHostEdits(_ edits: [TextEdit], cursor: Int? = nil) -> EngineResult {
         strokeEdits.removeAll(keepingCapacity: true)
         let before = buffer.cursor
         if edits.isEmpty {
@@ -178,7 +180,10 @@ public final class Engine {
         for edit in applyOrder {
             replace(edit.range, with: edit.replacement)
         }
-        if let earliest = applyOrder.last {
+        if let cursor {
+            buffer.cursor = buffer.clampedCursor(cursor, normalMode: mode != .insert)
+            capturePreferredColumn()
+        } else if let earliest = applyOrder.last {
             let width = buffer.measure(earliest.replacement)
             buffer.cursor = buffer.clampedCursor(earliest.range.lowerBound + width, normalMode: mode != .insert)
             capturePreferredColumn()
@@ -1118,7 +1123,10 @@ public final class Engine {
         if !inserted.isEmpty {
             registers.lastInsert = Register(text: inserted, style: .characterwise)
         }
-        return EngineResult(didChangeText: inserted.count > 0, beep: false, actions: [])
+        let actions: [HostAction] = formatTablesOnInsertLeave
+            ? [.formatTables(startLine: nil, endLine: nil, quiet: true)]
+            : []
+        return EngineResult(didChangeText: inserted.count > 0, beep: false, actions: actions)
     }
 
     private func insertedTextSinceBaseline() -> String {
@@ -1654,6 +1662,9 @@ public final class Engine {
 
     private func executeEx(_ cmd: String) -> EngineResult {
         let parsed = Ex.parse(cmd)
+        if parsed.name.lowercased() == "tableformat" {
+            return tableFormat(parsed)
+        }
         switch parsed.name {
         case "w":
             return EngineResult(didChangeText: false, beep: false, actions: [.write])
@@ -1689,6 +1700,26 @@ public final class Engine {
             statusMessage = "Not an editor command"
             return beepResult()
         }
+    }
+
+    private func tableFormat(_ parsed: ParsedEx) -> EngineResult {
+        if !parsed.args.isEmpty {
+            statusMessage = "Not an editor command"
+            return beepResult()
+        }
+        let last = max(0, buffer.lineCount - 1)
+        let current = buffer.lineIndex(containing: buffer.cursor)
+        let action: HostAction
+        if parsed.rangeStart == nil && parsed.rangeEnd == nil {
+            action = .formatTables(startLine: nil, endLine: nil, quiet: false)
+        } else if parsed.rangeStart == .all || parsed.rangeEnd == .all {
+            action = .formatTables(startLine: 0, endLine: last, quiet: false)
+        } else {
+            let start = resolveAddress(parsed.rangeStart, current: current, last: last)
+            let end = resolveAddress(parsed.rangeEnd ?? parsed.rangeStart, current: current, last: last)
+            action = .formatTables(startLine: min(start, end), endLine: max(start, end), quiet: false)
+        }
+        return EngineResult(didChangeText: false, beep: false, actions: [action])
     }
 
     private func applySet(_ args: String) -> EngineResult {
