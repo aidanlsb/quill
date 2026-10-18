@@ -116,8 +116,6 @@ enum AppPerf {
             view.syncFromEngine()
         }
         emit("textSyncMs", sync)
-        let usesViewport = view.textLayoutManager?.textContentManager is ViewportContentStorage
-        emit("viewportStorage", usesViewport ? 1 : 0)
         view.engine.mode = .insert
         let typing = millis {
             for _ in 0..<20 {
@@ -141,6 +139,22 @@ enum AppPerf {
         }
         emit("layoutFullMs", layout)
         session.window.orderOut(nil)
+
+        let typicalText = sample(lines: 3_000)
+        let typical = host(typicalText)
+        typical.view.syncFromEngine()
+        let at = typical.view.engine.buffer.lineStarts[2_000]
+        typical.view.engine.moveCursor(to: at)
+        typical.view.syncFromEngine()
+        typical.view.engine.mode = .insert
+        let typicalTyping = millis {
+            for _ in 0..<20 {
+                let result = typical.view.engine.handle(KeyEvent(.character("a")))
+                typical.view.applyResult(result)
+            }
+        }
+        emit("keystrokeTypicalMs", typicalTyping / 20.0)
+        typical.window.orderOut(nil)
 
         try? FileManager.default.removeItem(at: root)
         QuillTrace.write("quill perf done\n")

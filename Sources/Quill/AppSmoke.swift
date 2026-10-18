@@ -81,6 +81,7 @@ enum AppSmoke {
         checkDefaultType(failures: &failures)
         checkTheme(failures: &failures)
         checkCaretAndScroll(failures: &failures)
+        checkLongNote(failures: &failures)
         checkColumnFollowsResize(failures: &failures)
         checkDirectory(failures: &failures)
         checkPicker(failures: &failures)
@@ -433,6 +434,91 @@ enum AppSmoke {
         )
 
         checkWrappedVertical(engine: engine, tv: tv, failures: &failures)
+    }
+
+    /// A 10k-line note stays one buffer in the text view: `G` scrolls to the
+    /// end, search lands on a late line, and select-all covers the file.
+    @MainActor
+    private static func checkLongNote(failures: inout [String]) {
+        let lineCount = 10_000
+        let markerLine = 9_000
+        let text = (0..<lineCount).map { line -> String in
+            if line == markerLine {
+                return "Line \(line) MARKER-9000 end\n"
+            }
+            return "Line \(line) plain\n"
+        }.joined()
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        scroll.hasVerticalScroller = true
+        let tv = VimTextView.make()
+        tv.commonInit()
+        let engine = Engine(text: text)
+        tv.engine = engine
+        engine.layout = tv.layoutAdapter
+        scroll.documentView = tv
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+            styleMask: [.titled, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = scroll
+        window.makeKeyAndOrderFront(nil)
+        tv.syncFromEngine()
+        tv.layoutSubtreeIfNeeded()
+
+        let viewLength = (tv.string as NSString).length
+        check(
+            tv.string == text && viewLength == engine.buffer.count,
+            "long note view holds \(viewLength) of \(engine.buffer.count)",
+            failures: &failures
+        )
+        let clip = scroll.contentView.bounds.height
+        check(
+            tv.frame.height > clip * 20,
+            "long note height \(tv.frame.height) is not the whole file",
+            failures: &failures
+        )
+        tv.selectAll(nil)
+        let selected = tv.selectedRange()
+        let copied = selected.length == viewLength && selected.location == 0
+            ? (tv.string as NSString).substring(with: selected)
+            : ""
+        check(
+            copied == text,
+            "select all copied \(selected.location)+\(selected.length) of \(viewLength)",
+            failures: &failures
+        )
+
+        _ = engine.type("gg")
+        tv.syncFromEngine()
+        _ = engine.type("G")
+        tv.syncFromEngine()
+        let endLine = engine.buffer.lineIndex(containing: engine.cursor)
+        let maxY = max(0, tv.frame.height - clip)
+        let atEnd = scroll.contentView.bounds.origin.y
+        check(endLine == lineCount - 1, "G stopped on line \(endLine)", failures: &failures)
+        check(
+            atEnd > maxY - 120,
+            "G scroll \(atEnd) did not reach \(maxY) (\(motionDiag(engine: engine, tv: tv, scroll: scroll)))",
+            failures: &failures
+        )
+
+        _ = engine.type("gg")
+        tv.syncFromEngine()
+        _ = engine.type("/MARKER-9000<CR>")
+        tv.syncFromEngine()
+        let found = engine.buffer.lineIndex(containing: engine.cursor)
+        check(found == markerLine, "search landed on line \(found)", failures: &failures)
+        let row = tv.frame.height / CGFloat(max(lineCount, 1))
+        let expected = CGFloat(markerLine) * row
+        let origin = scroll.contentView.bounds.origin.y
+        check(
+            abs(origin - expected) < clip,
+            "search scroll \(origin) is not near \(expected)",
+            failures: &failures
+        )
+        window.orderOut(nil)
     }
 
     /// A long paragraph in a narrow column. `j` must step one screen row and
