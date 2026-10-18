@@ -39,7 +39,7 @@ enum QuillTrace {
     }
 
     static func write(_ line: String) {
-        var bytes = Array(line.utf8)
+        let bytes = Array(line.utf8)
         bytes.withUnsafeBytes { buffer in
             guard let base = buffer.baseAddress else { return }
             _ = Darwin.write(STDERR_FILENO, base, buffer.count)

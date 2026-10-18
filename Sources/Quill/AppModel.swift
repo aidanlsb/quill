@@ -721,7 +721,40 @@ final class AppModel {
     }
 
     private func listingLines() -> [ListingLine] {
-        DirectoryChrome.lineRefs(in: engine).map(\.listing)
+        var lines: [ListingLine] = []
+        var offset = 0
+        let text = engine.text
+        let parts = text.split(separator: "\n", omittingEmptySubsequences: false)
+        for raw in parts {
+            let line = String(raw)
+            let parsed = ParsedDirLine(line)
+            let end = offset + line.utf16.count
+            let anchor = engine.buffer.anchors(in: offset..<(end + 1)).first { anchor in
+                if case .directoryEntry = anchor.kind { return true }
+                return false
+            }
+            if !parsed.name.isEmpty {
+                if let anchor, case .directoryEntry(let path, _, let transfer) = anchor.kind {
+                    let kind: LineTransfer
+                    switch transfer {
+                    case .identity: kind = .identity
+                    case .move: kind = .move
+                    case .copy: kind = .copy
+                    }
+                    lines.append(ListingLine(
+                        name: parsed.name,
+                        isDirectory: parsed.isDirectory,
+                        entryID: anchor.id.raw,
+                        sourcePath: path,
+                        transfer: kind
+                    ))
+                } else {
+                    lines.append(ListingLine(name: parsed.name, isDirectory: parsed.isDirectory))
+                }
+            }
+            offset = end + 1
+        }
+        return lines
     }
 
     private func scheduleGrep(_ query: String) {

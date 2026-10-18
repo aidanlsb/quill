@@ -141,7 +141,7 @@ final class TextKit2Layout: TextLayout, @unchecked Sendable {
         }
         let probe = forward ? line.start + max(line.length, 1) : line.start - 1
         guard probe >= 0 else { return nil }
-        let limit = (textView?.string as NSString)?.length ?? 0
+        let limit = ((textView?.string ?? "") as NSString).length
         guard probe < limit else { return nil }
         return visualLine(at: probe, layout: lm)
     }
@@ -262,10 +262,9 @@ final class VimTextView: NSTextView {
     weak var vimDelegate: VimTextViewDelegate?
     var isDirectoryBuffer = false
     var directoryURL: URL?
-    var directorySnapshot: DirectorySnapshot?
-    private var directoryStyles: [Int: DirectoryChrome.LineStyle] = [:]
-    private var directoryPendingSummary = ""
-    private var directoryHeaderHeight: CGFloat = 36
+    var directoryEntries: [DirEntry] = []
+    var directoryHeaderText = ""
+    var directoryGhostHeight: CGFloat = 0
     var focusMode = false
     var columnWidth: CGFloat = 640
     var theme = QuillTheme.current()
@@ -276,7 +275,6 @@ final class VimTextView: NSTextView {
     /// Read by `EditorView` in this file. `private` would hide them from that type.
     fileprivate var appliedThemeID = -1
     fileprivate var appliedFocus = false
-    fileprivate var appliedDirectory = false
     private var mouseAnchor: Int?
 
     override func awakeFromNib() {
@@ -308,8 +306,8 @@ final class VimTextView: NSTextView {
     func applyTheme(_ theme: QuillTheme, focus: Bool) {
         self.theme = theme
         self.focusMode = focus
-        let writing = !isDirectoryBuffer
-        backgroundColor = writing ? theme.backgroundColor : theme.directoryBackground
+        let directory = isDirectoryBuffer
+        backgroundColor = directory ? theme.directoryBackgroundColor : theme.backgroundColor
         insertionPointColor = theme.textColor
         selectedTextAttributes = [
             .backgroundColor: theme.selectionColor,
@@ -317,33 +315,36 @@ final class VimTextView: NSTextView {
         ]
         defaultParagraphStyle = {
             let p = NSMutableParagraphStyle()
-            p.lineHeightMultiple = writing ? theme.lineHeight : DirectoryChrome.lineHeight
-            p.alignment = .left
+            if directory {
+                p.alignment = .left
+                p.lineHeightMultiple = QuillMetrics.directoryLineHeight
+            } else {
+                p.lineHeightMultiple = theme.lineHeight
+            }
             return p
         }()
-        font = writing ? theme.bodyFont : QuillMetrics.directoryFont()
+        font = directory ? theme.directoryFont : theme.bodyFont
         textColor = theme.textColor
-        isRichText = isDirectoryBuffer
-        if let scroll = enclosingScrollView {
-            scroll.drawsBackground = isDirectoryBuffer
-            if isDirectoryBuffer { scroll.backgroundColor = backgroundColor }
+        if !directory {
+            directoryGhostHeight = 0
+            directoryHeaderText = ""
         }
         updateInsets()
         queueRestyle()
     }
 
     func updateInsets() {
-        let width = enclosingScrollView?.contentView.bounds.width ?? bounds.width
-        let resolved = width > 2 ? width : 800
+        guard let clip = enclosingScrollView?.contentView else { return }
+        let width = max(clip.bounds.width, 1)
         if isDirectoryBuffer {
-            textContainerInset = NSSize(width: DirectoryChrome.textInset, height: directoryHeaderHeight)
-            let column = max(160, resolved - DirectoryChrome.textInset - DirectoryChrome.rightInset)
-            textContainer?.size = NSSize(width: column, height: CGFloat.greatestFiniteMagnitude)
+            let inset = QuillMetrics.directoryHorizontalInset
+            let vertical = QuillMetrics.directoryHeaderHeight + QuillMetrics.directoryHeaderGap
+            textContainerInset = NSSize(width: inset, height: vertical)
+            textContainer?.size = NSSize(width: max(1, width - inset * 2), height: CGFloat.greatestFiniteMagnitude)
             return
         }
-        guard enclosingScrollView?.contentView != nil else { return }
         let vertical = focusMode ? QuillMetrics.focusVerticalInset : QuillMetrics.verticalInset
-        let span = QuillMetrics.columnSpan(width: resolved, column: columnWidth)
+        let span = QuillMetrics.columnSpan(width: width, column: columnWidth)
         textContainerInset = NSSize(width: span.inset, height: vertical)
         textContainer?.size = NSSize(width: span.column, height: CGFloat.greatestFiniteMagnitude)
     }
@@ -450,6 +451,27 @@ final class VimTextView: NSTextView {
         }
     }
 
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard isDirectoryBuffer, engine != nil else { return }
+        drawDirectoryDecorations()
+    }
+
+    override func drawBackground(in rect: NSRect) {
+        guard isDirectoryBuffer else {
+            super.drawBackground(in: rect)
+            return
+        }
+        drawDirectoryBackground(in: rect)
+    }
+
+    override func setSelectedRange(_ charRange: NSRange, affinity: NSSelectionAffinity, stillSelecting stillSelectingFlag: Bool) {
+        super.setSelectedRange(charRange, affinity: affinity, stillSelecting: stillSelectingFlag)
+        if isDirectoryBuffer {
+            needsDisplay = true
+        }
+    }
+
     override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
         guard engine != nil, flag else {
             super.drawInsertionPoint(in: rect, color: color, turnedOn: flag)
@@ -536,16 +558,16 @@ final class VimTextView: NSTextView {
     }
 
     func queueRestyle(dirty: Int? = nil, edits: [TextEdit] = []) {
+        if isDirectoryBuffer {
+            directoryGhostHeight = restyleDirectoryBuffer()
+            needsDisplay = true
+            noteContentSizeChanged()
+            return
+        }
         guard !restyleQueued else { return }
         restyleQueued = true
         defer { restyleQueued = false }
         guard let storage = textStorage else { return }
-        if isDirectoryBuffer {
-            restyleDirectory(storage)
-            updateInsets()
-            noteContentSizeChanged()
-            return
-        }
         // Attribute edits used to hop to the next turn, so the key handler
         // returned before styling. Doing it here puts that cost on the keystroke.
         var styleLimit: Range<Int>?
@@ -593,170 +615,6 @@ final class VimTextView: NSTextView {
             diagnostics: diagnosticRanges
         )
         noteContentSizeChanged()
-    }
-
-    private func restyleDirectory(_ storage: NSTextStorage) {
-        let font = QuillMetrics.directoryFont()
-        self.font = font
-        let presented = DirectoryChrome.presentation(engine: engine, snapshot: directorySnapshot)
-        directoryStyles = presented.styles
-        directoryPendingSummary = presented.pendingSummary
-        directoryHeaderHeight = presented.headerHeight
-        let para = NSMutableParagraphStyle()
-        para.lineHeightMultiple = DirectoryChrome.lineHeight
-        para.alignment = .left
-        let base = theme.textColor
-        typingAttributes = [
-            .font: font,
-            .foregroundColor: base,
-            .paragraphStyle: para,
-        ]
-        guard storage.length > 0 else {
-            needsDisplay = true
-            return
-        }
-        let ns = storage.string as NSString
-        storage.beginEditing()
-        var line = 0
-        var location = 0
-        while location <= ns.length {
-            let rest = NSRange(location: location, length: ns.length - location)
-            let found = ns.range(of: "\n", options: [], range: rest)
-            let end = found.location == NSNotFound ? ns.length : found.location
-            let range = NSRange(location: location, length: max(0, end - location))
-            if range.length > 0 {
-                let style = directoryStyles[line]
-                var color = base
-                if style?.isDotfile == true {
-                    color = theme.dimColor
-                } else if style?.isDirectory == true {
-                    color = theme.linkColor
-                }
-                var attrs: [NSAttributedString.Key: Any] = [
-                    .font: font,
-                    .foregroundColor: color,
-                    .paragraphStyle: para,
-                ]
-                switch style?.mark {
-                case .created, .copied:
-                    attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue
-                    attrs[.underlineColor] = theme.linkColor
-                case .renamed:
-                    attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue | NSUnderlineStyle.patternDot.rawValue
-                    attrs[.underlineColor] = theme.linkColor
-                case .unchanged, nil:
-                    break
-                }
-                storage.setAttributes(attrs, range: range)
-            }
-            if found.location == NSNotFound { break }
-            location = found.location + found.length
-            line += 1
-        }
-        storage.endEditing()
-        needsDisplay = true
-    }
-
-    override func drawBackground(in rect: NSRect) {
-        super.drawBackground(in: rect)
-        guard isDirectoryBuffer, engine != nil else { return }
-        guard let lm = textLayoutManager else { return }
-        let index = clampUTF16(selectedRange().location)
-        let doc = lm.documentRange.location
-        guard let location = lm.location(doc, offsetBy: index),
-              let fragment = lm.textLayoutFragment(for: location) else { return }
-        var row = fragment.layoutFragmentFrame
-        row.origin.x = 0
-        row.origin.y += textContainerOrigin.y
-        row.size.width = bounds.width
-        theme.textColor.withAlphaComponent(0.06).setFill()
-        row.fill()
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
-        guard isDirectoryBuffer, engine != nil else { return }
-        drawDirectoryHeader()
-        drawDirectoryIcons()
-    }
-
-    private func drawDirectoryHeader() {
-        let height = directoryHeaderHeight
-        let band = NSRect(x: 0, y: 0, width: bounds.width, height: height)
-        theme.directoryBackground.setFill()
-        band.fill()
-        let title = directoryURL.map { DirectoryChrome.pathLabel($0) } ?? ""
-        let titleFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .medium)
-        let titleAttrs: [NSAttributedString.Key: Any] = [
-            .font: titleFont,
-            .foregroundColor: theme.dimColor,
-        ]
-        let titleRect = NSRect(x: 20, y: 8, width: max(40, bounds.width - 40), height: 16)
-        title.draw(in: titleRect, withAttributes: titleAttrs)
-        if !directoryPendingSummary.isEmpty {
-            let detailAttrs: [NSAttributedString.Key: Any] = [
-                .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
-                .foregroundColor: theme.linkColor,
-            ]
-            let detailRect = NSRect(x: 20, y: 26, width: max(40, bounds.width - 40), height: 16)
-            directoryPendingSummary.draw(in: detailRect, withAttributes: detailAttrs)
-        }
-        theme.dimColor.withAlphaComponent(0.35).setFill()
-        NSRect(x: 0, y: height - 1, width: bounds.width, height: 1).fill()
-    }
-
-    private func drawDirectoryIcons() {
-        guard let lm = textLayoutManager else { return }
-        let visible = visibleRect
-        let doc = lm.documentRange.location
-        lm.enumerateTextLayoutFragments(from: doc, options: []) { fragment in
-            let frame = fragment.layoutFragmentFrame
-            let top = frame.minY + self.textContainerOrigin.y
-            if top > visible.maxY { return false }
-            if frame.maxY + self.textContainerOrigin.y < visible.minY { return true }
-            let start = lm.offset(from: doc, to: fragment.rangeInElement.location)
-            guard start != NSNotFound else { return true }
-            let line = self.engine.buffer.lineIndex(containing: start)
-            guard let style = self.directoryStyles[line] else { return true }
-            let bar = NSRect(x: 7, y: top + 4, width: 2, height: max(4, frame.height - 8))
-            switch style.mark {
-            case .created, .copied:
-                self.theme.linkColor.setFill()
-                bar.fill()
-            case .renamed:
-                self.theme.linkColor.withAlphaComponent(0.7).setFill()
-                bar.fill()
-            case .unchanged:
-                break
-            }
-            let color: NSColor
-            if style.isDotfile {
-                color = self.theme.dimColor
-            } else if style.isDirectory {
-                color = self.theme.linkColor
-            } else {
-                color = self.theme.textColor.withAlphaComponent(0.55)
-            }
-            let symbol = style.isDirectory ? "folder" : "doc.text"
-            let iconY = top + max(0, (frame.height - DirectoryChrome.iconSize) / 2)
-            let iconRect = NSRect(x: DirectoryChrome.iconX, y: iconY, width: DirectoryChrome.iconSize, height: DirectoryChrome.iconSize)
-            if let image = self.directorySymbol(symbol, color: color) {
-                image.draw(in: iconRect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
-            } else {
-                let glyph = style.isDirectory ? "▸" : "·"
-                glyph.draw(in: iconRect, withAttributes: [
-                    .font: NSFont.systemFont(ofSize: 11),
-                    .foregroundColor: color,
-                ])
-            }
-            return true
-        }
-    }
-
-    private func directorySymbol(_ name: String, color: NSColor) -> NSImage? {
-        let sized = NSImage.SymbolConfiguration(pointSize: 12, weight: .regular)
-        let tinted = sized.applying(NSImage.SymbolConfiguration(paletteColors: [color]))
-        return NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(tinted)
     }
 
     /// One character cell: the advance of the glyph under the cursor, and the em box
@@ -825,6 +683,9 @@ final class VimTextView: NSTextView {
     }
 
     private func rowHeight() -> CGFloat {
+        if isDirectoryBuffer {
+            return QuillMetrics.directoryRowHeight(for: font ?? theme.directoryFont)
+        }
         let caretFont = font ?? theme.bodyFont
         return max(1, (caretFont.ascender - caretFont.descender) * theme.lineHeight)
     }
@@ -836,7 +697,8 @@ final class VimTextView: NSTextView {
         // out every fragment, which is what made scrolling a long file hitch.
         let rows = max(1, engine.buffer.lineCount)
         let estimated = CGFloat(rows) * rowHeight() + inset
-        return max(clip, ceil(estimated))
+        let ghosts = isDirectoryBuffer ? directoryGhostHeight : 0
+        return max(clip, ceil(estimated)) + ghosts
     }
 
     private func font(atUTF16 index: Int) -> NSFont {
@@ -986,10 +848,10 @@ struct EditorView: NSViewRepresentable {
         scroll.documentView = tv
         context.coordinator.textView = tv
         context.coordinator.model = model
+        tv.columnWidth = model.theme.columnWidth
         tv.isDirectoryBuffer = model.isDirectory
         tv.directoryURL = model.isDirectory ? model.fileURL : nil
-        tv.directorySnapshot = model.isDirectory ? model.directorySnapshot : nil
-        tv.appliedDirectory = model.isDirectory
+        tv.directoryEntries = model.isDirectory ? (model.directorySnapshot?.entries ?? []) : []
         tv.applyTheme(model.theme, focus: model.focusMode)
         tv.syncFromEngine()
         context.coordinator.syncedRevision = revision
@@ -1001,18 +863,22 @@ struct EditorView: NSViewRepresentable {
         tv.engine = model.engine
         _ = revision
         tv.columnWidth = model.theme.columnWidth
-        let directoryChanged = tv.appliedDirectory != model.isDirectory
+        let entries = model.isDirectory ? (model.directorySnapshot?.entries ?? []) : []
+        let url = model.isDirectory ? model.fileURL : nil
+        let directoryChanged = tv.isDirectoryBuffer != model.isDirectory
+            || tv.directoryURL != url
+            || tv.directoryEntries != entries
         tv.isDirectoryBuffer = model.isDirectory
-        tv.directoryURL = model.isDirectory ? model.fileURL : nil
-        tv.directorySnapshot = model.isDirectory ? model.directorySnapshot : nil
+        tv.directoryURL = url
+        tv.directoryEntries = entries
         let diagnostics = model.nsDiagnosticRanges()
         let diagnosticsChanged = tv.diagnosticRanges.map(\.0) != diagnostics.map(\.0)
         if diagnosticsChanged { tv.diagnosticRanges = diagnostics }
-        let chrome = model.isDirectory ? model.theme.directoryBackground : model.theme.backgroundColor
-        WindowChrome.apply(theme: model.theme, background: chrome)
+        WindowChrome.apply(theme: model.theme)
         if model.isDirectory {
             scroll.drawsBackground = true
-            scroll.backgroundColor = chrome
+            scroll.backgroundColor = model.theme.directoryBackgroundColor
+            tv.window?.backgroundColor = model.theme.directoryBackgroundColor
         } else {
             scroll.drawsBackground = false
         }
@@ -1020,7 +886,6 @@ struct EditorView: NSViewRepresentable {
             tv.applyTheme(model.theme, focus: model.focusMode)
             tv.appliedThemeID = model.themeIdentity
             tv.appliedFocus = model.focusMode
-            tv.appliedDirectory = model.isDirectory
         } else {
             tv.updateInsets()
         }

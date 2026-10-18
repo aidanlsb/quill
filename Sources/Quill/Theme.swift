@@ -9,6 +9,15 @@ enum QuillMetrics {
     static let lineHeight: CGFloat = 1.5
     static let headingScale: [CGFloat] = [1.5, 1.3, 1.15, 1.05, 1.0, 1.0]
     static let monoScale: CGFloat = 0.85
+    /// Directory listings use a smaller monospaced face than the writing body.
+    static let directoryFontScale: CGFloat = 0.75
+    static let directoryLineHeight: CGFloat = 1.28
+    /// Left and right padding for the listing. The icon sits inside the left padding.
+    static let directoryHorizontalInset: CGFloat = 44
+    static let directoryHeaderHeight: CGFloat = 22
+    static let directoryHeaderGap: CGFloat = 10
+    static let directoryIconSize: CGFloat = 12
+    static let directoryIconLeading: CGFloat = 16
     /// Minimum space between the text and the window edge. The column stays centered inside it.
     static let sideGutter: CGFloat = 128
     static let verticalInset: CGFloat = 128
@@ -48,12 +57,12 @@ enum QuillMetrics {
         return NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
     }
 
-    /// Compact listing face. Smaller than the 16pt prose body so a directory is obviously not a note.
-    static let directoryFontSize: CGFloat = 13
+    static func directoryFontSize(body: CGFloat) -> CGFloat {
+        body * directoryFontScale
+    }
 
-    @MainActor
-    static func directoryFont() -> NSFont {
-        monoFont(ofSize: directoryFontSize)
+    static func directoryRowHeight(for font: NSFont) -> CGFloat {
+        max(1, (font.ascender - font.descender) * directoryLineHeight)
     }
 }
 
@@ -70,6 +79,14 @@ struct QuillTheme {
     var selectionColor: NSColor
     var columnWidth: CGFloat
     var lineHeight: CGFloat
+    var directoryFont: NSFont
+    var directoryHeaderFont: NSFont
+    var directoryBackgroundColor: NSColor
+    var directoryAccentColor: NSColor
+    var directoryHighlightColor: NSColor
+    var directoryCreatedColor: NSColor
+    var directoryRenamedColor: NSColor
+    var directoryDeletedColor: NSColor
 
     @MainActor
     static func current(
@@ -88,6 +105,9 @@ struct QuillTheme {
             NSFont.systemFont(ofSize: size * scale, weight: .semibold)
         }
         let text = dark ? NSColor(calibratedWhite: 0.86, alpha: 1) : NSColor(calibratedWhite: 0.22, alpha: 1)
+        let directorySize = QuillMetrics.directoryFontSize(body: size)
+        let directoryFont = QuillMetrics.monoFont(ofSize: directorySize)
+        let directoryHeaderFont = QuillMetrics.monoFont(ofSize: max(10, directorySize - 1))
         let sample = "abcdefghijklmnopqrstuvwxyz" as NSString
         let average = sample.size(withAttributes: [.font: body]).width / 26
         return QuillTheme(
@@ -106,13 +126,28 @@ struct QuillTheme {
             dimColor: dark ? NSColor(calibratedWhite: 0.40, alpha: 1) : NSColor(calibratedWhite: 0.62, alpha: 1),
             selectionColor: text.withAlphaComponent(0.10),
             columnWidth: average * CGFloat(max(1, columnCharacters)),
-            lineHeight: QuillMetrics.lineHeight
+            lineHeight: QuillMetrics.lineHeight,
+            directoryFont: directoryFont,
+            directoryHeaderFont: directoryHeaderFont,
+            directoryBackgroundColor: dark
+                ? NSColor(calibratedRed: 0.128, green: 0.136, blue: 0.152, alpha: 1)
+                : NSColor(calibratedRed: 0.918, green: 0.929, blue: 0.945, alpha: 1),
+            directoryAccentColor: dark
+                ? NSColor(calibratedRed: 0.66, green: 0.76, blue: 0.84, alpha: 1)
+                : NSColor(calibratedRed: 0.27, green: 0.40, blue: 0.55, alpha: 1),
+            directoryHighlightColor: dark
+                ? NSColor(calibratedWhite: 1, alpha: 0.06)
+                : NSColor(calibratedWhite: 0, alpha: 0.045),
+            directoryCreatedColor: dark
+                ? NSColor(calibratedRed: 0.55, green: 0.72, blue: 0.60, alpha: 1)
+                : NSColor(calibratedRed: 0.33, green: 0.48, blue: 0.38, alpha: 1),
+            directoryRenamedColor: dark
+                ? NSColor(calibratedRed: 0.84, green: 0.70, blue: 0.45, alpha: 1)
+                : NSColor(calibratedRed: 0.62, green: 0.46, blue: 0.24, alpha: 1),
+            directoryDeletedColor: dark
+                ? NSColor(calibratedRed: 0.78, green: 0.52, blue: 0.48, alpha: 1)
+                : NSColor(calibratedRed: 0.55, green: 0.32, blue: 0.30, alpha: 1)
         )
-    }
-
-    /// A cool shift of the prose background, so a directory is not the writing surface.
-    var directoryBackground: NSColor {
-        backgroundColor.blended(withFraction: 0.08, of: linkColor) ?? backgroundColor
     }
 
     var bodyAttributes: [NSAttributedString.Key: Any] {
@@ -184,7 +219,7 @@ enum MarkdownStyler {
         } else {
             focusRange = 0..<ns.length
         }
-        for span in spans(overlapping: limit, in: spans) {
+        for span in Self.spans(overlapping: limit, in: spans) {
             let range = nsRange(span.range, length: ns.length)
             guard range.location != NSNotFound, range.length > 0, NSMaxRange(range) <= ns.length else { continue }
             let dimmed = focus && (range.location >= focusRange.upperBound || NSMaxRange(range) <= focusRange.lowerBound)

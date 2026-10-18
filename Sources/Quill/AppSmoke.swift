@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import QuillFS
 import QuillVim
 
 /// In-process check for the behaviors Linux tests cannot see: caret cell size,
@@ -245,6 +246,17 @@ enum AppSmoke {
     }
 
     @MainActor
+    private static func colorDistance(_ lhs: NSColor, _ rhs: NSColor) -> CGFloat {
+        let a = lhs.usingColorSpace(.sRGB) ?? lhs
+        let b = rhs.usingColorSpace(.sRGB) ?? rhs
+        var ar: CGFloat = 0, ag: CGFloat = 0, ab: CGFloat = 0, aa: CGFloat = 0
+        var br: CGFloat = 0, bg: CGFloat = 0, bb: CGFloat = 0, ba: CGFloat = 0
+        a.getRed(&ar, green: &ag, blue: &ab, alpha: &aa)
+        b.getRed(&br, green: &bg, blue: &bb, alpha: &ba)
+        return abs(ar - br) + abs(ag - bg) + abs(ab - bb)
+    }
+
+    @MainActor
     private static func checkCaretAndScroll(failures: inout [String]) {
         let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 640, height: 400))
         scroll.hasVerticalScroller = true
@@ -484,12 +496,166 @@ enum AppSmoke {
     }
 
     @MainActor
+    private static func checkDirectoryChrome(
+        model: AppModel,
+        tv: VimTextView,
+        scroll: NSScrollView,
+        root: URL,
+        failures: inout [String]
+    ) {
+        let width = scroll.contentView.bounds.width
+        let prose = QuillMetrics.columnSpan(width: width, column: tv.columnWidth)
+        let column = tv.textContainer?.size.width ?? 0
+        let font = tv.textStorage.flatMap { storage -> NSFont? in
+            guard storage.length > 0 else { return nil }
+            return storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+        }
+        check(font?.isFixedPitch == true, "directory font pitch \(font?.fontName ?? "missing")", failures: &failures)
+        check(
+            font?.familyName == model.theme.directoryFont.familyName,
+            "directory font family \(font?.familyName ?? "")",
+            failures: &failures
+        )
+        check(
+            abs((font?.pointSize ?? 0) - model.theme.directoryFont.pointSize) < 0.25,
+            "directory font size \(font?.pointSize ?? 0)",
+            failures: &failures
+        )
+        check(
+            (font?.pointSize ?? 0) <= model.theme.bodyFont.pointSize - 2,
+            "directory font \(font?.pointSize ?? 0) is not compact next to \(model.theme.bodyFont.pointSize)",
+            failures: &failures
+        )
+        check(model.theme.directoryFont.isFixedPitch, "directory font mono", failures: &failures)
+        check(
+            abs(tv.textContainerInset.width - QuillMetrics.directoryHorizontalInset) < 0.5,
+            "directory inset \(tv.textContainerInset.width)",
+            failures: &failures
+        )
+        check(
+            tv.textContainerInset.width + 40 < prose.inset,
+            "directory inset \(tv.textContainerInset.width) still tracks the prose column \(prose.inset) at width \(width)",
+            failures: &failures
+        )
+        check(
+            column > prose.column + 40,
+            "directory column \(column) is not wider than the prose column \(prose.column)",
+            failures: &failures
+        )
+        let headerInset = QuillMetrics.directoryHeaderHeight + QuillMetrics.directoryHeaderGap
+        check(
+            abs(tv.textContainerInset.height - headerInset) < 0.5,
+            "directory header inset \(tv.textContainerInset.height)",
+            failures: &failures
+        )
+        check(
+            colorDistance(tv.backgroundColor, model.theme.directoryBackgroundColor) < 0.02,
+            "directory background view",
+            failures: &failures
+        )
+        let dark = QuillTheme.current(scheme: .dark)
+        let light = QuillTheme.current(scheme: .light)
+        check(
+            colorDistance(dark.directoryBackgroundColor, dark.backgroundColor) > 0.04,
+            "directory background dark",
+            failures: &failures
+        )
+        check(
+            colorDistance(light.directoryBackgroundColor, light.backgroundColor) > 0.04,
+            "directory background light",
+            failures: &failures
+        )
+        let header = DirectoryStyleBuilder.abbreviatedDirectory(
+            path: root.path,
+            home: FileManager.default.homeDirectoryForCurrentUser.path
+        )
+        check(tv.directoryHeaderText == header, "directory header \(tv.directoryHeaderText)", failures: &failures)
+        check(
+            DirectoryStyleBuilder.abbreviatedDirectory(path: "/Users/quill/notes", home: "/Users/quill") == "~/notes/",
+            "directory header home",
+            failures: &failures
+        )
+        check(
+            DirectoryStyleBuilder.abbreviatedDirectory(path: "/Users/quill", home: "/Users/quill") == "~/",
+            "directory header root",
+            failures: &failures
+        )
+        check(
+            DirectoryStyleBuilder.abbreviatedDirectory(path: "/Users/quill2/notes", home: "/Users/quill") == "/Users/quill2/notes/",
+            "directory header boundary",
+            failures: &failures
+        )
+        if let dot = foreground(in: tv, needle: ".hidden") {
+            check(colorDistance(dot, model.theme.dimColor) < 0.08, "directory dim \(dot)", failures: &failures)
+        } else {
+            failures.append("directory dim missing")
+        }
+        if let folder = foreground(in: tv, needle: "sub/") {
+            check(
+                colorDistance(folder, model.theme.directoryAccentColor) < 0.08,
+                "directory accent \(folder)",
+                failures: &failures
+            )
+        } else {
+            failures.append("directory accent missing")
+        }
+        let parent = URL(fileURLWithPath: "/notes")
+        let original = [
+            DirEntry(originalURL: parent.appendingPathComponent("keep.md"), name: "keep.md", isDirectory: false, entryID: 1),
+            DirEntry(originalURL: parent.appendingPathComponent("gone.md"), name: "gone.md", isDirectory: false, entryID: 2),
+        ]
+        let edited = [
+            DirectoryBufferLine(text: "keep.md", anchorID: 1, sourcePath: "/notes/keep.md", sourceIsDirectory: false, transfer: .identity),
+            DirectoryBufferLine(text: "fresh.md", anchorID: nil, sourcePath: nil, sourceIsDirectory: false, transfer: nil),
+        ]
+        let preview = DirectoryStyleBuilder.style(
+            directoryPath: "/notes",
+            homePath: "/Users/quill",
+            lines: edited,
+            original: original
+        )
+        let created = preview.lines.contains { $0.mark == .created && $0.name == "fresh.md" }
+        let removed = preview.deleted.contains { $0.name == "gone.md" }
+        check(created, "new was not marked", failures: &failures)
+        check(removed, "delete was not marked", failures: &failures)
+
+        let proseScroll = NSScrollView(frame: scroll.frame)
+        proseScroll.hasVerticalScroller = false
+        let proseView = VimTextView(usingTextLayoutManager: true)
+        proseView.commonInit()
+        proseView.engine = Engine(text: "Hello\n")
+        proseView.isDirectoryBuffer = false
+        proseView.columnWidth = model.theme.columnWidth
+        proseScroll.documentView = proseView
+        proseView.applyTheme(model.theme, focus: false)
+        proseScroll.layoutSubtreeIfNeeded()
+        proseView.layoutSubtreeIfNeeded()
+        proseView.updateInsets()
+        let proseWidth = proseScroll.contentView.bounds.width
+        let proseSpan = QuillMetrics.columnSpan(width: proseWidth, column: proseView.columnWidth)
+        check(
+            abs(proseView.textContainerInset.width - proseSpan.inset) < 1,
+            "prose inset \(proseView.textContainerInset.width) expected \(proseSpan.inset)",
+            failures: &failures
+        )
+    }
+
+    @MainActor
+    private static func foreground(in tv: VimTextView, needle: String) -> NSColor? {
+        let ns = tv.string as NSString
+        let range = ns.range(of: needle)
+        guard range.location != NSNotFound, let storage = tv.textStorage else { return nil }
+        return storage.attribute(.foregroundColor, at: range.location, effectiveRange: nil) as? NSColor
+    }
+
+    @MainActor
     private static func checkDirectory(failures: inout [String]) {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("quill-smoke-\(UUID().uuidString)", isDirectory: true)
         do {
             try FileManager.default.createDirectory(at: root.appendingPathComponent("sub"), withIntermediateDirectories: true)
             try Data("hello notes\n".utf8).write(to: root.appendingPathComponent("notes.md"))
+            try Data("hidden\n".utf8).write(to: root.appendingPathComponent(".hidden"))
         } catch {
             failures.append("fixture: \(error.localizedDescription)")
             return
@@ -503,29 +669,33 @@ enum AppSmoke {
         check(model.engine.text.contains("notes.md"), "listing missing notes.md: \(model.engine.text)", failures: &failures)
         check(model.engine.text.contains("sub/"), "listing missing sub/: \(model.engine.text)", failures: &failures)
 
-        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 640, height: 400))
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 800, height: 480))
+        scroll.hasVerticalScroller = false
         let tv = VimTextView(usingTextLayoutManager: true)
         tv.commonInit()
         tv.engine = model.engine
         model.engine.layout = tv.layoutAdapter
         scroll.documentView = tv
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 480),
+            styleMask: [.titled, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = scroll
+        scroll.frame = window.contentView?.bounds ?? scroll.frame
+        scroll.layoutSubtreeIfNeeded()
         tv.isDirectoryBuffer = true
         tv.directoryURL = root
-        tv.directorySnapshot = model.directorySnapshot
+        tv.directoryEntries = model.directorySnapshot?.entries ?? []
+        tv.columnWidth = model.theme.columnWidth
         tv.applyTheme(model.theme, focus: false)
         tv.syncFromEngine()
+        tv.layoutSubtreeIfNeeded()
+        tv.updateInsets()
+        tv.queueRestyle()
         check(tv.string.contains("notes.md"), "text view did not show the directory listing", failures: &failures)
-        let styled = tv.textStorage.flatMap { storage -> NSFont? in
-            guard storage.length > 0 else { return nil }
-            return storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
-        }
-        let font = styled ?? tv.font
-        let expected = QuillMetrics.directoryFont()
-        check(
-            font?.fontName == expected.fontName && abs((font?.pointSize ?? 0) - expected.pointSize) < 0.2,
-            "directory view font \(font?.fontName ?? "nil") \(font?.pointSize ?? 0)",
-            failures: &failures
-        )
+        checkDirectoryChrome(model: model, tv: tv, scroll: scroll, root: root, failures: &failures)
 
         var guardSteps = 0
         while !model.engine.lineTextUnderCursor().hasPrefix("notes.md"), guardSteps < 10 {
@@ -562,6 +732,19 @@ enum AppSmoke {
             "rename left \(model.engine.lineTextUnderCursor())",
             failures: &failures
         )
+        let pending = DirectoryStyleBuilder.style(
+            directoryPath: model.fileURL?.path ?? "",
+            homePath: FileManager.default.homeDirectoryForCurrentUser.path,
+            lines: DirectoryStyleBuilder.lines(from: model.engine.buffer),
+            original: model.directorySnapshot?.entries ?? []
+        )
+        let marked = pending.lines.contains { line in
+            if case .renamed(let from) = line.mark {
+                return line.name == "renamed.md" && from == "notes.md"
+            }
+            return false
+        }
+        check(marked, "rename was not marked \(pending.lines.map { "\($0.name) \($0.mark)" })", failures: &failures)
         model.save()
         check(model.showConfirm, " :w did not ask to apply filesystem changes (\(model.message))", failures: &failures)
         let renamed = model.pendingOps.contains { op in
