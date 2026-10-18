@@ -344,6 +344,16 @@ final class VimTextView: NSTextView {
         isVerticallyResizable = true
         isHorizontallyResizable = false
         autoresizingMask = [.width]
+        installViewportContent()
+    }
+
+    /// Swap in a content storage that does not allocate a paragraph object per line.
+    private func installViewportContent() {
+        guard let layoutManager = textLayoutManager else { return }
+        if layoutManager.textContentManager is ViewportContentStorage { return }
+        let storage = (layoutManager.textContentManager as? NSTextContentStorage)?.textStorage ?? textStorage
+        let viewport = ViewportContentStorage()
+        viewport.adopt(storage: storage, layoutManager: layoutManager)
     }
 
     func applyTheme(_ theme: QuillTheme, focus: Bool) {
