@@ -267,10 +267,10 @@ private struct PickerLineField: NSViewRepresentable {
         field.cell?.wraps = false
         field.cell?.isScrollable = true
         field.cell?.lineBreakMode = .byTruncatingTail
-        field.cell?.drawsBackground = false
+        (field.cell as? NSTextFieldCell)?.drawsBackground = false
         field.cell?.isBordered = false
         field.cell?.isBezeled = false
-        field.accessibilityIdentifier = identifier
+        field.setAccessibilityIdentifier(identifier)
         if style == .query {
             field.setContentHuggingPriority(.defaultLow, for: .horizontal)
             field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -322,13 +322,13 @@ private struct PickerCaret: NSViewRepresentable {
     func makeNSView(context: Context) -> PickerCaretView {
         let view = PickerCaretView()
         view.color = color
-        view.accessibilityIdentifier = "quill.picker.caret"
+        view.setAccessibilityIdentifier("quill.picker.caret")
         return view
     }
 
     func updateNSView(_ view: PickerCaretView, context: Context) {
         view.color = color
-        view.accessibilityIdentifier = "quill.picker.caret"
+        view.setAccessibilityIdentifier("quill.picker.caret")
     }
 }
 
