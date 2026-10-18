@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import QuillFS
 import QuillMarkdown
 import QuillVim
 
@@ -16,6 +17,7 @@ final class TextKit2Layout: TextLayout, @unchecked Sendable {
     private var goalOrigin = -1
 
     nonisolated func displayColumn(of offset: Int, in buffer: TextBuffer) -> Int {
+        // quill-concurrency: TextBuffer is not Sendable; the engine calls this synchronously on the main thread.
         nonisolated(unsafe) let buffer = buffer
         return MainActor.assumeIsolated {
             let range = screenRange(at: offset, in: buffer)
@@ -24,6 +26,7 @@ final class TextKit2Layout: TextLayout, @unchecked Sendable {
     }
 
     nonisolated func screenLineStart(at offset: Int, in buffer: TextBuffer) -> Int {
+        // quill-concurrency: TextBuffer is not Sendable; the engine calls this synchronously on the main thread.
         nonisolated(unsafe) let buffer = buffer
         return MainActor.assumeIsolated {
             screenRange(at: offset, in: buffer).lowerBound
@@ -31,6 +34,7 @@ final class TextKit2Layout: TextLayout, @unchecked Sendable {
     }
 
     nonisolated func screenLineEnd(at offset: Int, in buffer: TextBuffer) -> Int {
+        // quill-concurrency: TextBuffer is not Sendable; the engine calls this synchronously on the main thread.
         nonisolated(unsafe) let buffer = buffer
         return MainActor.assumeIsolated {
             buffer.lastCursor(in: screenRange(at: offset, in: buffer))
@@ -241,6 +245,10 @@ final class VimTextView: NSTextView {
     var layoutAdapter = TextKit2Layout()
     weak var vimDelegate: VimTextViewDelegate?
     var isDirectoryBuffer = false
+    var directoryURL: URL?
+    var directoryEntries: [DirEntry] = []
+    var directoryHeaderText = ""
+    var directoryGhostHeight: CGFloat = 0
     var focusMode = false
     var columnWidth: CGFloat = 640
     var theme = QuillTheme.current()
@@ -282,7 +290,8 @@ final class VimTextView: NSTextView {
     func applyTheme(_ theme: QuillTheme, focus: Bool) {
         self.theme = theme
         self.focusMode = focus
-        backgroundColor = theme.backgroundColor
+        let directory = isDirectoryBuffer
+        backgroundColor = directory ? theme.directoryBackgroundColor : theme.backgroundColor
         insertionPointColor = theme.textColor
         selectedTextAttributes = [
             .backgroundColor: theme.selectionColor,
@@ -290,18 +299,34 @@ final class VimTextView: NSTextView {
         ]
         defaultParagraphStyle = {
             let p = NSMutableParagraphStyle()
-            p.lineHeightMultiple = theme.lineHeight
+            if directory {
+                p.alignment = .left
+                p.lineHeightMultiple = QuillMetrics.directoryLineHeight
+            } else {
+                p.lineHeightMultiple = theme.lineHeight
+            }
             return p
         }()
-        font = theme.bodyFont
+        font = directory ? theme.directoryFont : theme.bodyFont
         textColor = theme.textColor
+        if !directory {
+            directoryGhostHeight = 0
+            directoryHeaderText = ""
+        }
         updateInsets()
         queueRestyle()
     }
 
     func updateInsets() {
         guard let clip = enclosingScrollView?.contentView else { return }
-        let width = clip.bounds.width
+        let width = max(clip.bounds.width, 1)
+        if isDirectoryBuffer {
+            let inset = QuillMetrics.directoryHorizontalInset
+            let vertical = QuillMetrics.directoryHeaderHeight + QuillMetrics.directoryHeaderGap
+            textContainerInset = NSSize(width: inset, height: vertical)
+            textContainer?.size = NSSize(width: max(1, width - inset * 2), height: CGFloat.greatestFiniteMagnitude)
+            return
+        }
         let vertical = focusMode ? QuillMetrics.focusVerticalInset : QuillMetrics.verticalInset
         let span = QuillMetrics.columnSpan(width: width, column: columnWidth)
         textContainerInset = NSSize(width: span.inset, height: vertical)
@@ -392,6 +417,27 @@ final class VimTextView: NSTextView {
         }
     }
 
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard isDirectoryBuffer, engine != nil else { return }
+        drawDirectoryDecorations()
+    }
+
+    override func drawBackground(in rect: NSRect) {
+        guard isDirectoryBuffer else {
+            super.drawBackground(in: rect)
+            return
+        }
+        drawDirectoryBackground(in: rect)
+    }
+
+    override func setSelectedRange(_ charRange: NSRange, affinity: NSSelectionAffinity, stillSelecting stillSelectingFlag: Bool) {
+        super.setSelectedRange(charRange, affinity: affinity, stillSelecting: stillSelectingFlag)
+        if isDirectoryBuffer {
+            needsDisplay = true
+        }
+    }
+
     override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
         guard engine != nil, flag else {
             super.drawInsertionPoint(in: rect, color: color, turnedOn: flag)
@@ -478,12 +524,24 @@ final class VimTextView: NSTextView {
     }
 
     func queueRestyle(dirty: Int? = nil) {
+        if isDirectoryBuffer {
+            directoryGhostHeight = restyleDirectoryBuffer()
+            needsDisplay = true
+            noteContentSizeChanged()
+            return
+        }
         guard !restyleQueued else { return }
         restyleQueued = true
         let dirty = dirty
         Task { @MainActor [weak self] in
             guard let self, let storage = self.textStorage else { return }
             self.restyleQueued = false
+            if self.isDirectoryBuffer {
+                self.directoryGhostHeight = self.restyleDirectoryBuffer()
+                self.needsDisplay = true
+                self.noteContentSizeChanged()
+                return
+            }
             self.tokenizer.replace(text: storage.string, dirtyUTF16: dirty ?? 0)
             MarkdownStyler.restyle(
                 storage,
@@ -564,6 +622,9 @@ final class VimTextView: NSTextView {
     }
 
     private func rowHeight() -> CGFloat {
+        if isDirectoryBuffer {
+            return QuillMetrics.directoryRowHeight(for: font ?? theme.directoryFont)
+        }
         let caretFont = font ?? theme.bodyFont
         return max(1, (caretFont.ascender - caretFont.descender) * theme.lineHeight)
     }
@@ -578,7 +639,8 @@ final class VimTextView: NSTextView {
             layoutAdapter.ensureFullLayout()
             used = (textLayoutManager?.usageBoundsForTextContainer.height ?? 0) + inset
         }
-        return max(clip, ceil(used), ceil(estimated))
+        let ghosts = isDirectoryBuffer ? directoryGhostHeight : 0
+        return max(clip, ceil(used), ceil(estimated)) + ghosts
     }
 
     private func font(atUTF16 index: Int) -> NSFont {
@@ -730,6 +792,10 @@ struct EditorView: NSViewRepresentable {
         scroll.documentView = tv
         context.coordinator.textView = tv
         context.coordinator.model = model
+        tv.columnWidth = model.theme.columnWidth
+        tv.isDirectoryBuffer = model.isDirectory
+        tv.directoryURL = model.isDirectory ? model.fileURL : nil
+        tv.directoryEntries = model.isDirectory ? (model.directorySnapshot?.entries ?? []) : []
         tv.applyTheme(model.theme, focus: model.focusMode)
         tv.syncFromEngine()
         context.coordinator.syncedRevision = revision
@@ -741,12 +807,26 @@ struct EditorView: NSViewRepresentable {
         tv.engine = model.engine
         _ = revision
         tv.columnWidth = model.theme.columnWidth
+        let entries = model.isDirectory ? (model.directorySnapshot?.entries ?? []) : []
+        let url = model.isDirectory ? model.fileURL : nil
+        let directoryChanged = tv.isDirectoryBuffer != model.isDirectory
+            || tv.directoryURL != url
+            || tv.directoryEntries != entries
         tv.isDirectoryBuffer = model.isDirectory
+        tv.directoryURL = url
+        tv.directoryEntries = entries
         let diagnostics = model.nsDiagnosticRanges()
         let diagnosticsChanged = tv.diagnosticRanges.map(\.0) != diagnostics.map(\.0)
         if diagnosticsChanged { tv.diagnosticRanges = diagnostics }
         WindowChrome.apply(theme: model.theme)
-        if tv.appliedThemeID != model.themeIdentity || tv.appliedFocus != model.focusMode {
+        if model.isDirectory {
+            scroll.drawsBackground = true
+            scroll.backgroundColor = model.theme.directoryBackgroundColor
+            tv.window?.backgroundColor = model.theme.directoryBackgroundColor
+        } else {
+            scroll.drawsBackground = false
+        }
+        if tv.appliedThemeID != model.themeIdentity || tv.appliedFocus != model.focusMode || directoryChanged {
             tv.applyTheme(model.theme, focus: model.focusMode)
             tv.appliedThemeID = model.themeIdentity
             tv.appliedFocus = model.focusMode
