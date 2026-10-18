@@ -66,6 +66,7 @@ pid=$!
 status=0
 finished=0
 i=0
+# AppSmoke arms its own watchdog and exits 2 with a diagnostic after 20s.
 while [[ "$i" -lt 30 ]]; do
   if ! kill -0 "$pid" 2>/dev/null; then
     set +e

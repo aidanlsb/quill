@@ -16,6 +16,7 @@ This directory is the maintained source for verifying Quill's user-facing editor
 - Each run is a new process and a new temporary directory.
 - The harness calls `engine.handle` with the same key events as `keyDown`. It does not post OS key events.
 - Treat a line starting with `FAIL` as a failed feature. The rest of the log is not a pass for that feature.
+- A log that contains `quill smoke watchdog: exiting 2` is a failed launch. Smoke did not finish within 20 seconds.
 - Leave `artifacts/verify-quill/smoke.log` in place.
 
 ## Proof and skip reporting

@@ -5,14 +5,75 @@ import QuillVim
 /// In-process check for the behaviors Linux tests cannot see: caret cell size,
 /// real scrolling, and oil-style directory buffers wired through `AppModel`.
 /// Run with `QUILL_SMOKE=1`. Exits the process.
+///
+/// The checks start from `applicationDidFinishLaunching`. They must not wait
+/// for the SwiftUI window: a binary launched from a background shell is never
+/// activated, `onAppear` never runs, and the main thread sits in the run loop
+/// with no output. A watchdog armed at `applicationWillFinishLaunching` prints
+/// a snapshot and exits 2 if that still has not finished after 20 seconds.
 enum AppSmoke {
     @MainActor private static var started = false
+    @MainActor private static let trace = SmokeTraceStore()
+
+    /// Call from `applicationWillFinishLaunching`, before any window wait.
+    @MainActor
+    static func prepareIfRequested() {
+        guard ProcessInfo.processInfo.environment["QUILL_SMOKE"] == "1" else { return }
+        trace.arm(seconds: 20)
+        fputs("quill smoke: watchdog armed (20s)\n", stderr)
+        fflush(stderr)
+        let app = NSApplication.shared
+        app.setActivationPolicy(.regular)
+        app.activate()
+        noteAppKit(probe: false)
+    }
+
+    @MainActor
+    static func noteAttachedModel() {
+        trace.update {
+            $0.modelAttached = true
+            if $0.modelSource == "none" { $0.modelSource = "swiftui" }
+        }
+    }
+
+    @MainActor
+    static func noteWindowAppeared() {
+        trace.update { $0.windowAppeared = true }
+        noteAppKit(probe: false)
+    }
+
+    /// Start smoke once launch has finished. The SwiftUI model is used when
+    /// `onAppear` already attached it; otherwise a standalone model is built
+    /// so the checks do not wait for a key window.
+    @MainActor
+    static func launchDidFinish(model: AppModel?) {
+        trace.update { $0.launchFinished = true }
+        guard ProcessInfo.processInfo.environment["QUILL_SMOKE"] == "1" else { return }
+        let resolved: AppModel
+        if let model {
+            trace.update {
+                $0.modelAttached = true
+                if $0.modelSource == "none" { $0.modelSource = "swiftui" }
+            }
+            resolved = model
+        } else {
+            resolved = AppModel()
+            trace.update {
+                $0.modelAttached = true
+                if $0.modelSource == "none" { $0.modelSource = "synthesized" }
+            }
+        }
+        runIfRequested(model: resolved)
+    }
 
     @MainActor
     static func runIfRequested(model: AppModel) {
         guard !started else { return }
         guard ProcessInfo.processInfo.environment["QUILL_SMOKE"] == "1" else { return }
         started = true
+        trace.update { $0.smokeStarted = true }
+        fputs("quill smoke started\n", stderr)
+        fflush(stderr)
         _ = model
         var failures: [String] = []
         checkDefaultType(failures: &failures)
@@ -21,12 +82,38 @@ enum AppSmoke {
         checkDirectory(failures: &failures)
         if failures.isEmpty {
             fputs("quill smoke passed\n", stderr)
+            fflush(stderr)
+            trace.cancel()
             exit(0)
         }
         for failure in failures {
             fputs("FAIL \(failure)\n", stderr)
         }
+        fflush(stderr)
+        trace.cancel()
         exit(1)
+    }
+
+    @MainActor
+    static func recordProbeSnapshot() {
+        noteAppKit(probe: true)
+    }
+
+    @MainActor
+    private static func noteAppKit(probe: Bool) {
+        let app = NSApplication.shared
+        let policy: String
+        switch app.activationPolicy() {
+        case .regular: policy = "regular"
+        case .accessory: policy = "accessory"
+        case .prohibited: policy = "prohibited"
+        @unknown default: policy = "unknown"
+        }
+        trace.update {
+            $0.activationPolicy = policy
+            $0.windowCount = app.windows.count
+            if probe { $0.probeAnswered = true }
+        }
     }
 
     @MainActor
@@ -391,5 +478,95 @@ enum AppSmoke {
             return false
         }
         check(renamed, "save planned \(model.pendingOps.map(\.summary)) instead of a rename", failures: &failures)
+    }
+}
+
+private struct SmokeTrace: Sendable {
+    var launchFinished = false
+    var modelAttached = false
+    var modelSource = "none"
+    var windowAppeared = false
+    var smokeStarted = false
+    var activationPolicy = "unset"
+    var windowCount = -1
+    var probeAnswered = false
+}
+
+// quill-concurrency: NSLock guards the snapshot the watchdog thread reads while the main actor writes it.
+private final class SmokeTraceStore: @unchecked Sendable {
+    private let lock = NSLock()
+    private var trace = SmokeTrace()
+    private var armed = false
+    private var cancelled = false
+
+    func update(_ body: (inout SmokeTrace) -> Void) {
+        lock.lock()
+        body(&trace)
+        lock.unlock()
+    }
+
+    func copy() -> SmokeTrace {
+        lock.lock()
+        defer { lock.unlock() }
+        return trace
+    }
+
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        lock.unlock()
+    }
+
+    func arm(seconds: Double) {
+        lock.lock()
+        if armed {
+            lock.unlock()
+            return
+        }
+        armed = true
+        lock.unlock()
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + seconds) { [self] in
+            guard !self.isCancelled() else { return }
+            let ready = DispatchSemaphore(value: 0)
+            DispatchQueue.main.async {
+                // quill-concurrency: The main queue is the main thread; assumeIsolated hops without capturing a non-Sendable self.
+                MainActor.assumeIsolated {
+                    AppSmoke.recordProbeSnapshot()
+                }
+                ready.signal()
+            }
+            _ = ready.wait(timeout: .now() + 1)
+            guard !self.isCancelled() else { return }
+            let shot = self.copy()
+            // write(2) rather than stderr: the FILE* global is not concurrency-safe,
+            // and this thread must report even when the main actor never runs again.
+            Self.writeStderr(Self.diagnostic(shot, seconds: seconds))
+            guard !self.isCancelled() else { return }
+            exit(2)
+        }
+    }
+
+    private func isCancelled() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelled
+    }
+
+    private static func diagnostic(_ trace: SmokeTrace, seconds: Double) -> String {
+        let waited = Int(seconds.rounded())
+        return """
+        quill smoke watchdog: exiting 2 after \(waited)s
+        launchFinished=\(trace.launchFinished) modelAttached=\(trace.modelAttached) modelSource=\(trace.modelSource) windowAppeared=\(trace.windowAppeared) smokeStarted=\(trace.smokeStarted)
+        windows=\(trace.windowCount) activationPolicy=\(trace.activationPolicy) probeAnswered=\(trace.probeAnswered)
+
+        """
+    }
+
+    private static func writeStderr(_ text: String) {
+        let bytes = Array(text.utf8)
+        bytes.withUnsafeBytes { buffer in
+            guard let base = buffer.baseAddress else { return }
+            _ = write(STDERR_FILENO, base, buffer.count)
+        }
     }
 }
