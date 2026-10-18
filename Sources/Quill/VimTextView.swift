@@ -73,37 +73,38 @@ final class TextKit2Layout: TextLayout, @unchecked Sendable {
         preferredColumn: Int,
         in buffer: TextBuffer
     ) -> Int {
-        guard let tv = textView, let lm = tv.textLayoutManager else {
-            return LogicalLineLayout.shared.position(
-                from: offset,
-                displayLines: delta,
-                preferredColumn: preferredColumn,
-                in: buffer
-            )
-        }
+        let logical = LogicalLineLayout.shared.position(
+            from: offset, displayLines: delta, preferredColumn: preferredColumn, in: buffer
+        )
+        // A motion can run before the view catches the buffer (directory reload).
+        // Laying that stale string out and treating its rows as buffer offsets
+        // deletes the wrong span. Logical lines until the lengths agree.
+        guard viewMatches(buffer), let tv = textView, let lm = tv.textLayoutManager else { return logical }
         let utf16 = min(max(0, offset), (tv.string as NSString).length)
-        let lines = enumerateVisualLines(layout: lm)
-        guard visualLinesAreUsable(lines, buffer: buffer) else {
-            // Viewport-only or non-monotonic layout cannot be trusted. A bad
-            // index here is what pinned `j` on line 1.
+        guard let origin = visualLine(at: utf16, layout: lm) else {
             stickyColumn = -1
             goalOrigin = -1
-            return LogicalLineLayout.shared.position(
-                from: offset, displayLines: delta, preferredColumn: preferredColumn, in: buffer
-            )
+            return logical
         }
-        var index = lineIndex(in: lines, utf16: utf16)
         if TextBuffer.isEndColumn(preferredColumn) {
             stickyColumn = preferredColumn
             stickyX = .greatestFiniteMagnitude
         } else if utf16 != goalOrigin || preferredColumn != stickyColumn {
             stickyColumn = preferredColumn
-            let line = lines[index]
-            let local = min(max(0, utf16 - line.start), max(0, selectableCount(line, buffer: buffer) - 1))
-            stickyX = line.line.locationForCharacter(at: local).x
+            let local = min(max(0, utf16 - origin.start), max(0, selectableCount(origin, buffer: buffer) - 1))
+            stickyX = origin.line.locationForCharacter(at: local).x
         }
-        index = min(max(0, index + delta), lines.count - 1)
-        let line = lines[index]
+        // Step one visual row at a time. Each step lays out that row's fragment
+        // only. Enumerating the whole document here made `j` on a long file
+        // wait for TextKit before the caret moved.
+        var line = origin
+        var remaining = abs(delta)
+        let forward = delta > 0
+        while remaining > 0 {
+            guard let next = adjacentVisualLine(to: line, forward: forward, layout: lm) else { break }
+            line = next
+            remaining -= 1
+        }
         let hit = characterOffset(on: line, atX: stickyX, buffer: buffer)
         let dest = buffer.clampedCursor(line.start + hit, normalMode: true)
         goalOrigin = dest
@@ -111,29 +112,97 @@ final class TextKit2Layout: TextLayout, @unchecked Sendable {
     }
 
     private func screenRange(at offset: Int, in buffer: TextBuffer) -> Range<Int> {
-        guard let tv = textView, let lm = tv.textLayoutManager else {
-            return logicalRange(at: offset, in: buffer)
-        }
-        let lines = enumerateVisualLines(layout: lm)
-        guard visualLinesAreUsable(lines, buffer: buffer) else {
+        guard viewMatches(buffer), let tv = textView, let lm = tv.textLayoutManager else {
             return logicalRange(at: offset, in: buffer)
         }
         let utf16 = min(max(0, offset), (tv.string as NSString).length)
-        let line = lines[lineIndex(in: lines, utf16: utf16)]
+        guard let line = visualLine(at: utf16, layout: lm) else {
+            return logicalRange(at: offset, in: buffer)
+        }
         let end = min(buffer.count, line.start + line.length)
         return min(line.start, end)..<end
+    }
+
+    /// The visual row containing `utf16`. Layout is ensured only through this
+    /// offset, so `j` can step past the viewport without laying out the file.
+    private func visualLine(at utf16: Int, layout lm: NSTextLayoutManager) -> VisualLine? {
+        ensureLayout(at: utf16, layout: lm)
+        let doc = lm.documentRange.location
+        guard let location = lm.location(doc, offsetBy: utf16),
+              let fragment = lm.textLayoutFragment(for: location) else { return nil }
+        let rows = visualRows(in: fragment, layout: lm)
+        return rows.last(where: { utf16 >= $0.start && utf16 < $0.start + max($0.length, 1) }) ?? rows.last
+    }
+
+    private func adjacentVisualLine(to line: VisualLine, forward: Bool, layout lm: NSTextLayoutManager) -> VisualLine? {
+        let doc = lm.documentRange.location
+        guard let location = lm.location(doc, offsetBy: min(line.start, max(0, line.start))),
+              let fragment = lm.textLayoutFragment(for: location) else { return nil }
+        let rows = visualRows(in: fragment, layout: lm)
+        if let index = rows.firstIndex(where: { $0.start == line.start }) {
+            let next = forward ? index + 1 : index - 1
+            if rows.indices.contains(next) { return rows[next] }
+        }
+        let probe = forward ? line.start + max(line.length, 1) : line.start - 1
+        guard probe >= 0 else { return nil }
+        let limit = ((textView?.string ?? "") as NSString).length
+        guard probe < limit else { return nil }
+        return visualLine(at: probe, layout: lm)
+    }
+
+    private func visualRows(in fragment: NSTextLayoutFragment, layout lm: NSTextLayoutManager) -> [VisualLine] {
+        let fragmentStart = lm.offset(from: lm.documentRange.location, to: fragment.rangeInElement.location)
+        if fragmentStart == NSNotFound { return [] }
+        var rows: [VisualLine] = []
+        for line in fragment.textLineFragments {
+            let range = line.characterRange
+            if range.location == NSNotFound || range.length == 0 { continue }
+            rows.append(VisualLine(
+                line: line,
+                start: fragmentStart + range.location,
+                length: range.length
+            ))
+        }
+        return rows
+    }
+
+    /// Screen rows belong to the view only while it still holds this buffer.
+    /// A directory reload updates the engine first; the previous note's line
+    /// breaks must not be applied to the listing.
+    private func viewMatches(_ buffer: TextBuffer) -> Bool {
+        guard let tv = textView else { return false }
+        let viewLength = (tv.string as NSString).length
+        return viewLength == buffer.count
+    }
+
+    /// Lays out only the fragment that contains `utf16`. `textLayoutFragment(for:)`
+    /// returns the last fragment already built, so after a short note is replaced
+    /// `j` stays on that last row. `.ensuresLayout` is what extends past it;
+    /// `ensureLayout(for:)` on a one-character range does not.
+    private func ensureLayout(at utf16: Int, layout lm: NSTextLayoutManager) {
+        let doc = lm.documentRange
+        let length = lm.offset(from: doc.location, to: doc.endLocation)
+        guard length != NSNotFound, length > 0 else { return }
+        let clamped = min(max(0, utf16), length - 1)
+        guard let start = lm.location(doc.location, offsetBy: clamped) else { return }
+        var covered = false
+        lm.enumerateTextLayoutFragments(from: start, options: [.ensuresLayout]) { fragment in
+            let end = lm.offset(from: doc.location, to: fragment.rangeInElement.endLocation)
+            covered = end != NSNotFound && end > clamped
+            return false
+        }
+        if covered { return }
+        lm.enumerateTextLayoutFragments(from: doc.location, options: [.ensuresLayout]) { fragment in
+            let end = lm.offset(from: doc.location, to: fragment.rangeInElement.endLocation)
+            if end == NSNotFound { return false }
+            return end <= clamped
+        }
     }
 
     private func logicalRange(at offset: Int, in buffer: TextBuffer) -> Range<Int> {
         if buffer.isEmpty { return 0..<0 }
         let line = buffer.lineIndex(containing: offset)
         return buffer.lineContentRange(at: line)
-    }
-
-    private func lineIndex(in lines: [VisualLine], utf16: Int) -> Int {
-        lines.lastIndex { line in
-            utf16 >= line.start && utf16 < line.start + line.length
-        } ?? lines.count - 1
     }
 
     /// How many UTF-16 units on this row can hold the caret. The trailing
@@ -187,6 +256,9 @@ final class TextKit2Layout: TextLayout, @unchecked Sendable {
 
     func ensureFullLayout() {
         guard let lm = textView?.textLayoutManager else { return }
+        let length = lm.offset(from: lm.documentRange.location, to: lm.documentRange.endLocation)
+        QuillTrace.write("quill boot layout-full-len \(length)\n")
+        guard length != NSNotFound, length > 0 else { return }
         _ = enumerateVisualLines(layout: lm)
     }
 
@@ -216,22 +288,6 @@ final class TextKit2Layout: TextLayout, @unchecked Sendable {
         }
         return lines
     }
-
-    private func visualLinesAreUsable(_ lines: [VisualLine], buffer: TextBuffer) -> Bool {
-        guard let first = lines.first, first.start == 0 else { return false }
-        // Wrapping may produce more visual lines than buffer lines. Fewer
-        // means the layout is still a partial viewport.
-        if lines.count < buffer.lineCount { return false }
-        var previousStart = -1
-        var coveredThrough = 0
-        for line in lines {
-            if line.start <= previousStart { return false }
-            if line.start < coveredThrough { return false }
-            previousStart = line.start
-            coveredThrough = line.start + line.length
-        }
-        return true
-    }
 }
 
 @MainActor
@@ -255,11 +311,26 @@ final class VimTextView: NSTextView {
     var diagnosticRanges: [(NSRange, Int)] = []
     private var restyleQueued = false
     private var sizing = false
+    /// True while `viewDidEndLiveResize` has cleared the inset for `super`.
+    private var endingLiveResize = false
+    /// Setting the text container lays out, which can call back into this view.
+    private var updatingInsets = false
+    /// Clip width the current inset was computed from. Scrolling changes the origin only.
+    private var appliedClipWidth: CGFloat = -1
+    /// Vertical clip origin to restore after the inset change in progress.
+    private var resizeAnchorY: CGFloat?
+    private weak var observedClip: NSClipView?
     private var tokenizer = MarkdownTokenizer(text: "")
+    /// UTF-16 ranges already given span attributes. A gap between two styled
+    /// screens is not covered; scrolling into it styles that screen only.
+    private var styledCoverage = 0..<0
     /// Read by `EditorView` in this file. `private` would hide them from that type.
     fileprivate var appliedThemeID = -1
     fileprivate var appliedFocus = false
     private var mouseAnchor: Int?
+    private let caretChrome = CaretChrome(frame: .zero)
+    private var placingCaret = false
+    private var orderingCaret = false
 
     override func awakeFromNib() {
         super.awakeFromNib()
@@ -275,6 +346,7 @@ final class VimTextView: NSTextView {
         isAutomaticTextReplacementEnabled = false
         isAutomaticSpellingCorrectionEnabled = false
         isRichText = false
+        insertionPointColor = .clear
         allowsUndo = false
         isIncrementalSearchingEnabled = false
         textContainer?.widthTracksTextView = false
@@ -287,14 +359,27 @@ final class VimTextView: NSTextView {
         autoresizingMask = [.width]
     }
 
+    /// TextKit 2 view. The stock content storage holds the whole note.
+    static func make(frame: NSRect = .zero) -> VimTextView {
+        let view = VimTextView(usingTextLayoutManager: true)
+        if frame != .zero {
+            view.frame = frame
+        }
+        return view
+    }
+
     func applyTheme(_ theme: QuillTheme, focus: Bool) {
         self.theme = theme
         self.focusMode = focus
         let directory = isDirectoryBuffer
-        backgroundColor = directory ? theme.directoryBackgroundColor : theme.backgroundColor
-        insertionPointColor = theme.textColor
+        let painted = directory ? theme.directoryBackgroundColor : theme.backgroundColor
+        backgroundColor = painted
+        // TextKit 2 draws NSTextInsertionIndicator from this color. Keep it clear;
+        // CaretChrome is the cursor, tinted to match the painted background.
+        insertionPointColor = .clear
+        let accent = CaretInk.accent(for: painted)
         selectedTextAttributes = [
-            .backgroundColor: theme.selectionColor,
+            .backgroundColor: accent.withAlphaComponent(0.22),
             .foregroundColor: theme.textColor,
         ]
         defaultParagraphStyle = {
@@ -310,34 +395,78 @@ final class VimTextView: NSTextView {
         font = directory ? theme.directoryFont : theme.bodyFont
         textColor = theme.textColor
         if !directory {
+            typingAttributes = theme.bodyAttributes
+        }
+        if !directory {
             directoryGhostHeight = 0
             directoryHeaderText = ""
         }
         updateInsets()
         queueRestyle()
+        placeCaret()
     }
 
-    func updateInsets() {
-        guard let clip = enclosingScrollView?.contentView else { return }
+    func updateInsets(preservingOriginY: CGFloat? = nil) {
+        if endingLiveResize || updatingInsets { return }
+        guard let scroll = enclosingScrollView else { return }
+        let clip = scroll.contentView
         let width = max(clip.bounds.width, 1)
+        let target = columnMetrics(clipWidth: width)
+        let currentColumn = textContainer?.size.width ?? -1
+        let oldVertical = textContainerInset.height
+        let hadInsets = textContainerInset.width > 0.5 || oldVertical > 0.5
+        let metricsMatch = abs(textContainerInset.width - target.inset) < 0.5
+            && abs(oldVertical - target.vertical) < 0.5
+            && abs(currentColumn - target.column) < 0.5
+        appliedClipWidth = width
+        let baseline = preservingOriginY ?? clip.bounds.origin.y
+        if metricsMatch {
+            if preservingOriginY != nil, hadInsets {
+                resizeAnchorY = baseline
+                pinVerticalOrigin(baseline)
+            }
+            return
+        }
+        let columnChanged = abs(currentColumn - target.column) > 0.5
+        let caretBefore = (hadInsets && columnChanged) ? caretDocumentMidY() : nil
+        updatingInsets = true
+        textContainerInset = NSSize(width: target.inset, height: target.vertical)
+        textContainer?.size = NSSize(width: max(1, target.column), height: CGFloat.greatestFiniteMagnitude)
+        updatingInsets = false
+        guard hadInsets else { return }
+        let origin: CGFloat
+        if let caretBefore, let caretAfter = caretDocumentMidY() {
+            origin = baseline + (caretAfter - caretBefore)
+        } else {
+            origin = baseline + (target.vertical - oldVertical)
+        }
+        resizeAnchorY = origin
+        pinVerticalOrigin(origin)
+    }
+
+    private func columnMetrics(clipWidth: CGFloat) -> (inset: CGFloat, vertical: CGFloat, column: CGFloat) {
         if isDirectoryBuffer {
             let inset = QuillMetrics.directoryHorizontalInset
             let vertical = QuillMetrics.directoryHeaderHeight + QuillMetrics.directoryHeaderGap
-            textContainerInset = NSSize(width: inset, height: vertical)
-            textContainer?.size = NSSize(width: max(1, width - inset * 2), height: CGFloat.greatestFiniteMagnitude)
-            return
+            return (inset, vertical, max(1, clipWidth - inset * 2))
         }
         let vertical = focusMode ? QuillMetrics.focusVerticalInset : QuillMetrics.verticalInset
-        let span = QuillMetrics.columnSpan(width: width, column: columnWidth)
-        textContainerInset = NSSize(width: span.inset, height: vertical)
-        textContainer?.size = NSSize(width: span.column, height: CGFloat.greatestFiniteMagnitude)
+        let span = QuillMetrics.columnSpan(width: clipWidth, column: columnWidth)
+        return (span.inset, vertical, span.column)
     }
 
     func syncFromEngine() {
         let text = engine.text
-        if string != text {
+        let replaced = string != text
+        if replaced {
+            let began = DispatchTime.now().uptimeNanoseconds
             string = text
-            tokenizer = MarkdownTokenizer(text: text)
+            QuillPerfSplit.add("syncStringMs", since: began)
+            let tokenBegan = DispatchTime.now().uptimeNanoseconds
+            let through = viewportLastLine()
+            tokenizer = MarkdownTokenizer(text: text, scanThroughLine: through)
+            styledCoverage = 0..<0
+            QuillPerfSplit.add("syncTokenMs", since: tokenBegan)
         }
         setSelectedRange(NSRange(location: clampUTF16(engine.cursor), length: 0))
         if let sel = engine.visualSelection, engine.mode.isVisual {
@@ -345,25 +474,45 @@ final class VimTextView: NSTextView {
             let end = clampUTF16(sel.upperBound)
             setSelectedRange(NSRange(location: loc, length: max(0, end - loc)))
         }
-        queueRestyle(dirty: nil)
+        if replaced {
+            let began = DispatchTime.now().uptimeNanoseconds
+            queueRestyle(dirty: nil)
+            QuillPerfSplit.add("syncStyleMs", since: began)
+        } else if focusMode {
+            queueRestyle(dirty: engine.cursor)
+        }
+        let frameBegan = DispatchTime.now().uptimeNanoseconds
         noteContentSizeChanged()
+        QuillPerfSplit.add("syncFrameMs", since: frameBegan)
+        let revealBegan = DispatchTime.now().uptimeNanoseconds
         revealCaret()
+        QuillPerfSplit.add("syncRevealMs", since: revealBegan)
     }
 
     func applyResult(_ result: EngineResult) {
+        var applied: [TextEdit] = []
         if result.didChangeText {
             if result.edits.isEmpty {
                 string = engine.text
                 tokenizer = MarkdownTokenizer(text: string)
             } else if let storage = textStorage {
+                var ok = true
+                let replaceBegan = DispatchTime.now().uptimeNanoseconds
                 for edit in result.edits {
                     let nsRange = nsRange(edit.range)
                     if nsRange.location != NSNotFound, NSMaxRange(nsRange) <= storage.length {
                         storage.replaceCharacters(in: nsRange, with: edit.replacement)
                     } else {
-                        string = engine.text
+                        ok = false
                         break
                     }
+                }
+                QuillPerfSplit.add("keyReplaceMs", since: replaceBegan)
+                if ok {
+                    applied = result.edits
+                } else {
+                    string = engine.text
+                    tokenizer = MarkdownTokenizer(text: string)
                 }
             }
         }
@@ -374,9 +523,18 @@ final class VimTextView: NSTextView {
             let end = clampUTF16(sel.upperBound)
             setSelectedRange(NSRange(location: loc, length: max(0, end - loc)))
         }
-        queueRestyle(dirty: dirty)
+        if result.didChangeText {
+            let began = DispatchTime.now().uptimeNanoseconds
+            queueRestyle(dirty: dirty, edits: applied)
+            QuillPerfSplit.add("keyRestyleMs", since: began)
+        } else if focusMode {
+            queueRestyle(dirty: engine.cursor)
+        }
+        let caretBegan = DispatchTime.now().uptimeNanoseconds
         noteContentSizeChanged()
         revealCaret()
+        QuillPerfSplit.add("keyCaretMs", since: caretBegan)
+        if isDirectoryBuffer { needsDisplay = true }
         vimDelegate?.vimTextView(self, didHandle: result)
     }
 
@@ -417,6 +575,32 @@ final class VimTextView: NSTextView {
         }
     }
 
+    /// TextKit 2 does not call this (`FB9713415`). The system indicator is the line
+    /// fragment; `CaretChrome` draws the em box instead.
+    override var shouldDrawInsertionPoint: Bool { false }
+
+    override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {}
+
+    override func updateInsertionPointStateAndRestartTimer(_ restartFlag: Bool) {
+        super.updateInsertionPointStateAndRestartTimer(restartFlag)
+        silenceSystemCarets()
+    }
+
+    override func didAddSubview(_ subview: NSView) {
+        super.didAddSubview(subview)
+        silenceSystemCarets()
+        guard subview !== caretChrome, caretChrome.superview === self, !orderingCaret else { return }
+        orderingCaret = true
+        addSubview(caretChrome)
+        orderingCaret = false
+    }
+
+    override func layout() {
+        super.layout()
+        silenceSystemCarets()
+        placeCaret(forcingLayout: false)
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         guard isDirectoryBuffer, engine != nil else { return }
@@ -431,25 +615,28 @@ final class VimTextView: NSTextView {
         drawDirectoryBackground(in: rect)
     }
 
-    override func setSelectedRange(_ charRange: NSRange, affinity: NSSelectionAffinity, stillSelecting stillSelectingFlag: Bool) {
+    override func setSelectedRange(
+        _ charRange: NSRange,
+        affinity: NSSelectionAffinity,
+        stillSelecting stillSelectingFlag: Bool
+    ) {
         super.setSelectedRange(charRange, affinity: affinity, stillSelecting: stillSelectingFlag)
         if isDirectoryBuffer {
             needsDisplay = true
         }
+        placeCaret()
     }
 
-    override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
-        guard engine != nil, flag else {
-            super.drawInsertionPoint(in: rect, color: color, turnedOn: flag)
-            return
-        }
-        let cell = caretCell(suggested: rect)
-        if engine.mode == .insert {
-            color.setFill()
-        } else {
-            color.withAlphaComponent(engine.mode.isVisual ? 0.15 : 0.35).setFill()
-        }
-        cell.fill()
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        placeCaret()
+        return accepted
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        placeCaret()
+        return resigned
     }
 
     override func setFrameSize(_ newSize: NSSize) {
@@ -458,23 +645,89 @@ final class VimTextView: NSTextView {
             return
         }
         sizing = true
-        var size = newSize
-        size.height = max(size.height, fittedContentHeight())
-        if let scroll = enclosingScrollView {
-            size.width = max(size.width, scroll.contentSize.width)
+        let originY = enclosingScrollView?.contentView.bounds.origin.y
+        let columnBefore = textContainer?.size.width ?? -1
+        resizeAnchorY = nil
+        let visible = visibleWidth(proposed: newSize.width)
+        // Height-only frame changes must leave an inset a caller just set. The
+        // caret smoke pins a 12×36 inset and then clears it; recomputing here
+        // would put the writing column back.
+        if abs(visible - appliedClipWidth) > 0.5 {
+            updateInsets(preservingOriginY: originY)
         }
+        let columnAfter = textContainer?.size.width ?? columnBefore
+        var size = newSize
+        size.width = visibleWidth(proposed: newSize.width)
+        let columnChanged = abs(columnAfter - columnBefore) > 0.5
+        if inLiveResize, !columnChanged, bounds.height > 1 {
+            size.height = max(size.height, bounds.height)
+        } else {
+            size.height = max(size.height, fittedContentHeight())
+        }
+        let anchor = resizeAnchorY
         super.setFrameSize(size)
         sizing = false
+        if let anchor {
+            pinVerticalOrigin(anchor)
+            resizeAnchorY = nil
+        }
+    }
+
+    override func viewDidEndLiveResize() {
+        let originY = enclosingScrollView?.contentView.bounds.origin.y ?? 0
+        let preserved = textContainerInset
+        // NSTextView scrolls by about the vertical inset when a live resize ends.
+        // Hide the inset from that adjustment, then put the column back.
+        endingLiveResize = true
+        textContainerInset = .zero
+        super.viewDidEndLiveResize()
+        textContainerInset = preserved
+        endingLiveResize = false
+        appliedClipWidth = -1
+        resizeAnchorY = nil
+        updateInsets(preservingOriginY: originY)
+        if !sizing {
+            sizing = true
+            let height = fittedContentHeight()
+            let width = visibleWidth(proposed: bounds.width)
+            if abs(bounds.height - height) > 1 || abs(bounds.width - width) > 1 {
+                super.setFrameSize(NSSize(width: width, height: height))
+            }
+            sizing = false
+        }
+        if let anchor = resizeAnchorY {
+            pinVerticalOrigin(anchor)
+            resizeAnchorY = nil
+        }
     }
 
     override func viewDidMoveToSuperview() {
         super.viewDidMoveToSuperview()
-        guard let clip = enclosingScrollView?.contentView else { return }
+        observeClipView()
+    }
+
+    private func observeClipView() {
+        if let old = observedClip {
+            NotificationCenter.default.removeObserver(self, name: NSView.boundsDidChangeNotification, object: old)
+            NotificationCenter.default.removeObserver(self, name: NSView.frameDidChangeNotification, object: old)
+        }
+        guard let clip = enclosingScrollView?.contentView else {
+            observedClip = nil
+            return
+        }
+        observedClip = clip
         clip.postsBoundsChangedNotifications = true
+        clip.postsFrameChangedNotifications = true
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(clipViewBoundsChanged(_:)),
             name: NSView.boundsDidChangeNotification,
+            object: clip
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(clipViewBoundsChanged(_:)),
+            name: NSView.frameDidChangeNotification,
             object: clip
         )
     }
@@ -523,7 +776,7 @@ final class VimTextView: NSTextView {
         applyResult(result)
     }
 
-    func queueRestyle(dirty: Int? = nil) {
+    func queueRestyle(dirty: Int? = nil, edits: [TextEdit] = [], viewport: Range<Int>? = nil) {
         if isDirectoryBuffer {
             directoryGhostHeight = restyleDirectoryBuffer()
             needsDisplay = true
@@ -532,55 +785,408 @@ final class VimTextView: NSTextView {
         }
         guard !restyleQueued else { return }
         restyleQueued = true
-        let dirty = dirty
-        Task { @MainActor [weak self] in
-            guard let self, let storage = self.textStorage else { return }
-            self.restyleQueued = false
-            if self.isDirectoryBuffer {
-                self.directoryGhostHeight = self.restyleDirectoryBuffer()
-                self.needsDisplay = true
-                self.noteContentSizeChanged()
-                return
+        defer { restyleQueued = false }
+        guard let storage = textStorage else { return }
+        // Attribute edits used to hop to the next turn, so the key handler
+        // returned before styling. Doing it here puts that cost on the keystroke.
+        var styleLimit: Range<Int>? = viewport
+        var plainShift = false
+        var tableEdit = false
+        if viewport == nil, !edits.isEmpty, tokenizer.acceptsEdits {
+            plainShift = !focusMode
+            var covered = 0..<0
+            for edit in edits {
+                let delta = edit.replacement.utf16.count - edit.range.count
+                let probe = min(edit.range.lowerBound, max(0, tokenizer.utf16Count - 1))
+                if tokenizer.lineContainsPipe(at: probe) { tableEdit = true }
+                let beforeRange = tokenizer.lineContentSpan(containing: probe)
+                let beforeSpans = beforeRange.isEmpty ? [] : tokenizer.spans(overlapping: beforeRange)
+                let styled = !beforeRange.isEmpty && coverageContains(beforeRange)
+                let changed = tokenizer.apply(
+                    start: edit.range.lowerBound,
+                    removedUTF16: edit.range.count,
+                    replacement: edit.replacement
+                )
+                let afterProbe = min(edit.range.lowerBound, max(0, tokenizer.utf16Count - 1))
+                if tokenizer.lineContainsPipe(at: afterProbe) { tableEdit = true }
+                let afterRange = tokenizer.lineSpan(changed)
+                let afterSpans = afterRange.isEmpty ? [] : tokenizer.spans(overlapping: afterRange)
+                if !styled || !MarkdownTokenizer.spansFollowEdit(
+                    beforeSpans,
+                    afterSpans,
+                    editAt: edit.range.lowerBound,
+                    delta: delta
+                ) {
+                    plainShift = false
+                }
+                if covered.isEmpty {
+                    covered = changed
+                } else {
+                    covered = min(covered.lowerBound, changed.lowerBound)..<max(covered.upperBound, changed.upperBound)
+                }
             }
-            self.tokenizer.replace(text: storage.string, dirtyUTF16: dirty ?? 0)
-            MarkdownStyler.restyle(
-                storage,
-                theme: self.theme,
-                spans: self.tokenizer.spans,
-                dirtyUTF16: dirty,
-                focus: self.focusMode,
-                caret: self.engine.cursor,
-                diagnostics: self.diagnosticRanges
-            )
-            self.noteContentSizeChanged()
+            if tableEdit {
+                // A cell edit changes column widths without changing markdown tokens.
+                // The plain-shift path would keep the previous kern.
+                plainShift = false
+            }
+            if !plainShift {
+                let span = tokenizer.lineSpan(covered)
+                if focusMode {
+                    let focus = tokenizer.paragraphRange(containing: engine.cursor)
+                    styleLimit = min(span.lowerBound, focus.lowerBound)..<max(span.upperBound, focus.upperBound)
+                } else {
+                    styleLimit = span
+                }
+            }
+        } else if viewport == nil, tokenizer.acceptsEdits, storage.length == tokenizer.utf16Count {
+            if let dirty {
+                styleLimit = tokenizer.paragraphRange(containing: dirty)
+            }
+        } else if viewport == nil {
+            tokenizer.replace(text: storage.string, dirtyUTF16: dirty ?? 0)
+            if let dirty {
+                styleLimit = tokenizer.paragraphRange(containing: dirty)
+            }
+        }
+        if plainShift {
+            // The edit did not change tokens. AppKit shifted the runs already
+            // on this line; painting them again invalidates layout past the caret.
+            shiftCoverage(for: edits)
+            return
+        }
+        if styleLimit == nil {
+            // A nil limit used to paint every line. Opening a 10k-line note
+            // spent the time in that attribute pass, and the runs it created
+            // made the next insert at the top of the file walk the buffer.
+            styleLimit = viewportUTF16()
+        }
+        shiftCoverage(for: edits)
+        var limit = styleLimit ?? 0..<0
+        let tables = tablesOverlapping(limit)
+        if !tables.isEmpty {
+            limit = tablePaintRange(limit, tables: tables)
+            styleLimit = limit
+        }
+        let visibleSpans = limit.isEmpty ? [] : tokenizer.spans(overlapping: limit)
+        let focusParagraph = focusMode ? tokenizer.paragraphRange(containing: engine.cursor) : nil
+        MarkdownStyler.restyle(
+            storage,
+            theme: theme,
+            spans: visibleSpans,
+            dirtyUTF16: dirty,
+            paragraphUTF16: styleLimit,
+            focus: focusMode,
+            caret: engine.cursor,
+            focusParagraph: focusParagraph,
+            diagnostics: diagnosticRanges,
+            tables: tables
+        )
+        if let styleLimit, !styleLimit.isEmpty {
+            noteStyled(styleLimit)
+        }
+        noteContentSizeChanged()
+    }
+
+    /// Lines that fit in the clip, plus a short margin, so a keystroke does not
+    /// style the whole note and a scroll has the next screen ready.
+    private func viewportLineBounds() -> Range<Int> {
+        let count = engine.buffer.lineCount
+        guard count > 0 else { return 0..<0 }
+        let row = max(rowHeight(), 1)
+        let clip = enclosingScrollView?.contentView.bounds ?? .zero
+        let height = clip.height > 2 ? clip.height : 600
+        let originY = textContainerOrigin.y
+        let top = clip.height > 2 ? clip.minY : 0
+        let first = max(0, Int(floor((top - originY) / row)) - 4)
+        let last = min(count, max(first + 1, Int(ceil((top + height - originY) / row)) + 8))
+        return first..<last
+    }
+
+    private func viewportLastLine() -> Int {
+        let lines = viewportLineBounds()
+        guard !lines.isEmpty else { return 0 }
+        return lines.upperBound - 1
+    }
+
+    private func viewportUTF16() -> Range<Int> {
+        let lines = viewportLineBounds()
+        guard !lines.isEmpty, tokenizer.acceptsEdits, tokenizer.utf16Count > 0 else { return 0..<0 }
+        return tokenizer.lineSpan(lines)
+    }
+
+    private func coverageContains(_ range: Range<Int>) -> Bool {
+        !styledCoverage.isEmpty
+            && styledCoverage.lowerBound <= range.lowerBound
+            && styledCoverage.upperBound >= range.upperBound
+    }
+
+    private func noteStyled(_ range: Range<Int>) {
+        if styledCoverage.isEmpty {
+            styledCoverage = range
+            return
+        }
+        let overlaps = range.lowerBound <= styledCoverage.upperBound + 1
+            && styledCoverage.lowerBound <= range.upperBound + 1
+        // A jump leaves a gap. Remember the screen just painted so the next
+        // keystroke there can skip painting. The screen above is styled again
+        // when the clip scrolls back onto it.
+        guard overlaps else {
+            styledCoverage = range
+            return
+        }
+        styledCoverage = min(styledCoverage.lowerBound, range.lowerBound)..<max(styledCoverage.upperBound, range.upperBound)
+    }
+
+    private func shiftCoverage(for edits: [TextEdit]) {
+        guard !styledCoverage.isEmpty else { return }
+        for edit in edits {
+            let delta = edit.replacement.utf16.count - edit.range.count
+            guard delta != 0 else { continue }
+            if edit.range.lowerBound < styledCoverage.lowerBound {
+                styledCoverage = (styledCoverage.lowerBound + delta)..<(styledCoverage.upperBound + delta)
+            } else if edit.range.lowerBound < styledCoverage.upperBound {
+                styledCoverage = styledCoverage.lowerBound..<(styledCoverage.upperBound + delta)
+            }
         }
     }
 
-    /// One character cell: the advance of the glyph under the cursor, and the em box
-    /// of the font actually applied to that glyph. The line-fragment rect AppKit
-    /// passes in is only a fallback origin; its width and height are not the cell.
-    func caretCell(suggested rect: NSRect) -> NSRect {
-        let index = clampUTF16(selectedRange().location)
+    /// Tables that intersect `limit`, using the tokenizer's line cache.
+    /// An empty limit skips the lookup so a plain keystroke does not parse one.
+    private func tablesOverlapping(_ limit: Range<Int>) -> [TableBlock] {
+        guard tokenizer.acceptsEdits, !limit.isEmpty else { return [] }
+        return tokenizer.tableBlocks(overlapping: limit)
+    }
+
+    /// Visible rows of `tables`, plus the lines already being painted.
+    /// Off-screen rows are dropped from coverage so the next scroll recomputes
+    /// their kern from the updated column widths.
+    private func tablePaintRange(_ limit: Range<Int>, tables: [TableBlock]) -> Range<Int> {
+        let viewport = viewportUTF16()
+        var lower = limit.lowerBound
+        var upper = limit.upperBound
+        for block in tables {
+            dropCoverage(overlapping: block.range)
+            for row in block.rows {
+                let rowEnd = min(block.range.upperBound, row.range.upperBound + 1)
+                let span = row.range.lowerBound..<max(row.range.lowerBound + 1, rowEnd)
+                if rangesOverlap(span, viewport) || rangesOverlap(span, limit) {
+                    lower = min(lower, span.lowerBound)
+                    upper = max(upper, span.upperBound)
+                }
+            }
+        }
+        return lower..<max(lower, upper)
+    }
+
+    private func rangesOverlap(_ lhs: Range<Int>, _ rhs: Range<Int>) -> Bool {
+        !lhs.isEmpty && !rhs.isEmpty && lhs.lowerBound < rhs.upperBound && rhs.lowerBound < lhs.upperBound
+    }
+
+    private func dropCoverage(overlapping range: Range<Int>) {
+        guard !styledCoverage.isEmpty else { return }
+        let overlaps = range.lowerBound < styledCoverage.upperBound && styledCoverage.lowerBound < range.upperBound
+        guard overlaps else { return }
+        if styledCoverage.lowerBound < range.lowerBound {
+            styledCoverage = styledCoverage.lowerBound..<range.lowerBound
+        } else {
+            styledCoverage = 0..<0
+        }
+    }
+
+    private func restyleVisibleIfNeeded() {
+        guard !restyleQueued, !isDirectoryBuffer else { return }
+        let viewport = viewportUTF16()
+        guard !viewport.isEmpty, !coverageContains(viewport) else { return }
+        queueRestyle(dirty: nil, edits: [], viewport: viewport)
+    }
+
+    /// The caret view's frame after placing it. Smoke reads this, not a parallel rect
+    /// that `drawInsertionPoint` might never paint.
+    func renderedCaretRect() -> NSRect {
+        placeCaret()
+        return caretChrome.frame
+    }
+
+    var caretIsBlinking: Bool { caretChrome.isBlinking }
+    var caretIsVisible: Bool { caretChrome.superview === self && !caretChrome.isHidden }
+
+    /// Height of a system insertion indicator that is still being shown.
+    func visibleSystemCaretHeight() -> CGFloat? {
+        var tallest: CGFloat?
+        func walk(_ view: NSView) {
+            if let indicator = view as? NSTextInsertionIndicator {
+                let shown = indicator.displayMode != .hidden && !indicator.isHidden && indicator.alphaValue > 0.05
+                if shown {
+                    tallest = max(tallest ?? 0, indicator.frame.height)
+                }
+            }
+            for child in view.subviews where child !== caretChrome {
+                walk(child)
+            }
+        }
+        walk(self)
+        return tallest
+    }
+
+    /// Em box of the font on this line, in text-view coordinates, wide enough for
+    /// the end-of-line cell. This is not the line fragment.
+    func lineGlyphBounds(atUTF16 index: Int) -> NSRect? {
+        guard let line = lineMetrics(atUTF16: index, forcingLayout: true) else { return nil }
         let caretFont = font(atUTF16: index)
+        let em = caretFont.ascender - caretFont.descender
+        let space = (" " as NSString).size(withAttributes: [.font: caretFont]).width
+        return NSRect(
+            x: line.lineMinX,
+            y: line.baselineY - caretFont.ascender,
+            width: max(line.lineWidth + space, 1),
+            height: max(1, em)
+        )
+    }
+
+    /// One character cell: the advance of the glyph under the cursor, and the em box
+    /// of the font on that glyph. Line-fragment height is not used.
+    func caretCell(suggested rect: NSRect) -> NSRect {
+        if let cell = caretRect(forcingLayout: true) {
+            return cell
+        }
+        let caretFont = font ?? theme.bodyFont
+        let em = max(1, caretFont.ascender - caretFont.descender)
+        return NSRect(x: rect.minX, y: rect.midY - caretFont.ascender, width: 1, height: em)
+    }
+
+    private func placeCaret(forcingLayout: Bool = true) {
+        guard engine != nil, !placingCaret else { return }
+        placingCaret = true
+        defer { placingCaret = false }
+        silenceSystemCarets()
+        let index = caretUTF16()
+        guard let cell = caretRect(forcingLayout: forcingLayout) else { return }
+        let show = window == nil || window?.firstResponder === self || window?.firstResponder == nil
+        let painted = isDirectoryBuffer ? theme.directoryBackgroundColor : theme.backgroundColor
+        if caretChrome.superview === self,
+           caretChrome.isHidden == !show,
+           placedCaretMatches(cell, index: index, painted: painted) {
+            return
+        }
+        if caretChrome.superview !== self {
+            orderingCaret = true
+            addSubview(caretChrome)
+            orderingCaret = false
+        }
+        caretChrome.frame = cell
+        let accent = CaretInk.accent(for: painted)
+        caretChrome.accent = accent
+        caretChrome.blockAlpha = CGFloat(CaretGeometry.blockFillAlpha)
+        let shapeIsBeam = engine.mode == .insert
+        caretChrome.kind = shapeIsBeam ? .beam : .block
+        if shapeIsBeam {
+            caretChrome.glyph = nil
+        } else if let redraw = CaretInk.glyphRedraw(text: theme.textColor, accent: accent, background: painted),
+                  let glyph = caretGlyph(atUTF16: index) {
+            caretChrome.blockAlpha = 0.86
+            caretChrome.glyph = glyph
+            caretChrome.glyphFont = font(atUTF16: index)
+            caretChrome.glyphColor = redraw
+        } else {
+            caretChrome.glyph = nil
+        }
+        caretChrome.needsDisplay = true
+        caretChrome.isHidden = !show
+        caretChrome.setBlinking(shapeIsBeam && show)
+        placedMode = engine.mode
+        placedIndex = index
+        placedPainted = painted.caretRGB()
+    }
+
+    private var placedMode: Mode?
+    private var placedIndex = -1
+    private var placedPainted: CaretRGB?
+
+    private func placedCaretMatches(_ cell: NSRect, index: Int, painted: NSColor) -> Bool {
+        guard placedMode == engine.mode, placedIndex == index else { return false }
+        guard let previous = placedPainted, let next = painted.caretRGB() else { return false }
+        guard abs(previous.r - next.r) < 0.01,
+              abs(previous.g - next.g) < 0.01,
+              abs(previous.b - next.b) < 0.01 else { return false }
+        let frame = caretChrome.frame
+        return abs(frame.minX - cell.minX) < 0.4
+            && abs(frame.minY - cell.minY) < 0.4
+            && abs(frame.width - cell.width) < 0.4
+            && abs(frame.height - cell.height) < 0.4
+    }
+
+    private func caretRect(forcingLayout: Bool) -> NSRect? {
+        let index = caretUTF16()
+        let caretFont = font(atUTF16: index)
+        guard let metrics = caretBaseline(atUTF16: index, forcingLayout: forcingLayout) else {
+            return nil
+        }
         let shape: CaretShape = engine.mode == .insert ? .beam : .block
         let advance = glyphAdvance(atUTF16: index, font: caretFont)
-        let metrics = caretBaseline(atUTF16: index, suggested: rect, font: caretFont)
+        let scale = Double(window?.backingScaleFactor ?? 2)
         let box = CaretGeometry.box(
             shape: shape,
             glyphAdvance: Double(advance),
             ascender: Double(caretFont.ascender),
             descender: Double(caretFont.descender),
             originX: Double(metrics.originX),
-            baselineY: Double(metrics.baselineY)
+            baselineY: Double(metrics.baselineY),
+            beamPointWidth: CaretGeometry.beamPointWidth(backingScale: scale)
         )
-        return NSRect(x: box.x, y: box.y, width: box.width, height: box.height)
+        return alignedCaretRect(NSRect(x: box.x, y: box.y, width: box.width, height: box.height))
+    }
+
+    private func alignedCaretRect(_ rect: NSRect) -> NSRect {
+        let scale = window?.backingScaleFactor ?? 2
+        guard scale > 0 else { return rect }
+        func snap(_ value: CGFloat) -> CGFloat { (value * scale).rounded() / scale }
+        return NSRect(
+            x: snap(rect.minX),
+            y: snap(rect.minY),
+            width: max(1 / scale, snap(rect.width)),
+            height: max(1 / scale, snap(rect.height))
+        )
+    }
+
+    private func silenceSystemCarets() {
+        func walk(_ view: NSView) {
+            if let indicator = view as? NSTextInsertionIndicator {
+                if indicator.displayMode != .hidden {
+                    indicator.displayMode = .hidden
+                }
+                if !indicator.isHidden {
+                    indicator.isHidden = true
+                }
+            }
+            for child in view.subviews where child !== caretChrome {
+                walk(child)
+            }
+        }
+        walk(self)
+    }
+
+    private func caretUTF16() -> Int {
+        if engine.mode.isVisual {
+            return clampUTF16(engine.cursor)
+        }
+        return clampUTF16(selectedRange().location)
+    }
+
+    private func caretGlyph(atUTF16 index: Int) -> String? {
+        let ns = string as NSString
+        guard index >= 0, index < ns.length else { return nil }
+        let range = ns.rangeOfComposedCharacterSequence(at: index)
+        let chunk = ns.substring(with: range)
+        if chunk == "\n" || chunk == "\r" || chunk == "\t" || chunk == " " { return nil }
+        return chunk
     }
 
     func noteContentSizeChanged() {
         guard !sizing, enclosingScrollView != nil else { return }
         sizing = true
         let height = fittedContentHeight()
-        let width = max(enclosingScrollView?.contentSize.width ?? bounds.width, 1)
+        let width = visibleWidth(proposed: bounds.width)
         if abs(bounds.width - width) > 1 || abs(bounds.height - height) > 1 {
             super.setFrameSize(NSSize(width: width, height: height))
         }
@@ -591,13 +1197,23 @@ final class VimTextView: NSTextView {
         noteContentSizeChanged()
         guard let scroll = enclosingScrollView else { return }
         let clip = scroll.contentView
-        var rect = caretLineRect() ?? caretCell(suggested: NSRect(x: 0, y: 0, width: 1, height: rowHeight()))
+        // A fragment above the buffer row is the last piece TextKit has built,
+        // not the caret: `G` and search on a long note land in the middle.
+        // A fragment at or below that row is the real line, including wrap,
+        // which `line * rowHeight` would leave unscrolled.
+        let row = rowHeight()
         let line = engine.buffer.lineIndex(containing: clampUTF16(engine.cursor))
-        let estimatedMinY = textContainerOrigin.y + CGFloat(line) * rowHeight()
-        // A fragment TextKit has not laid out comes back inside the viewport,
-        // so the clip never follows the cursor. Use the logical row instead.
-        if line > 1, rect.maxY < rowHeight() * 2, estimatedMinY > clip.bounds.height {
-            rect = NSRect(x: rect.minX, y: estimatedMinY, width: max(rect.width, 1), height: rowHeight())
+        let estimated = NSRect(
+            x: 0,
+            y: textContainerOrigin.y + CGFloat(line) * row,
+            width: 1,
+            height: row
+        )
+        let rect: NSRect
+        if let measured = caretLineRect(), measured.midY + row * 4 >= estimated.midY {
+            rect = measured
+        } else {
+            rect = estimated
         }
         let visible = clip.bounds
         var origin = visible.origin
@@ -632,27 +1248,48 @@ final class VimTextView: NSTextView {
     private func fittedContentHeight() -> CGFloat {
         let inset = textContainerInset.height * 2
         let clip = enclosingScrollView?.contentSize.height ?? bounds.height
-        let rows = max(1, (string as NSString).components(separatedBy: "\n").count)
+        // Buffer lines, not a forced full TextKit layout. `usageBounds` lays
+        // out every fragment, which is what made scrolling a long file hitch.
+        let rows = max(1, engine.buffer.lineCount)
         let estimated = CGFloat(rows) * rowHeight() + inset
-        var used: CGFloat = 0
-        if textLayoutManager != nil {
-            layoutAdapter.ensureFullLayout()
-            used = (textLayoutManager?.usageBoundsForTextContainer.height ?? 0) + inset
-        }
         let ghosts = isDirectoryBuffer ? directoryGhostHeight : 0
-        return max(clip, ceil(used), ceil(estimated)) + ghosts
+        return max(clip, ceil(estimated)) + ghosts
     }
 
     private func font(atUTF16 index: Int) -> NSFont {
         let fallback = self.font ?? theme.bodyFont
         guard let storage = textStorage, storage.length > 0 else { return fallback }
         let ns = string as NSString
-        var probe = min(max(0, index), storage.length - 1)
+        let length = ns.length
+        if index >= length {
+            // Past the last character: an extra line after a trailing newline uses
+            // the typing font. End of a content line keeps that line's font.
+            if length > 0 {
+                let previous = length - 1
+                let unit = ns.character(at: previous)
+                if unit != 10 && unit != 13 {
+                    return (storage.attribute(.font, at: previous, effectiveRange: nil) as? NSFont) ?? fallback
+                }
+            }
+            return fallback
+        }
+        var probe = min(max(0, index), length - 1)
         let unit = ns.character(at: probe)
         if (unit == 10 || unit == 13), probe > 0 {
-            probe -= 1
+            let previous = probe - 1
+            let prev = ns.character(at: previous)
+            if prev != 10 && prev != 13 {
+                probe = previous
+            }
         }
         return (storage.attribute(.font, at: probe, effectiveRange: nil) as? NSFont) ?? fallback
+    }
+
+    private func paragraphStyle(atUTF16 index: Int) -> NSParagraphStyle {
+        let fallback = defaultParagraphStyle ?? NSParagraphStyle.default
+        guard let storage = textStorage, storage.length > 0 else { return fallback }
+        let probe = min(max(0, index), storage.length - 1)
+        return (storage.attribute(.paragraphStyle, at: probe, effectiveRange: nil) as? NSParagraphStyle) ?? fallback
     }
 
     private func glyphAdvance(atUTF16 index: Int, font: NSFont) -> CGFloat {
@@ -669,46 +1306,119 @@ final class VimTextView: NSTextView {
         return max(1, ceil(space))
     }
 
-    private func caretBaseline(atUTF16 index: Int, suggested rect: NSRect, font: NSFont) -> (originX: CGFloat, baselineY: CGFloat) {
-        if let placed = glyphPlacement(atUTF16: index) {
-            return placed
-        }
-        let originX = rect.origin.x
-        let baselineY = rect.maxY + font.descender
-        return (originX, baselineY)
+    private struct LineMetrics {
+        var originX: CGFloat
+        var baselineY: CGFloat
+        var lineMinX: CGFloat
+        var lineWidth: CGFloat
+    }
+
+    private func caretBaseline(
+        atUTF16 index: Int,
+        forcingLayout: Bool
+    ) -> (originX: CGFloat, baselineY: CGFloat)? {
+        lineMetrics(atUTF16: index, forcingLayout: forcingLayout).map { ($0.originX, $0.baselineY) }
     }
 
     /// Baseline and leading edge of the glyph, in text-view coordinates.
-    private func glyphPlacement(atUTF16 index: Int) -> (originX: CGFloat, baselineY: CGFloat)? {
+    /// `locationForCharacter(at:)` is the baseline inside the line fragment, the
+    /// same origin `NSTextLineFragment.draw(at:in:)` uses. The fragment's height
+    /// includes line spacing and is not the caret.
+    private func lineMetrics(atUTF16 index: Int, forcingLayout _: Bool) -> LineMetrics? {
         guard let lm = textLayoutManager else { return nil }
-        layoutAdapter.ensureFullLayout()
+        // Lay out the fragment under the caret only. A full-document layout
+        // here walked every line on each caret move.
+        let length = (string as NSString).length
+        let clamped = min(max(0, index), length)
         let doc = lm.documentRange.location
-        guard let location = lm.location(doc, offsetBy: index),
-              let fragment = lm.textLayoutFragment(for: location) else { return nil }
+        let probe = clamped < length ? clamped : max(0, length - 1)
+        let location: (any NSTextLocation)?
+        if length == 0 {
+            location = doc
+        } else {
+            location = lm.location(doc, offsetBy: probe)
+        }
+        guard let location, let fragment = lm.textLayoutFragment(for: location) else { return nil }
         let fragmentStart = lm.offset(from: doc, to: fragment.rangeInElement.location)
-        let local = index - fragmentStart
-        guard let line = fragment.textLineFragments.first(where: { line in
-            let span = line.characterRange
-            return local >= span.location && local < span.location + max(span.length, 1)
-        }) ?? fragment.textLineFragments.last else { return nil }
-        let charIndex = max(0, local - line.characterRange.location)
-        let point = line.locationForCharacter(at: min(charIndex, max(0, line.characterRange.length)))
+        let fragmentEnd = lm.offset(from: doc, to: fragment.rangeInElement.endLocation)
+        if !fragmentCovers(clamped, start: fragmentStart, end: fragmentEnd, documentLength: length) {
+            return nil
+        }
+        let local = clamped - fragmentStart
+        let lines = fragment.textLineFragments
         let container = textContainerOrigin
         let fragmentFrame = fragment.layoutFragmentFrame
+        // A trailing newline grows an extra line fragment with an empty range.
+        // Its typographic bounds are wrong (FB15131180): the origin is too high and
+        // the height drops the paragraph's line spacing, so the em box lands on the
+        // fragment top. Place it from the previous line's bottom instead.
+        if clamped >= length, lines.last?.characterRange.length == 0 {
+            let content = lines.dropLast().last
+            let lineTop: CGFloat
+            let lineMinX: CGFloat
+            if let content {
+                let bounds = content.typographicBounds
+                lineTop = container.y + fragmentFrame.minY + bounds.maxY
+                lineMinX = container.x + fragmentFrame.minX + bounds.minX
+            } else {
+                lineTop = container.y + fragmentFrame.minY
+                lineMinX = container.x + fragmentFrame.minX
+            }
+            let caretFont = font(atUTF16: clamped)
+            let style = paragraphStyle(atUTF16: max(0, length - 1))
+            let baseline = CaretGeometry.extraLineBaseline(
+                previousLineMaxY: Double(lineTop),
+                ascender: Double(caretFont.ascender),
+                descender: Double(caretFont.descender),
+                leading: Double(caretFont.leading),
+                lineHeightMultiple: Double(style.lineHeightMultiple),
+                lineSpacing: Double(style.lineSpacing),
+                minimumLineHeight: Double(style.minimumLineHeight),
+                maximumLineHeight: Double(style.maximumLineHeight)
+            )
+            return LineMetrics(
+                originX: lineMinX,
+                baselineY: CGFloat(baseline),
+                lineMinX: lineMinX,
+                lineWidth: 0
+            )
+        }
+        let line = lines.first { candidate in
+            let span = candidate.characterRange
+            return local >= span.location && local < span.location + max(span.length, 1)
+        } ?? lines.last
+        guard let line else { return nil }
+        let charIndex = max(0, local - line.characterRange.location)
+        let point = line.locationForCharacter(at: min(charIndex, max(0, line.characterRange.length)))
         let lineBounds = line.typographicBounds
-        let originX = container.x + fragmentFrame.minX + lineBounds.minX + point.x
-        let baselineY = container.y + fragmentFrame.minY + lineBounds.minY + point.y
-        return (originX, baselineY)
+        return LineMetrics(
+            originX: container.x + fragmentFrame.minX + lineBounds.minX + point.x,
+            baselineY: container.y + fragmentFrame.minY + lineBounds.minY + point.y,
+            lineMinX: container.x + fragmentFrame.minX + lineBounds.minX,
+            lineWidth: max(0, lineBounds.width)
+        )
+    }
+
+    /// `textLayoutFragment(for:)` can hand back an earlier fragment. That fragment
+    /// does not contain `index`.
+    private func fragmentCovers(_ index: Int, start: Int, end: Int, documentLength: Int) -> Bool {
+        if start == NSNotFound || end == NSNotFound || start > end { return false }
+        if index >= start && index < end { return true }
+        return index >= documentLength && end >= documentLength && start <= documentLength
     }
 
     private func caretLineRect() -> NSRect? {
         guard let lm = textLayoutManager else { return nil }
-        layoutAdapter.ensureFullLayout()
         let index = clampUTF16(selectedRange().location)
         let doc = lm.documentRange.location
         guard let location = lm.location(doc, offsetBy: index),
               let fragment = lm.textLayoutFragment(for: location) else { return nil }
         let fragmentStart = lm.offset(from: doc, to: fragment.rangeInElement.location)
+        let fragmentEnd = lm.offset(from: doc, to: fragment.rangeInElement.endLocation)
+        let length = (string as NSString).length
+        guard fragmentCovers(index, start: fragmentStart, end: fragmentEnd, documentLength: length) else {
+            return nil
+        }
         let local = index - fragmentStart
         guard let line = fragment.textLineFragments.first(where: { line in
             let span = line.characterRange
@@ -724,9 +1434,43 @@ final class VimTextView: NSTextView {
 
     @objc private func clipViewBoundsChanged(_ notification: Notification) {
         guard let clip = notification.object as? NSClipView else { return }
-        if abs(clip.bounds.width - bounds.width) > 1 {
-            noteContentSizeChanged()
+        if abs(clip.bounds.width - appliedClipWidth) > 0.5 {
+            updateInsets()
+            if abs(clip.bounds.width - bounds.width) > 1 {
+                noteContentSizeChanged()
+            }
         }
+        // Vertical scrolling used to return above. A table below the fold stays
+        // unstyled until this pass paints the lines that just came on screen.
+        restyleVisibleIfNeeded()
+    }
+
+    private func visibleWidth(proposed: CGFloat) -> CGFloat {
+        if let clip = enclosingScrollView?.contentView, clip.bounds.width > 1 {
+            return clip.bounds.width
+        }
+        if let content = enclosingScrollView?.contentSize.width, content > 1 {
+            return content
+        }
+        return max(proposed, 1)
+    }
+
+    private func caretDocumentMidY() -> CGFloat? {
+        guard engine != nil else { return nil }
+        return caretLineRect()?.midY
+    }
+
+    private func pinVerticalOrigin(_ y: CGFloat) {
+        guard let scroll = enclosingScrollView else { return }
+        let clip = scroll.contentView
+        guard clip.bounds.height > 1, bounds.height > 1 else { return }
+        let maxY = max(0, bounds.height - clip.bounds.height)
+        let clamped = min(max(0, y), maxY)
+        guard abs(clamped - clip.bounds.origin.y) > 0.5 else { return }
+        var origin = clip.bounds.origin
+        origin.y = clamped
+        clip.setBoundsOrigin(origin)
+        scroll.reflectScrolledClipView(clip)
     }
 
     func clampUTF16(_ offset: Int) -> Int {
@@ -781,7 +1525,7 @@ struct EditorView: NSViewRepresentable {
         scroll.borderType = .noBorder
         scroll.drawsBackground = false
         scroll.autohidesScrollers = true
-        let tv = VimTextView(usingTextLayoutManager: true)
+        let tv = VimTextView.make()
         tv.commonInit()
         tv.engine = model.engine
         tv.layoutAdapter.textView = tv
@@ -835,8 +1579,17 @@ struct EditorView: NSViewRepresentable {
         }
         let caret = min(model.engine.cursor, (tv.string as NSString).length)
         let bufferReplaced = context.coordinator.syncedRevision != revision
-        if bufferReplaced || tv.string != model.engine.text || tv.selectedRange().location != caret {
-            tv.syncFromEngine()
+        // A keystroke already updated this view. Comparing the whole string
+        // here, or treating that keystroke's revision bump as a buffer swap,
+        // restyled the document again on every character.
+        if bufferReplaced || tv.selectedRange().location != caret {
+            if bufferReplaced {
+                tv.syncFromEngine()
+            } else if tv.string != model.engine.text {
+                tv.syncFromEngine()
+            } else if model.focusMode {
+                tv.queueRestyle(dirty: caret)
+            }
             context.coordinator.syncedRevision = revision
         } else if diagnosticsChanged {
             tv.queueRestyle()
@@ -861,7 +1614,7 @@ struct EditorView: NSViewRepresentable {
         var syncedRevision = -1
 
         func vimTextView(_ view: VimTextView, didHandle result: EngineResult) {
-            model?.handleEngineResult(result)
+            model?.handleEngineResult(result, fromTextView: true)
         }
 
         func vimTextViewDidClick(_ view: VimTextView, characterOffset: Int, commandClick: Bool) {

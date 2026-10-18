@@ -123,16 +123,44 @@ public enum TableScope: Equatable, Sendable {
 public enum MarkdownTables {
     public static func blocks(in text: String) -> [TableBlock] {
         let lines = LineSplit.lines(in: text)
-        if lines.isEmpty { return [] }
+        guard !lines.isEmpty else { return [] }
         let blocked = blockMask(lines: lines, text: text)
+        return blocks(lines: lines, from: 0, through: lines.count - 1) { blocked[$0] }
+    }
+
+    /// Tables that intersect `utf16`, including rows outside that range.
+    /// Column widths come from the whole table, so a visible body row still
+    /// lines up with a header that is scrolled off screen.
+    public static func blocks(in text: String, overlapping utf16: Range<Int>) -> [TableBlock] {
+        let lines = LineSplit.lines(in: text)
+        guard !lines.isEmpty, !utf16.isEmpty, let lastLine = lines.last, lastLine.end > 0 else { return [] }
+        let blocked = blockMask(lines: lines, text: text)
+        let lower = min(max(0, utf16.lowerBound), lastLine.end - 1)
+        let upper = min(max(lower, utf16.upperBound - 1), lastLine.end - 1)
+        let first = LineSplit.lineIndex(containing: lower, lines: lines)
+        let last = LineSplit.lineIndex(containing: upper, lines: lines)
+        let span = expandedLines(lines: lines, first: first, last: last) { blocked[$0] }
+        guard !span.isEmpty else { return [] }
+        return blocks(lines: lines, from: span.lowerBound, through: span.upperBound - 1) { blocked[$0] }
+    }
+
+    /// `from` and `through` are inclusive line indexes. The caller expands them
+    /// to the whole table; this only parses that window.
+    static func blocks(
+        lines: [LineSplit.Line],
+        from start: Int,
+        through end: Int,
+        isBlocked: (Int) -> Bool
+    ) -> [TableBlock] {
+        guard !lines.isEmpty, start <= end, start >= 0, end < lines.count else { return [] }
         var blocks: [TableBlock] = []
-        var index = 0
-        while index < lines.count {
-            if blocked[index] {
+        var index = start
+        while index <= end {
+            if isBlocked(index) {
                 index += 1
                 continue
             }
-            guard index + 1 < lines.count, !blocked[index + 1],
+            guard index + 1 <= end, !isBlocked(index + 1),
                   let header = parseRow(lines[index]), header.specs == nil,
                   let delimiter = parseRow(lines[index + 1]), let specs = delimiter.specs, !specs.isEmpty
             else {
@@ -141,7 +169,7 @@ public enum MarkdownTables {
             }
             var rawRows: [(RawRow, TableRow.Role)] = [(header, .header), (delimiter, .separator)]
             var next = index + 2
-            while next < lines.count, !blocked[next], !blank(lines[next]), let row = parseRow(lines[next]) {
+            while next <= end, !isBlocked(next), !blank(lines[next]), let row = parseRow(lines[next]) {
                 rawRows.append((row, .body))
                 next += 1
             }
@@ -149,6 +177,28 @@ public enum MarkdownTables {
             index = next
         }
         return blocks
+    }
+
+    /// Inclusive table lines around `[first, last]`. A line joins the window when
+    /// it contains a pipe, is not blank, and is not inside a fence or frontmatter.
+    static func expandedLines(
+        lines: [LineSplit.Line],
+        first: Int,
+        last: Int,
+        isBlocked: (Int) -> Bool
+    ) -> Range<Int> {
+        guard lines.indices.contains(first), lines.indices.contains(last), first <= last else { return 0..<0 }
+        var start = first
+        while start > 0, tableLine(lines, start - 1, isBlocked: isBlocked) { start -= 1 }
+        var end = last
+        while end + 1 < lines.count, tableLine(lines, end + 1, isBlocked: isBlocked) { end += 1 }
+        return start..<(end + 1)
+    }
+
+    static func tableLine(_ lines: [LineSplit.Line], _ index: Int, isBlocked: (Int) -> Bool) -> Bool {
+        guard lines.indices.contains(index) else { return false }
+        if lines[index].isBlank || isBlocked(index) { return false }
+        return lines[index].text.contains("|")
     }
 
     public static func plan(in text: String, scope: TableScope, cursor: Int) -> TablePlan {

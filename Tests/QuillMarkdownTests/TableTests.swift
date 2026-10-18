@@ -124,6 +124,37 @@ final class TableTests: XCTestCase {
         XCTAssertTrue(MarkdownTables.blocks(in: "just | prose\n").isEmpty)
         XCTAssertTrue(MarkdownTables.blocks(in: "---\n").isEmpty)
     }
+
+    func testVisibleSliceUsesTheWholeTableForWidths() {
+        var lines = (0..<40).map { "Line \($0) with `code` and **bold**.\n" }
+        lines.append("| Name | Qty |\n")
+        lines.append("| :--- | --: |\n")
+        lines.append("| Ada | 1 |\n")
+        lines.append("| Linus | 12 |\n")
+        let text = lines.joined()
+        var tokenizer = MarkdownTokenizer(text: text, scanThroughLine: 2)
+        XCTAssertTrue(tokenizer.tableBlocks(overlapping: 0..<8).isEmpty)
+        XCTAssertLessThan(tokenizer.scannedLineCount, 10)
+
+        let marker = "| Ada |"
+        let start = text.range(of: marker)!
+        let utf = text.utf16.distance(from: text.startIndex, to: start.lowerBound)
+        let body = tokenizer.tableBlocks(overlapping: utf..<(utf + 1))
+        XCTAssertEqual(body.count, 1)
+        XCTAssertEqual(body[0].columns.map(\.align), [.left, .right])
+        XCTAssertEqual(body[0].rows.map(\.role), [.header, .separator, .body, .body])
+        let short = body[0].rows[2].cells[1]
+        XCTAssertGreaterThan(short.leadingPad, 0)
+        XCTAssertEqual(short.trailingPad, 0)
+
+        let fenced = "para\n```\n| A | B |\n| - | - |\n| c | d |\n```\n"
+        var fencedTokenizer = MarkdownTokenizer(text: fenced)
+        let hidden = fencedTokenizer.tableBlocks(overlapping: 0..<fenced.utf16.count)
+        XCTAssertTrue(hidden.isEmpty)
+
+        let sliced = MarkdownTables.blocks(in: text, overlapping: utf..<(utf + 1))
+        XCTAssertEqual(sliced, body)
+    }
 }
 
 private func apply(_ plan: TablePlan, to text: String) -> String {

@@ -60,66 +60,515 @@ public enum MarkdownThemeMap {
 
 public struct MarkdownTokenizer: Equatable, Sendable {
     public private(set) var states: [BlockState]
-    public private(set) var spans: [TokenSpan]
+    /// Absolute ranges. Lines at or after `shiftLine` are stored without `shift` added.
+    private var storedSpans: [TokenSpan]
+    private var source: String
+    /// False after `apply`, which does not rewrite `source`. The next full
+    /// `replace` rebuilds from the caller's string instead of diffing a stale one.
+    private var sourceValid: Bool
+    private var ready: Bool
+    private var lines: [LineSplit.Line]
+    private var lineStarts: [Int]
+    /// How many spans each line owns. Parallel to the scanned prefix of `lineStarts`.
+    private var spanCounts: [Int]
+    /// Stored ranges on this line and after are behind by `shift` UTF-16 units.
+    private var shiftLine: Int
+    private var shift: Int
 
-    public init(text: String) {
+    /// `scanThroughLine` tokenizes only that line and the ones above it.
+    /// The tail stays as line text until a later edit or `spans(overlapping:)` reaches it.
+    public init(text: String, scanThroughLine: Int? = nil) {
         states = []
-        spans = []
-        _ = replace(text: text, dirtyUTF16: 0)
+        storedSpans = []
+        source = ""
+        sourceValid = false
+        ready = false
+        lines = []
+        lineStarts = []
+        spanCounts = []
+        shiftLine = 0
+        shift = 0
+        if let scanThroughLine {
+            installLines(text)
+            if !lines.isEmpty {
+                ensureScanned(throughLine: scanThroughLine)
+            }
+        } else {
+            installFull(text)
+        }
     }
 
-    /// Rebuild spans, and report the line range whose block state changed.
-    /// The view restyles that range; later lines are reused once a fence or
-    /// frontmatter state converges.
+    /// Spans with absolute UTF-16 ranges. Reading this does not scan an unscanned tail.
+    public var spans: [TokenSpan] {
+        guard shift != 0, shiftLine < spanCounts.count else { return storedSpans }
+        let start = spanIndex(ofLine: shiftLine)
+        guard start < storedSpans.count else { return storedSpans }
+        var copy = storedSpans
+        for index in start..<copy.count {
+            let range = copy[index].range
+            copy[index].range = (range.lowerBound + shift)..<(range.upperBound + shift)
+        }
+        return copy
+    }
+
+    public var scannedLineCount: Int { spanCounts.count }
+
+    public var utf16Count: Int { lines.last?.end ?? 0 }
+
+    /// True once a document is loaded, including an empty one. Edits can then
+    /// patch cached lines instead of scanning the whole string.
+    public var acceptsEdits: Bool { ready }
+
+    /// Rebuild spans that an edit can affect, and report that line range.
+    /// `dirtyUTF16` is the first unit that changed. Lines before it are kept.
+    /// Scanning stops once a later line's entering block state matches the
+    /// cache; spans after that point are shifted by the UTF-16 delta instead
+    /// of being tokenized again.
     @discardableResult
     public mutating func replace(text: String, dirtyUTF16: Int) -> Range<Int> {
-        let lines = LineSplit.lines(in: text)
-        let dirty = LineSplit.lineIndex(containing: dirtyUTF16, lines: lines)
-        let previous = states
-        var entering = BlockState()
-        if text.hasPrefix("---") { entering.inFrontmatter = true }
-        var nextStates: [BlockState] = []
-        nextStates.reserveCapacity(lines.count + 1)
-        var nextSpans: [TokenSpan] = []
-        var changedEnd = lines.count
-        var stopped = false
-        for (index, line) in lines.enumerated() {
-            nextStates.append(entering)
-            if !stopped {
-                let (produced, exit) = Scanner.scan(line: line, entering: entering)
-                nextSpans.append(contentsOf: produced)
-                let cachedExit = index + 1 < previous.count ? previous[index + 1] : nil
-                entering = exit
-                if index >= dirty, let cachedExit, cachedExit == exit, index + 1 < lines.count {
-                    changedEnd = index + 1
-                    stopped = true
+        if !sourceValid || !ready || spanCounts.count != lineStarts.count || states.count != lineStarts.count + 1 {
+            installFull(text)
+            return 0..<lines.count
+        }
+        if text == source { return 0..<0 }
+        let bounds = LineSplit.bounds(in: text)
+        let oldLen = source.utf16.count
+        let newLen = text.utf16.count
+        let dirty = min(max(0, dirtyUTF16), oldLen, newLen)
+        let suffix = LineSplit.commonSuffixLength(source, text, maxLength: min(oldLen - dirty, newLen - dirty))
+        let newEditEnd = newLen - suffix
+        let delta = newLen - oldLen
+        let first = LineSplit.lineIndex(containing: min(dirty, max(0, oldLen - 1)), starts: lineStarts)
+        guard first < lineStarts.count, first < states.count else {
+            installFull(text)
+            return 0..<lines.count
+        }
+        for index in 0..<first {
+            if index >= bounds.count || bounds[index].start != lineStarts[index] {
+                installFull(text)
+                return 0..<lines.count
+            }
+        }
+        if bounds.isEmpty {
+            installFull(text)
+            return 0..<0
+        }
+        let oldLineCount = lineStarts.count
+        let lineDelta = bounds.count - oldLineCount
+        let lastNew = LineSplit.lineIndex(containing: max(0, newEditEnd - 1), bounds: bounds)
+
+        var scan = first
+        var entering = states[first]
+        var produced: [TokenSpan] = []
+        var producedCounts: [Int] = []
+        var producedStates: [BlockState] = []
+        var cursor = LineSplit.Cursor(text)
+        var convergedOld: Int?
+        while scan < bounds.count {
+            producedStates.append(entering)
+            let line = LineSplit.materialize(text, bounds[scan], cursor: &cursor)
+            let (spansOut, exit) = Scanner.scan(line: line, entering: entering)
+            produced.append(contentsOf: spansOut)
+            producedCounts.append(spansOut.count)
+            entering = exit
+            let nextNew = scan + 1
+            let nextOld = nextNew - lineDelta
+            if nextNew > lastNew,
+               nextOld >= 0,
+               nextOld < states.count,
+               states[nextOld] == exit {
+                convergedOld = nextOld
+                scan = nextNew
+                break
+            }
+            scan = nextNew
+        }
+
+        materializeAll()
+        let prefixSpans = spanCounts.prefix(first).reduce(0, +)
+        var mergedSpans = Array(storedSpans.prefix(prefixSpans))
+        mergedSpans.append(contentsOf: produced)
+        var mergedCounts = Array(spanCounts.prefix(first)) + producedCounts
+        var mergedStates = Array(states.prefix(first)) + producedStates
+        if let nextOld = convergedOld {
+            let suffixSpanStart = spanCounts.prefix(nextOld).reduce(0, +)
+            if delta == 0 {
+                if suffixSpanStart < storedSpans.count {
+                    mergedSpans.append(contentsOf: storedSpans[suffixSpanStart...])
+                }
+            } else if suffixSpanStart < storedSpans.count {
+                for span in storedSpans[suffixSpanStart...] {
+                    mergedSpans.append(TokenSpan(
+                        range: (span.range.lowerBound + delta)..<(span.range.upperBound + delta),
+                        token: span.token
+                    ))
                 }
             }
-            if stopped, index + 1 < lines.count {
-                // Later lines keep the cached entering state. Their spans are
-                // rebuilt from that state so offsets stay correct after the edit.
-                let (produced, exit) = Scanner.scan(line: lines[index + 1], entering: entering)
-                _ = produced
-                _ = exit
+            if nextOld < spanCounts.count {
+                mergedCounts.append(contentsOf: spanCounts[nextOld...])
+            }
+            mergedStates.append(contentsOf: states[nextOld...])
+        } else {
+            mergedStates.append(entering)
+        }
+
+        source = text
+        sourceValid = true
+        storedSpans = mergedSpans
+        shift = 0
+        shiftLine = 0
+        spanCounts = mergedCounts
+        states = mergedStates
+        lines = LineSplit.lines(in: text)
+        lineStarts = lines.map(\.start)
+        return first..<max(first, scan)
+    }
+
+    /// Patch cached lines from one UTF-16 edit. Unchanged lines are not read
+    /// back out of the document string, so a keystroke does not walk the file.
+    @discardableResult
+    public mutating func apply(start utf16Start: Int, removedUTF16: Int, replacement: String) -> Range<Int> {
+        guard ready else {
+            installFull(replacement)
+            return 0..<lines.count
+        }
+        let oldLen = utf16Count
+        let start = min(max(0, utf16Start), oldLen)
+        let removed = min(max(0, removedUTF16), oldLen - start)
+        if lines.isEmpty {
+            installFull(replacement)
+            return 0..<lines.count
+        }
+        let oldEnd = start + removed
+        let delta = replacement.utf16.count - removed
+        let first = LineSplit.lineIndex(containing: start == oldLen ? oldLen - 1 : start, starts: lineStarts)
+        var last = LineSplit.lineIndex(containing: max(0, removed == 0 ? start : oldEnd - 1), starts: lineStarts)
+        // Deleting the newline joins the next line. That line has to be part of the splice.
+        if removed > 0, last + 1 < lines.count, oldEnd == lines[last].end, oldEnd < oldLen {
+            last += 1
+        }
+        if spanCounts.count <= last {
+            ensureScanned(throughLine: last)
+        }
+        let blockStart = lines[first].start
+        var block = ""
+        for index in first...last {
+            block += LineSplit.storageForm(lines[index])
+        }
+        let localStart = start - blockStart
+        let localEnd = oldEnd - blockStart
+        let merged = LineSplit.utf16Slice(block, from: 0, to: localStart)
+            + replacement
+            + LineSplit.utf16Slice(block, from: localEnd, to: block.utf16.count)
+        let newLines = LineSplit.lines(in: merged).map { line in
+            LineSplit.Line(
+                text: line.text,
+                start: line.start + blockStart,
+                end: line.end + blockStart,
+                isBlank: line.isBlank
+            )
+        }
+        let oldSpan = last - first + 1
+        if newLines.count == oldSpan {
+            // Mutate the suffix in place. Rebuilding the line array copied every
+            // later line's string on a keystroke at the top of the file.
+            for offset in 0..<newLines.count {
+                lines[first + offset] = newLines[offset]
+                if first + offset < lineStarts.count {
+                    lineStarts[first + offset] = newLines[offset].start
+                }
+            }
+            if delta != 0 {
+                var index = last + 1
+                while index < lines.count {
+                    lines[index].start += delta
+                    lines[index].end += delta
+                    if index < lineStarts.count {
+                        lineStarts[index] += delta
+                    }
+                    index += 1
+                }
+            }
+        } else {
+            var rebuilt: [LineSplit.Line] = []
+            rebuilt.reserveCapacity(lines.count - oldSpan + newLines.count)
+            rebuilt.append(contentsOf: lines[..<first])
+            rebuilt.append(contentsOf: newLines)
+            if last + 1 < lines.count {
+                for index in (last + 1)..<lines.count {
+                    var line = lines[index]
+                    line.start += delta
+                    line.end += delta
+                    rebuilt.append(line)
+                }
+            }
+            lines = rebuilt
+            lineStarts = lines.map(\.start)
+        }
+        sourceValid = false
+
+        let replacedEnd = first + newLines.count
+        var scan = first
+        var entering = first < states.count ? states[first] : BlockState()
+        var produced: [TokenSpan] = []
+        var producedCounts: [Int] = []
+        var producedStates: [BlockState] = []
+        var convergedOld: Int?
+        while scan < lines.count {
+            producedStates.append(entering)
+            let (spansOut, exit) = Scanner.scan(line: lines[scan], entering: entering)
+            produced.append(contentsOf: spansOut)
+            producedCounts.append(spansOut.count)
+            entering = exit
+            let nextNew = scan + 1
+            if nextNew >= replacedEnd {
+                let nextOld = (last + 1) + (nextNew - replacedEnd)
+                if nextOld < states.count, states[nextOld] == exit {
+                    convergedOld = nextOld
+                    scan = nextNew
+                    break
+                }
+            }
+            scan = nextNew
+        }
+
+        let boundary = convergedOld ?? spanCounts.count
+        materialize(beforeLine: boundary)
+        if shift != 0, shiftLine > boundary {
+            materializeAll()
+        }
+        let carried = shift
+        let prefixSpans = spanIndex(ofLine: first)
+        var mergedSpans = Array(storedSpans.prefix(prefixSpans))
+        mergedSpans.append(contentsOf: produced)
+        var mergedCounts = Array(spanCounts.prefix(first)) + producedCounts
+        var mergedStates = Array(states.prefix(first)) + producedStates
+        if let nextOld = convergedOld {
+            let suffixSpanStart = spanIndex(ofLine: nextOld)
+            if suffixSpanStart < storedSpans.count {
+                mergedSpans.append(contentsOf: storedSpans[suffixSpanStart...])
+            }
+            if nextOld < spanCounts.count {
+                mergedCounts.append(contentsOf: spanCounts[nextOld...])
+            }
+            if nextOld < states.count {
+                mergedStates.append(contentsOf: states[nextOld...])
+            }
+        } else {
+            mergedStates.append(entering)
+        }
+        storedSpans = mergedSpans
+        spanCounts = mergedCounts
+        states = mergedStates
+        let suffixStart = first + producedCounts.count
+        if carried + delta != 0, suffixStart < spanCounts.count {
+            shift = carried + delta
+            shiftLine = suffixStart
+        } else {
+            shift = 0
+            shiftLine = 0
+        }
+        return first..<max(first, scan)
+    }
+
+    /// Paragraph containing `utf16`, from the line cache. Does not walk the document string.
+    public func paragraphRange(containing utf16: Int) -> Range<Int> {
+        guard !lines.isEmpty else { return 0..<0 }
+        let total = utf16Count
+        let probe = min(max(0, utf16), max(0, total - 1))
+        var index = LineSplit.lineIndex(containing: probe, starts: lineStarts)
+        while index > 0, !lines[index].isBlank, !lines[index - 1].isBlank { index -= 1 }
+        var end = index
+        while end < lines.count, !lines[end].isBlank { end += 1 }
+        let upper = end < lines.count ? lines[end].start : (lines.last?.end ?? 0)
+        return lines[index].start..<upper
+    }
+
+    /// UTF-16 span of the line containing `utf16`, including its newline.
+    public func lineContentSpan(containing utf16: Int) -> Range<Int> {
+        guard !lines.isEmpty, utf16Count > 0 else { return 0..<0 }
+        let probe = min(max(0, utf16), utf16Count - 1)
+        let index = LineSplit.lineIndex(containing: probe, starts: lineStarts)
+        return lineSpan(index..<(index + 1))
+    }
+
+    /// True when `after` is `before` with ranges shifted by an edit that did not
+    /// change tokens. AppKit already shifted those attribute runs.
+    public static func spansFollowEdit(
+        _ before: [TokenSpan],
+        _ after: [TokenSpan],
+        editAt: Int,
+        delta: Int
+    ) -> Bool {
+        guard before.count == after.count else { return false }
+        for (old, new) in zip(before, after) {
+            if old.token != new.token { return false }
+            if old.range.lowerBound < editAt && editAt < old.range.upperBound { return false }
+            let shift = old.range.lowerBound >= editAt ? delta : 0
+            let moved = (old.range.lowerBound + shift)..<(old.range.upperBound + shift)
+            if new.range != moved { return false }
+        }
+        return true
+    }
+
+    /// UTF-16 span of `changed` lines. The caller restyles that span; later lines
+    /// keep the attributes AppKit shifted with the edit.
+    public func lineSpan(_ changed: Range<Int>) -> Range<Int> {
+        guard !lines.isEmpty, !changed.isEmpty else { return 0..<utf16Count }
+        let lower = min(changed.lowerBound, lines.count - 1)
+        let upperIndex = changed.upperBound
+        let upper = upperIndex >= lines.count ? (lines.last?.end ?? 0) : lines[upperIndex].start
+        return lines[lower].start..<max(lines[lower].start, upper)
+    }
+
+    private mutating func installLines(_ text: String) {
+        let parsed = LineSplit.lines(in: text)
+        var entering = BlockState()
+        if text.hasPrefix("---") { entering.inFrontmatter = true }
+        source = text
+        sourceValid = true
+        ready = true
+        lines = parsed
+        lineStarts = parsed.map(\.start)
+        states = [entering]
+        storedSpans = []
+        spanCounts = []
+        shift = 0
+        shiftLine = 0
+    }
+
+    private mutating func installFull(_ text: String) {
+        installLines(text)
+        if !lines.isEmpty {
+            ensureScanned(throughLine: lines.count - 1)
+        }
+    }
+
+    /// Tokenize lines up through `target` that are not scanned yet. Already-scanned
+    /// lines are left alone, including a pending suffix shift.
+    public mutating func ensureScanned(throughLine target: Int) {
+        guard ready, !lines.isEmpty else { return }
+        let goal = min(max(0, target), lines.count - 1)
+        guard spanCounts.count <= goal else { return }
+        materializeAll()
+        var entering = states.last ?? BlockState()
+        if states.isEmpty {
+            entering = BlockState()
+            states = [entering]
+        }
+        var index = spanCounts.count
+        while index <= goal {
+            let (produced, exit) = Scanner.scan(line: lines[index], entering: entering)
+            storedSpans.append(contentsOf: produced)
+            spanCounts.append(produced.count)
+            entering = exit
+            states.append(entering)
+            index += 1
+        }
+    }
+
+    /// Absolute spans that overlap `utf16`, scanning any gap in front of that range.
+    public mutating func spans(overlapping utf16: Range<Int>) -> [TokenSpan] {
+        guard !lines.isEmpty, !utf16.isEmpty, utf16Count > 0 else { return [] }
+        let endProbe = min(max(utf16.lowerBound, utf16.upperBound - 1), utf16Count - 1)
+        let first = LineSplit.lineIndex(containing: min(utf16.lowerBound, utf16Count - 1), starts: lineStarts)
+        let last = LineSplit.lineIndex(containing: endProbe, starts: lineStarts)
+        ensureScanned(throughLine: last)
+        guard first < spanCounts.count else { return [] }
+        var index = spanIndex(ofLine: first)
+        var result: [TokenSpan] = []
+        let stop = min(last, spanCounts.count - 1)
+        for line in first...stop {
+            let count = spanCounts[line]
+            let extra = (shift != 0 && line >= shiftLine) ? shift : 0
+            for _ in 0..<count {
+                guard index < storedSpans.count else { break }
+                var span = storedSpans[index]
+                index += 1
+                if extra != 0 {
+                    span.range = (span.range.lowerBound + extra)..<(span.range.upperBound + extra)
+                }
+                if span.range.upperBound > utf16.lowerBound, span.range.lowerBound < utf16.upperBound {
+                    result.append(span)
+                }
             }
         }
-        if stopped {
-            nextSpans.removeAll()
-            entering = nextStates.first ?? BlockState()
-            if text.hasPrefix("---") { entering.inFrontmatter = true }
-            nextStates = []
-            for line in lines {
-                nextStates.append(entering)
-                let (produced, exit) = Scanner.scan(line: line, entering: entering)
-                nextSpans.append(contentsOf: produced)
-                entering = exit
+        return result
+    }
+
+    /// True when the line under `utf16` contains a pipe. Table edits use this
+    /// to skip the plain-shift fast path, which would leave column kern stale.
+    public func lineContainsPipe(at utf16: Int) -> Bool {
+        guard !lines.isEmpty, utf16Count > 0 else { return false }
+        let probe = min(max(0, utf16), utf16Count - 1)
+        let index = LineSplit.lineIndex(containing: probe, starts: lineStarts)
+        return lines[index].text.contains("|")
+    }
+
+    /// Tables overlapping `utf16`. Rows outside the range are included so column
+    /// widths stay correct. Lines with no pipe nearby are not parsed.
+    public mutating func tableBlocks(overlapping utf16: Range<Int>) -> [TableBlock] {
+        guard ready, !lines.isEmpty, !utf16.isEmpty, utf16Count > 0 else { return [] }
+        let lower = min(max(0, utf16.lowerBound), utf16Count - 1)
+        let upper = min(max(lower, utf16.upperBound - 1), utf16Count - 1)
+        let first = LineSplit.lineIndex(containing: lower, starts: lineStarts)
+        let last = LineSplit.lineIndex(containing: upper, starts: lineStarts)
+        if !pipeNear(first, last) { return [] }
+        ensureScanned(throughLine: last)
+        var start = first
+        while start > 0, MarkdownTables.tableLine(lines, start - 1, isBlocked: lineBlocked) {
+            start -= 1
+        }
+        var end = last
+        while end + 1 < lines.count {
+            ensureScanned(throughLine: end + 1)
+            if !MarkdownTables.tableLine(lines, end + 1, isBlocked: lineBlocked) { break }
+            end += 1
+        }
+        return MarkdownTables.blocks(lines: lines, from: start, through: end, isBlocked: lineBlocked)
+    }
+
+    private func pipeNear(_ first: Int, _ last: Int) -> Bool {
+        let lower = max(0, first - 1)
+        let upper = min(lines.count - 1, last + 1)
+        guard lower <= upper else { return false }
+        for index in lower...upper where lines[index].text.contains("|") {
+            return true
+        }
+        return false
+    }
+
+    private func lineBlocked(_ index: Int) -> Bool {
+        guard index >= 0, index < states.count else { return false }
+        return states[index].inFence || states[index].inFrontmatter
+    }
+
+    private func spanIndex(ofLine line: Int) -> Int {
+        spanCounts.prefix(min(max(0, line), spanCounts.count)).reduce(0, +)
+    }
+
+    private mutating func materializeAll() {
+        materialize(beforeLine: spanCounts.count)
+    }
+
+    /// Make stored ranges absolute for lines before `line`. The tail keeps `shift`.
+    private mutating func materialize(beforeLine line: Int) {
+        guard shift != 0 else { return }
+        let endLine = min(max(0, line), spanCounts.count)
+        guard shiftLine < endLine else { return }
+        let start = spanIndex(ofLine: shiftLine)
+        let end = spanIndex(ofLine: endLine)
+        if start < end {
+            for index in start..<min(end, storedSpans.count) {
+                let range = storedSpans[index].range
+                storedSpans[index].range = (range.lowerBound + shift)..<(range.upperBound + shift)
             }
         }
-        nextStates.append(entering)
-        states = nextStates
-        spans = nextSpans
-        if lines.isEmpty { return 0..<0 }
-        return dirty..<max(dirty, changedEnd)
+        shiftLine = endLine
+        if shiftLine >= spanCounts.count {
+            shift = 0
+            shiftLine = 0
+        }
     }
 
     public func spans(onLine line: Int, in text: String) -> [TokenSpan] {
@@ -132,7 +581,7 @@ public struct MarkdownTokenizer: Equatable, Sendable {
 }
 
 enum LineSplit {
-    struct Line {
+    struct Line: Equatable {
         var text: String
         var start: Int
         var end: Int
@@ -170,15 +619,125 @@ enum LineSplit {
         return result
     }
 
+    struct Bounds {
+        var start: Int
+        var end: Int
+        var isBlank: Bool
+    }
+
+    struct Cursor {
+        var index: String.Index
+        var utf16: Int
+
+        init(_ text: String) {
+            index = text.startIndex
+            utf16 = 0
+        }
+
+        mutating func slice(_ text: String, start: Int, end: Int) -> String {
+            while utf16 < start, index < text.endIndex {
+                utf16 += text[index].utf16.count
+                index = text.index(after: index)
+            }
+            let begin = index
+            var cursor = index
+            var pos = utf16
+            while pos < end, cursor < text.endIndex {
+                pos += text[cursor].utf16.count
+                cursor = text.index(after: cursor)
+            }
+            index = cursor
+            utf16 = pos
+            return String(text[begin..<cursor])
+        }
+    }
+
+    static func bounds(in text: String) -> [Bounds] {
+        if text.isEmpty { return [] }
+        var result: [Bounds] = []
+        var lineStart = 0
+        var utf16 = 0
+        var lineBlank = true
+        for character in text {
+            if character == "\n" {
+                let end = utf16 + 1
+                result.append(Bounds(start: lineStart, end: end, isBlank: lineBlank))
+                utf16 = end
+                lineStart = end
+                lineBlank = true
+                continue
+            }
+            if character != " ", character != "\t" { lineBlank = false }
+            utf16 += character.utf16.count
+        }
+        if lineStart < utf16 {
+            result.append(Bounds(start: lineStart, end: utf16, isBlank: lineBlank))
+        }
+        return result
+    }
+
+    static func materialize(_ text: String, _ bounds: Bounds, cursor: inout Cursor) -> Line {
+        let raw = cursor.slice(text, start: bounds.start, end: bounds.end)
+        let content = raw.hasSuffix("\n") ? String(raw.dropLast()) : raw
+        return Line(text: content, start: bounds.start, end: bounds.end, isBlank: bounds.isBlank)
+    }
+
     static func lineIndex(containing offset: Int, lines: [Line]) -> Int {
-        guard !lines.isEmpty else { return 0 }
+        lineIndex(containing: offset, starts: lines.map(\.start))
+    }
+
+    static func lineIndex(containing offset: Int, bounds: [Bounds]) -> Int {
+        guard !bounds.isEmpty else { return 0 }
         var low = 0
-        var high = lines.count - 1
+        var high = bounds.count - 1
         while low < high {
             let mid = (low + high + 1) / 2
-            if lines[mid].start <= offset { low = mid } else { high = mid - 1 }
+            if bounds[mid].start <= offset { low = mid } else { high = mid - 1 }
         }
         return low
+    }
+
+    static func storageForm(_ line: Line) -> String {
+        if line.end > line.start + line.text.utf16.count {
+            return line.text + "\n"
+        }
+        return line.text
+    }
+
+    static func utf16Slice(_ text: String, from: Int, to: Int) -> String {
+        if to <= from || from < 0 { return "" }
+        let view = text.utf16
+        guard let start = view.index(view.startIndex, offsetBy: from, limitedBy: view.endIndex) else { return "" }
+        let end = view.index(start, offsetBy: to - from, limitedBy: view.endIndex) ?? view.endIndex
+        return String(decoding: view[start..<end], as: UTF16.self)
+    }
+
+    static func lineIndex(containing offset: Int, starts: [Int]) -> Int {
+        guard !starts.isEmpty else { return 0 }
+        var low = 0
+        var high = starts.count - 1
+        while low < high {
+            let mid = (low + high + 1) / 2
+            if starts[mid] <= offset { low = mid } else { high = mid - 1 }
+        }
+        return low
+    }
+
+    static func commonSuffixLength(_ a: String, _ b: String, maxLength: Int) -> Int {
+        if maxLength <= 0 { return 0 }
+        let au = a.utf16
+        let bu = b.utf16
+        var ai = au.endIndex
+        var bi = bu.endIndex
+        var count = 0
+        while count < maxLength {
+            if ai == au.startIndex || bi == bu.startIndex { break }
+            au.formIndex(before: &ai)
+            bu.formIndex(before: &bi)
+            if au[ai] != bu[bi] { break }
+            count += 1
+        }
+        return count
     }
 
     static func blank(_ line: String) -> Bool {
@@ -187,9 +746,9 @@ enum LineSplit {
     }
 
     static func paragraphRange(in text: String, utf16: Int) -> Range<Int> {
-        let lines = lines(in: text)
+        let lines = bounds(in: text)
         guard !lines.isEmpty else { return 0..<0 }
-        var index = lineIndex(containing: utf16, lines: lines)
+        var index = lineIndex(containing: utf16, starts: lines.map(\.start))
         while index > 0, !lines[index].isBlank, !lines[index - 1].isBlank { index -= 1 }
         var end = index
         while end < lines.count, !lines[end].isBlank { end += 1 }

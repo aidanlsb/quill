@@ -35,3 +35,4 @@ Preconditions:
 - `j` that stops on line 1 used to leave the origin at 0. Both failures are the same bug. A log that only mentions the origin is incomplete.
 - The smoke's `j` goes through `engine.handle`, which is the path `keyDown` uses after it builds a `KeyEvent`. It is not an `NSEvent` posted to the window.
 - Linux tests of `j` use logical lines. They stay green when TextKit line lookup is wrong.
+- `gg` puts the first line on screen. The clip origin can sit just below the top margin, so it is not required to be 0.

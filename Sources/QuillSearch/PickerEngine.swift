@@ -1,3 +1,5 @@
+import Observation
+
 /// Telescope-style picker state machine, independent of AppKit.
 /// Opens in insert mode in the prompt. Esc enters picker normal mode.
 public enum PickerMode: Equatable, Sendable {
@@ -38,8 +40,12 @@ public enum PickerKey: Equatable, Sendable {
 }
 
 /// Prompt + result list with insert/normal modes, matching Telescope's feel.
+/// Observable so the prompt can read `query` directly. A tick on the result
+/// list does not refresh the line that shows what was typed.
+@Observable
 public final class PickerEngine {
     public var mode: PickerMode = .insert
+    /// Typed prompt text. The caret is drawn by the panel; it is not a character in this string.
     public var query: String = ""
     public var queryCursor: Int = 0
     public private(set) var selectedIndex: Int = 0
@@ -74,16 +80,6 @@ public final class PickerEngine {
     public var selected: PickerItem? {
         guard items.indices.contains(selectedIndex) else { return nil }
         return items[selectedIndex]
-    }
-
-    /// Prompt text with a caret in insert mode, matching Telescope's prompt.
-    public var promptDisplay: String {
-        let c = min(max(0, queryCursor), query.count)
-        let idx = query.index(query.startIndex, offsetBy: c)
-        if mode == .insert {
-            return String(query[..<idx]) + "▏" + String(query[idx...])
-        }
-        return query
     }
 
     @discardableResult
@@ -228,7 +224,7 @@ public final class PickerEngine {
             }
             .sorted { lhs, rhs in
                 if lhs.1 != rhs.1 { return lhs.1 > rhs.1 }
-                return source[lhs.0].title.localizedStandardCompare(source[rhs.0].title) == .orderedAscending
+                return source[lhs.0].title < source[rhs.0].title
             }
             items = ranked.map { source[$0.0] }
         }

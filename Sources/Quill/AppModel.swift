@@ -248,8 +248,10 @@ final class AppModel {
         }
     }
 
-    func handleEngineResult(_ result: EngineResult) {
-        if result.didChangeText { revision += 1 }
+    func handleEngineResult(_ result: EngineResult, fromTextView: Bool = false) {
+        // The text view already applied the edit. Bumping `revision` made
+        // SwiftUI sync the buffer and restyle the whole document again.
+        if result.didChangeText, !fromTextView { revision += 1 }
         modified = engine.isModified
         status = engine.mode.displayName
         if !engine.statusMessage.isEmpty { message = engine.statusMessage }
@@ -469,7 +471,8 @@ final class AppModel {
     func presentFilePicker() {
         let root = rootURL
         Task {
-            await fileIndex.rebuild(root: root, ignore: IgnoreRules.load(from: root))
+            let ignore = await IgnoreCache.shared.rules(for: root)
+            await fileIndex.rebuild(root: root, ignore: ignore)
             let paths = await fileIndex.relativePaths()
             let items = paths.map { path in
                 PickerItem(title: path, payload: root.appendingPathComponent(path).path, preview: "")
@@ -781,7 +784,9 @@ final class AppModel {
         grepTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 40_000_000)
             if Task.isCancelled { return }
-            let hits = await searchSession.search(root: root, query: query, ignore: IgnoreRules.load(from: root))
+            let ignore = await IgnoreCache.shared.rules(for: root)
+            if Task.isCancelled { return }
+            let hits = await searchSession.search(root: root, query: query, ignore: ignore)
             let items = hits.map { hit -> PickerItem in
                 let absolute = hit.path.hasPrefix("/") ? hit.path : root.appendingPathComponent(hit.path).path
                 return PickerItem(
@@ -817,7 +822,8 @@ final class AppModel {
     private func jumpToFilename(_ name: String) {
         Task {
             if await fileIndex.root?.path != rootURL.path {
-                await fileIndex.rebuild(root: rootURL, ignore: IgnoreRules.load(from: rootURL))
+                let ignore = await IgnoreCache.shared.rules(for: rootURL)
+                await fileIndex.rebuild(root: rootURL, ignore: ignore)
             }
             let files = await fileIndex.files
             let stem = (name as NSString).deletingPathExtension

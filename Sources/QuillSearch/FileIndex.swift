@@ -52,19 +52,40 @@ public struct IgnoreRules: Equatable, Sendable {
                 patterns.append(String(trimmed))
             }
         }
-        absorb(root.appendingPathComponent(".gitignore"), prefix: "")
-        if let enumerator = fileManager.enumerator(at: root, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
-            while let item = enumerator.nextObject() as? URL {
-                if item.lastPathComponent == ".gitignore" {
-                    let dir = item.deletingLastPathComponent().path
-                    let rootPath = root.path.hasSuffix("/") ? root.path : root.path + "/"
-                    let relative = dir.hasPrefix(rootPath) ? String(dir.dropFirst(rootPath.count)) : ""
-                    let prefix = relative.isEmpty ? "" : relative + "/"
-                    absorb(item, prefix: prefix)
+        // `.gitignore` is hidden, so a skipsHiddenFiles walk never sees it and
+        // still visits every file. Read each directory's gitignore by path, and
+        // do not descend into directories the rules already ignore.
+        var rules = IgnoreRules(patterns: patterns)
+        var queue = [root]
+        var seen = Set<String>()
+        while let dir = queue.popLast() {
+            let relDir = FileWalk.relative(dir, root: root)
+            if !relDir.isEmpty, rules.ignores(relativePath: relDir, isDirectory: true) { continue }
+            if dir.lastPathComponent == ".git" { continue }
+            if !seen.insert(dir.path).inserted { continue }
+            let prefix = relDir.isEmpty ? "" : relDir + "/"
+            let gitignore = dir.appendingPathComponent(".gitignore")
+            if fileManager.fileExists(atPath: gitignore.path) {
+                let before = patterns.count
+                absorb(gitignore, prefix: prefix)
+                if patterns.count != before {
+                    rules = IgnoreRules(patterns: patterns)
                 }
             }
+            guard let children = try? fileManager.contentsOfDirectory(
+                at: dir,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            ) else { continue }
+            for item in children {
+                let isDir = (try? item.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+                guard isDir, item.lastPathComponent != ".git" else { continue }
+                let rel = FileWalk.relative(item, root: root)
+                if rules.ignores(relativePath: rel, isDirectory: true) { continue }
+                queue.append(item)
+            }
         }
-        return IgnoreRules(patterns: patterns)
+        return rules
     }
 
     public func ignores(relativePath: String, isDirectory: Bool) -> Bool {
@@ -135,6 +156,28 @@ public struct IgnoreRules: Equatable, Sendable {
             return "^(?:\(regex))(?:/.*)?$"
         }
         return "^(?:.*/)?(?:\(regex))(?:/.*)?$"
+    }
+}
+
+/// One compiled ignore set per root. Grep keystrokes and the file picker
+/// share it so they do not walk the tree or recompile globs again.
+public actor IgnoreCache {
+    public static let shared = IgnoreCache()
+    private var entries: [String: (mtime: Date?, rules: IgnoreRules)] = [:]
+
+    public func rules(for root: URL) -> IgnoreRules {
+        let key = root.path
+        let mtime = Self.mtime(root.appendingPathComponent(".gitignore"))
+        if let hit = entries[key], hit.mtime == mtime {
+            return hit.rules
+        }
+        let loaded = IgnoreRules.load(from: root)
+        entries[key] = (mtime, loaded)
+        return loaded
+    }
+
+    private static func mtime(_ url: URL) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date
     }
 }
 

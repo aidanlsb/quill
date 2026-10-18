@@ -195,18 +195,18 @@ struct QuillTheme {
 /// Hidden title bar, no toolbar, window fill matches the editor.
 enum WindowChrome {
     @MainActor
-    static func apply(theme: QuillTheme) {
-        NSApplication.shared.windows.forEach { apply(theme, to: $0) }
+    static func apply(theme: QuillTheme, background: NSColor? = nil) {
+        NSApplication.shared.windows.forEach { apply(theme, to: $0, background: background) }
     }
 
     @MainActor
-    static func apply(_ theme: QuillTheme, to window: NSWindow) {
+    static func apply(_ theme: QuillTheme, to window: NSWindow, background: NSColor? = nil) {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.titlebarSeparatorStyle = .none
         window.styleMask.insert(.fullSizeContentView)
         window.toolbar = nil
-        window.backgroundColor = theme.backgroundColor
+        window.backgroundColor = background ?? theme.backgroundColor
         window.isMovableByWindowBackground = true
     }
 }
@@ -218,14 +218,19 @@ enum MarkdownStyler {
         theme: QuillTheme,
         spans: [TokenSpan] = [],
         dirtyUTF16: Int? = nil,
+        paragraphUTF16: Range<Int>? = nil,
         focus: Bool = false,
         caret: Int = 0,
-        diagnostics: [(NSRange, Int)] = []
+        focusParagraph: Range<Int>? = nil,
+        diagnostics: [(NSRange, Int)] = [],
+        tables: [TableBlock]? = nil
     ) {
         let ns = storage.string as NSString
         let full = NSRange(location: 0, length: ns.length)
         let limit: NSRange
-        if let dirtyUTF16 {
+        if let paragraphUTF16 {
+            limit = nsRange(paragraphUTF16, length: ns.length)
+        } else if let dirtyUTF16 {
             let paragraph = Paragraphs.range(in: storage.string, utf16: dirtyUTF16)
             let loc = min(paragraph.lowerBound, ns.length)
             let end = min(paragraph.upperBound, ns.length)
@@ -237,21 +242,73 @@ enum MarkdownStyler {
         if limit.length > 0 {
             storage.setAttributes(theme.bodyAttributes, range: limit)
         }
-        let focusRange = focus ? Paragraphs.range(in: storage.string, utf16: caret) : 0..<ns.length
-        for span in spans where NSIntersectionRange(nsRange(span.range, length: ns.length), limit).length > 0 {
+        let focusRange: Range<Int>
+        if let focusParagraph {
+            focusRange = focusParagraph
+        } else if focus {
+            focusRange = Paragraphs.range(in: storage.string, utf16: caret)
+        } else {
+            focusRange = 0..<ns.length
+        }
+        for span in Self.spans(overlapping: limit, in: spans) {
             let range = nsRange(span.range, length: ns.length)
             guard range.location != NSNotFound, range.length > 0, NSMaxRange(range) <= ns.length else { continue }
             let dimmed = focus && (range.location >= focusRange.upperBound || NSMaxRange(range) <= focusRange.lowerBound)
             apply(span.token, range: range, theme: theme, storage: storage, dimmed: dimmed)
         }
-        applyTables(storage, theme: theme, limit: limit, focus: focus, focusRange: focusRange, spans: spans)
+        let discovered = tables ?? Self.tables(in: storage.string, limit: limit)
+        applyTables(
+            storage,
+            theme: theme,
+            limit: limit,
+            focus: focus,
+            focusRange: focusRange,
+            spans: spans,
+            tables: discovered
+        )
         for (range, severity) in diagnostics {
-            guard NSMaxRange(range) <= storage.length else { continue }
+            let marked = NSIntersectionRange(range, limit)
+            guard marked.length > 0, NSMaxRange(marked) <= storage.length else { continue }
             let color: NSColor = severity <= 1 ? .systemRed : .systemOrange
-            storage.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: range)
-            storage.addAttribute(.underlineColor, value: color, range: range)
+            storage.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: marked)
+            storage.addAttribute(.underlineColor, value: color, range: marked)
         }
         storage.endEditing()
+    }
+
+    /// A caller that already parsed the visible tables passes them in.
+    /// `nil` discovers tables from the string, and a partial limit only walks
+    /// the lines that can belong to those tables.
+    private static func tables(in text: String, limit: NSRange) -> [TableBlock] {
+        guard limit.length > 0, !text.isEmpty else { return [] }
+        let length = (text as NSString).length
+        if limit.location == 0, limit.length == length {
+            return MarkdownTables.blocks(in: text)
+        }
+        let end = min(length, NSMaxRange(limit))
+        guard limit.location < end else { return [] }
+        return MarkdownTables.blocks(in: text, overlapping: limit.location..<end)
+    }
+
+    /// Spans are ordered by start. Skip the prefix that ends before `limit`
+    /// instead of testing every span in a 10k-line document on each keystroke.
+    private static func spans(overlapping limit: NSRange, in spans: [TokenSpan]) -> ArraySlice<TokenSpan> {
+        var low = 0
+        var high = spans.count
+        while low < high {
+            let mid = (low + high) / 2
+            if spans[mid].range.upperBound <= limit.location {
+                low = mid + 1
+            } else {
+                high = mid
+            }
+        }
+        var end = low
+        let limitEnd = NSMaxRange(limit)
+        while end < spans.count, spans[end].range.lowerBound < limitEnd {
+            end += 1
+        }
+        return spans[low..<end]
     }
 
     private static func nsRange(_ range: Range<Int>, length: Int) -> NSRange {

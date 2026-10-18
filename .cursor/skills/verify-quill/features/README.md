@@ -34,7 +34,10 @@ Each feature file has an H1, one paragraph, then four H2 sections: `Sub-features
 ## Features
 
 - [Caret](caret.md) covers the normal-mode block, the insert-mode beam, and the default 16pt type scale.
+- [Measure](measure.md) covers the centered writing column and the full-width directory listing as the window resizes.
 - [Scrolling](scroll.md) covers trackpad scrolling and cursor-follow with `j`, `G`, `gg`, and half-page motions.
 - [Directory buffer](directory.md) covers opening a folder, the mono listing layout, Enter, parent, and a rename that asks before writing.
 - [Theme](theme.md) covers light, dark, and system, including `:theme` and `<leader>tt`.
 - [Tables](tables.md) covers GFM table styling, alignment, clipping, and `:TableFormat`.
+- [Performance](perf.md) records launch, editing, and picker timings. It does not assert a speed limit.
+- [Picker](picker.md) covers the `<leader>sf` and `<leader>sg` prompt, caret, placeholder, and live filtering.

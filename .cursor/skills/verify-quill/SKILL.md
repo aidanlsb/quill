@@ -1,13 +1,13 @@
 ---
 name: verify-quill
-description: "Drive the Quill macOS editor and prove the caret, scrolling, directory buffer, and markdown tables. Use when changing the app target, TextKit layout, vim key handling, oil-style directories, or markdown table styling. The harness is QUILL_SMOKE via Scripts/verify-quill."
+description: "Drive the Quill macOS editor and prove the caret, scrolling, directory buffer, picker prompt, and markdown tables. Use when changing the app target, TextKit layout, vim key handling, oil-style directories, the Telescope-style picker, or markdown table styling. The harness is QUILL_SMOKE via Scripts/verify-quill."
 ---
 
 # Verify Quill
 
 Quill is a native macOS markdown editor (SwiftUI + AppKit + TextKit 2). The user-facing surface is the app window and the `quill` launcher. Linux `swift test` does not compile the app and is not proof that the editor works.
 
-The harness is `Scripts/verify-quill`. It builds or accepts the release binary and runs it with `QUILL_SMOKE=1`. That process drives the caret, scrolling, markdown table styling, and a real temporary directory, then exits. It is the same check the macOS CI job runs.
+The harness is `Scripts/verify-quill`. It builds or accepts the release binary and runs it with `QUILL_SMOKE=1`. That process drives the caret, scrolling, a real temporary directory, the file and grep pickers, and markdown table styling, then exits. It is the same check the macOS CI job runs.
 
 ## Launch
 
@@ -29,6 +29,8 @@ Each invocation is its own process. The directory fixture uses a new temporary d
 
 There is no server to keep. Teardown is the process exiting. The app watchdog exits 2 before this script's 30 second kill, so `smoke.log` contains that diagnostic. If the process is still alive after 30 seconds, the script kills that pid and fails.
 
+After a passing smoke, the script runs a second process with `QUILL_PERF=1`. That process prints `quill perf <name>=<milliseconds>` lines and `quill perf done`, then exits. The log is `artifacts/verify-quill/perf.log`. It is a measurement, not a behavior pass: a missing `quill perf done` fails the script. `features/perf.md` names each number.
+
 ## Doctor
 
 ```bash
@@ -46,7 +48,7 @@ A five-second launch without `QUILL_SMOKE` is a separate check already in `.gith
 
 ## Drive
 
-`Scripts/verify-quill` sets `QUILL_SMOKE=1` and runs the binary in the foreground. The smoke builds the same `KeyEvent` values `VimTextView.keyDown` builds and calls `engine.handle`. It does not post OS keyboard events. It does measure the real `NSTextView` caret cell, the clip-view origin, and an `AppModel` directory opened from a temporary folder. The directory check also reads that text view's font, insets, and background, so the listing has to be monospaced and wider than the writing column.
+`Scripts/verify-quill` sets `QUILL_SMOKE=1` and runs the binary in the foreground. The smoke builds the same `KeyEvent` values `VimTextView.keyDown` builds and calls `engine.handle`. It does not post OS keyboard events. It does measure the real `NSTextView` caret cell, the clip-view origin, an `AppModel` directory opened from a temporary folder, and the picker query field after `handlePicker`. The directory check also reads that text view's font, insets, and background, so the listing has to be monospaced and wider than the writing column. The measure check resizes one window to two widths and reads the writing inset, then does the same for the directory listing.
 
 One run covers every feature in `features/`. Read the feature file before treating a passing log as proof of that feature. A log that contains `FAIL` is a failure even if you only cared about one feature.
 
@@ -58,7 +60,7 @@ Scripts/verify-quill --bin "$bin"
 
 The proof file is `artifacts/verify-quill/smoke.log` (stdout and stderr of that process). It must contain `quill smoke passed` and must not contain a line starting with `FAIL`.
 
-That log is the action and the result: each failing check names the measurement (caret size, line, cursor, viewport origin, document and clip height, directory listing). A green exit code without that line is not proof.
+That log is the action and the result: each failing check names the measurement (caret size, line, cursor, viewport origin, document and clip height, column inset, directory listing, picker query). A green exit code without that line is not proof.
 
 The smoke does not apply the directory rename to disk. The proof for rename is the confirmation sheet and a planned rename operation, as `features/directory.md` says. Do not claim a file on disk changed unless you observed that file.
 

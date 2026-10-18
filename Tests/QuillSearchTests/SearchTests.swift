@@ -95,6 +95,24 @@ final class IgnoreAndGrepTests: XCTestCase {
         XCTAssertEqual(hits[1].line, 4)
     }
 
+    func testNestedGitignoreSkipsIgnoredDirectories() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("quill-ignore-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("vendor"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("sub"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "vendor/\n".write(to: root.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+        try "*.tmp\n".write(to: root.appendingPathComponent("sub/.gitignore"), atomically: true, encoding: .utf8)
+        try "keep".write(to: root.appendingPathComponent("sub/keep.md"), atomically: true, encoding: .utf8)
+        try "temp".write(to: root.appendingPathComponent("sub/drop.tmp"), atomically: true, encoding: .utf8)
+        try "secret".write(to: root.appendingPathComponent("vendor/secret.md"), atomically: true, encoding: .utf8)
+
+        let ignore = IgnoreRules.load(from: root)
+        let names = Set(FileWalk.files(in: root, ignore: ignore).map(\.lastPathComponent))
+        XCTAssertTrue(names.contains("keep.md"))
+        XCTAssertFalse(names.contains("drop.tmp"))
+        XCTAssertFalse(names.contains("secret.md"))
+    }
+
     func testIgnoreNegationAndDoubleStar() {
         let rules = IgnoreRules(patterns: ["**/*.tmp", "*.md", "!keep.md", "secret/"])
         XCTAssertTrue(rules.ignores(relativePath: "nested/dir/file.tmp", isDirectory: false))

@@ -8,13 +8,14 @@ extension MarkdownStyler {
         limit: NSRange,
         focus: Bool,
         focusRange: Range<Int>,
-        spans: [TokenSpan]
+        spans: [TokenSpan],
+        tables: [TableBlock]
     ) {
         let length = storage.length
-        guard length > 0 else { return }
+        guard length > 0, !tables.isEmpty else { return }
         let advance = monoAdvance(theme.monoFont)
         let headerFont = theme.tableHeaderFont()
-        for block in MarkdownTables.blocks(in: storage.string) {
+        for block in tables {
             for row in block.rows {
                 let content = nsRange(row.range, length: length)
                 guard content.length > 0, NSIntersectionRange(content, limit).length > 0 else { continue }
