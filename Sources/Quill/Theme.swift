@@ -1,6 +1,21 @@
 import AppKit
 import QuillMarkdown
 
+/// One type scale and measure. Config defaults and `QuillTheme.current` both read this.
+enum QuillMetrics {
+    static let defaultFontSize: Double = 16
+    static let defaultColumn = 70
+    static let lineHeight: CGFloat = 1.5
+    static let headingScale: [CGFloat] = [1.5, 1.3, 1.15, 1.05, 1.0, 1.0]
+    static let monoScale: CGFloat = 0.85
+
+    /// Missing or out-of-range sizes fall back to the default. Accepted range is 10...32.
+    static func fontSize(_ raw: Double?) -> Double {
+        guard let raw, raw >= 10, raw <= 32 else { return defaultFontSize }
+        return raw
+    }
+}
+
 struct QuillTheme {
     var bodyFont: NSFont
     var monoFont: NSFont
@@ -11,60 +26,75 @@ struct QuillTheme {
     var codeColor: NSColor
     var linkColor: NSColor
     var dimColor: NSColor
+    var selectionColor: NSColor
     var columnWidth: CGFloat
     var lineHeight: CGFloat
 
     @MainActor
-    static func current(columnCharacters: Int = 76) -> QuillTheme {
+    static func current(
+        fontSize: Double = QuillMetrics.defaultFontSize,
+        columnCharacters: Int = QuillMetrics.defaultColumn
+    ) -> QuillTheme {
         let appearance = NSApp?.effectiveAppearance ?? NSAppearance.currentDrawing()
         let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let body = NSFont(name: "New York", size: 20)
-            ?? NSFont(name: "Iowan Old Style", size: 20)
-            ?? NSFont(name: "Palatino", size: 20)
-            ?? NSFont.systemFont(ofSize: 20)
-        let mono = NSFont.monospacedSystemFont(ofSize: 15, weight: .regular)
-        func heading(_ size: CGFloat, _ weight: NSFont.Weight) -> NSFont {
-            if let base = NSFont(name: body.fontName, size: size) {
-                return NSFontManager.shared.convert(base, toHaveTrait: .boldFontMask)
-            }
-            return NSFont.systemFont(ofSize: size, weight: weight)
+        let size = CGFloat(QuillMetrics.fontSize(fontSize))
+        let body = NSFont.systemFont(ofSize: size)
+        let mono = NSFont.monospacedSystemFont(ofSize: size * QuillMetrics.monoScale, weight: .regular)
+        let headings = QuillMetrics.headingScale.enumerated().map { index, scale in
+            let weight: NSFont.Weight = index < 2 ? .semibold : .medium
+            return NSFont.systemFont(ofSize: size * scale, weight: weight)
         }
-        let avg = body.maximumAdvancement.width * 0.52
+        let text = dark ? NSColor(calibratedWhite: 0.86, alpha: 1) : NSColor(calibratedWhite: 0.22, alpha: 1)
+        let sample = "abcdefghijklmnopqrstuvwxyz" as NSString
+        let average = sample.size(withAttributes: [.font: body]).width / 26
         return QuillTheme(
             bodyFont: body,
             monoFont: mono,
-            headingFonts: [
-                heading(32, .bold),
-                heading(26, .bold),
-                heading(22, .semibold),
-                heading(20, .semibold),
-                heading(20, .medium),
-                heading(20, .medium),
-            ],
-            textColor: dark ? NSColor(calibratedWhite: 0.92, alpha: 1) : NSColor(calibratedWhite: 0.14, alpha: 1),
+            headingFonts: headings,
+            textColor: text,
             backgroundColor: dark
-                ? NSColor(calibratedRed: 0.11, green: 0.105, blue: 0.10, alpha: 1)
-                : NSColor(calibratedRed: 0.985, green: 0.975, blue: 0.96, alpha: 1),
-            syntaxColor: dark ? NSColor(calibratedWhite: 0.45, alpha: 1) : NSColor(calibratedWhite: 0.62, alpha: 1),
-            codeColor: dark ? NSColor(calibratedRed: 0.75, green: 0.85, blue: 0.7, alpha: 1)
-                : NSColor(calibratedRed: 0.25, green: 0.4, blue: 0.3, alpha: 1),
-            linkColor: dark ? NSColor(calibratedRed: 0.65, green: 0.78, blue: 0.95, alpha: 1)
-                : NSColor(calibratedRed: 0.25, green: 0.4, blue: 0.65, alpha: 1),
-            dimColor: dark ? NSColor(calibratedWhite: 0.4, alpha: 1) : NSColor(calibratedWhite: 0.55, alpha: 1),
-            columnWidth: max(480, CGFloat(columnCharacters) * avg),
-            lineHeight: 1.65
+                ? NSColor(calibratedWhite: 0.11, alpha: 1)
+                : NSColor(calibratedWhite: 0.965, alpha: 1),
+            syntaxColor: dark ? NSColor(calibratedWhite: 0.42, alpha: 1) : NSColor(calibratedWhite: 0.58, alpha: 1),
+            codeColor: dark ? NSColor(calibratedWhite: 0.72, alpha: 1) : NSColor(calibratedWhite: 0.32, alpha: 1),
+            linkColor: dark
+                ? NSColor(calibratedRed: 0.62, green: 0.68, blue: 0.74, alpha: 1)
+                : NSColor(calibratedRed: 0.35, green: 0.42, blue: 0.48, alpha: 1),
+            dimColor: dark ? NSColor(calibratedWhite: 0.40, alpha: 1) : NSColor(calibratedWhite: 0.62, alpha: 1),
+            selectionColor: text.withAlphaComponent(0.10),
+            columnWidth: average * CGFloat(max(1, columnCharacters)),
+            lineHeight: QuillMetrics.lineHeight
         )
     }
 
     var bodyAttributes: [NSAttributedString.Key: Any] {
         let para = NSMutableParagraphStyle()
         para.lineHeightMultiple = lineHeight
-        para.paragraphSpacing = 2
+        para.paragraphSpacing = 0
         return [
             .font: bodyFont,
             .foregroundColor: textColor,
             .paragraphStyle: para,
         ]
+    }
+}
+
+/// Hidden title bar, no toolbar, window fill matches the editor.
+enum WindowChrome {
+    @MainActor
+    static func apply(theme: QuillTheme) {
+        NSApplication.shared.windows.forEach { apply(theme, to: $0) }
+    }
+
+    @MainActor
+    static func apply(_ theme: QuillTheme, to window: NSWindow) {
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.titlebarSeparatorStyle = .none
+        window.styleMask.insert(.fullSizeContentView)
+        window.toolbar = nil
+        window.backgroundColor = theme.backgroundColor
+        window.isMovableByWindowBackground = true
     }
 }
 

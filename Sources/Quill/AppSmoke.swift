@@ -15,6 +15,7 @@ enum AppSmoke {
         started = true
         _ = model
         var failures: [String] = []
+        checkDefaultType(failures: &failures)
         checkCaretAndScroll(failures: &failures)
         checkDirectory(failures: &failures)
         if failures.isEmpty {
@@ -30,6 +31,33 @@ enum AppSmoke {
     @MainActor
     private static func check(_ condition: Bool, _ message: String, failures: inout [String]) {
         if !condition { failures.append(message) }
+    }
+
+    @MainActor
+    private static func checkDefaultType(failures: inout [String]) {
+        let theme = QuillTheme.current()
+        let body = theme.bodyFont.pointSize
+        check(abs(body - QuillMetrics.defaultFontSize) < 0.2, "default body font \(body)", failures: &failures)
+        check(
+            theme.headingFonts.count == QuillMetrics.headingScale.count,
+            "heading scale count \(theme.headingFonts.count)",
+            failures: &failures
+        )
+        for (font, scale) in zip(theme.headingFonts, QuillMetrics.headingScale) {
+            let expected = CGFloat(QuillMetrics.defaultFontSize) * scale
+            check(
+                abs(font.pointSize - expected) < 0.6,
+                "heading scale \(font.pointSize) expected \(expected)",
+                failures: &failures
+            )
+        }
+        check(abs(theme.lineHeight - 1.5) < 0.01, "line height \(theme.lineHeight)", failures: &failures)
+        check(QuillConfig.default.fontSize == 16, "default body font config \(QuillConfig.default.fontSize)", failures: &failures)
+        check(QuillConfig.default.columnWidth == 70, "column default \(QuillConfig.default.columnWidth)", failures: &failures)
+        check(QuillMetrics.fontSize(nil) == 16, "default body font missing", failures: &failures)
+        check(QuillMetrics.fontSize(9) == 16, "default body font low", failures: &failures)
+        check(QuillMetrics.fontSize(33) == 16, "default body font high", failures: &failures)
+        check(QuillMetrics.fontSize(18) == 18, "font size 18", failures: &failures)
     }
 
     @MainActor

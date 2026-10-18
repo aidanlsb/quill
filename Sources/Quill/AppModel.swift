@@ -75,11 +75,14 @@ final class AppModel {
         appearanceObserver = NSApplication.shared.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                self.theme = QuillTheme.current(columnCharacters: self.config.columnWidth)
+                self.theme = QuillTheme.current(
+                    fontSize: self.config.fontSize,
+                    columnCharacters: self.config.columnWidth
+                )
                 self.themeIdentity += 1
             }
         }
-        theme = QuillTheme.current(columnCharacters: config.columnWidth)
+        theme = QuillTheme.current(fontSize: config.fontSize, columnCharacters: config.columnWidth)
     }
 
     var modeName: String { engine.mode.displayName }

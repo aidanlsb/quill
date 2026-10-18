@@ -9,6 +9,7 @@ struct QuillConfig: Equatable {
     var shellCommands: [String: String]
     var lsp: LSPSettings
     var columnWidth: Int
+    var fontSize: Double
     var shiftWidth: Int
 
     static let `default` = QuillConfig(
@@ -16,7 +17,8 @@ struct QuillConfig: Equatable {
         leaderMaps: ["sf": "findFiles", "sg": "liveGrep"],
         shellCommands: [:],
         lsp: LSPSettings(servers: []),
-        columnWidth: 76,
+        columnWidth: QuillMetrics.defaultColumn,
+        fontSize: QuillMetrics.defaultFontSize,
         shiftWidth: 2
     )
 
@@ -52,6 +54,7 @@ struct QuillConfig: Equatable {
             let shells = try c.decodeIfPresent([String: String].self, forKey: .shellCommands) ?? [:]
             let lsp = try c.decodeIfPresent(LSPSettings.self, forKey: .lsp) ?? QuillConfig.default.lsp
             let column = try c.decodeIfPresent(Int.self, forKey: .columnWidth) ?? QuillConfig.default.columnWidth
+            let fontSize = QuillMetrics.fontSize(try c.decodeIfPresent(Double.self, forKey: .fontSize))
             let shift = try c.decodeIfPresent(Int.self, forKey: .shiftWidth) ?? QuillConfig.default.shiftWidth
             config = QuillConfig(
                 leader: leader,
@@ -59,12 +62,13 @@ struct QuillConfig: Equatable {
                 shellCommands: shells,
                 lsp: lsp,
                 columnWidth: column,
+                fontSize: fontSize,
                 shiftWidth: shift
             )
         }
 
         enum CodingKeys: String, CodingKey {
-            case leader, leaderMaps, shellCommands, lsp, columnWidth, shiftWidth
+            case leader, leaderMaps, shellCommands, lsp, columnWidth, fontSize, shiftWidth
         }
     }
 

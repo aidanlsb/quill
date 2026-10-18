@@ -18,11 +18,15 @@ struct ContentView: View {
                 VStack {
                     Spacer()
                     HStack {
-                        CompletionList(names: model.completions) { model.applyCompletion($0) }
+                        CompletionList(
+                            names: model.completions,
+                            text: Color(model.theme.textColor),
+                            background: Color(model.theme.backgroundColor)
+                        ) { model.applyCompletion($0) }
                         Spacer()
                     }
-                    .padding(.leading, 48)
-                    .padding(.bottom, 56)
+                    .padding(.leading, 72)
+                    .padding(.bottom, 72)
                 }
             }
         }
@@ -47,7 +51,6 @@ struct ContentView: View {
                 onCancel: model.cancelNavigation
             )
         }
-        .navigationTitle(model.title + (model.modified ? " —" : ""))
     }
 }
 
@@ -55,75 +58,46 @@ struct StatusBar: View {
     var model: AppModel
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 8) {
             Text(model.engine.mode.displayName)
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 2)
-                .background(modeColor.opacity(0.2))
-                .clipShape(RoundedRectangle(cornerRadius: 4))
             Text(model.title)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
             if model.modified {
-                Text("modified")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.orange)
+                Text("•")
+            }
+            if !model.message.isEmpty {
+                Text(model.message)
+                    .lineLimit(1)
             }
             Spacer()
-            if let hover = model.hoverText, !hover.isEmpty {
-                Text(hover.replacingOccurrences(of: "\n", with: " · "))
-                    .font(.system(size: 11))
-                    .lineLimit(1)
-                    .foregroundStyle(.secondary)
-            }
-            Text(model.message)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            Text("L\(lineNumber)")
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(.tertiary)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 6)
-        .background(.bar)
-    }
-
-    var modeColor: Color {
-        switch model.engine.mode {
-        case .insert: return .green
-        case .visual, .visualLine: return .purple
-        default: return .blue
-        }
-    }
-
-    var lineNumber: Int {
-        model.engine.buffer.lineIndex(containing: model.engine.cursor) + 1
+        .font(.system(size: 11, design: .monospaced))
+        .foregroundStyle(Color(model.theme.dimColor))
+        .padding(.horizontal, 28)
+        .padding(.vertical, 8)
+        .background(Color(model.theme.backgroundColor))
     }
 }
 
 struct CompletionList: View {
     var names: [String]
+    var text: Color
+    var background: Color
     var choose: (String) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Wikilinks")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(6)
             ForEach(names, id: \.self) { name in
                 Button(name) { choose(name) }
                     .buttonStyle(.plain)
-                    .padding(.horizontal, 8)
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundStyle(text)
+                    .padding(.horizontal, 12)
                     .padding(.vertical, 4)
             }
         }
-        .frame(minWidth: 180)
-        .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .shadow(radius: 8)
+        .padding(.vertical, 4)
+        .frame(minWidth: 180, alignment: .leading)
+        .background(background)
     }
 }
 
@@ -176,7 +150,6 @@ struct ConfirmSheet: View {
                     .keyboardShortcut(.cancelAction)
                 Button("Apply") { onConfirm() }
                     .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.borderedProminent)
             }
         }
         .padding(20)
@@ -188,84 +161,65 @@ struct PickerPanel: View {
     var model: AppModel
 
     var body: some View {
-        ZStack {
-            Color.black.opacity(0.28)
-                .ignoresSafeArea()
-                .onTapGesture {
-                    model.picker = nil
-                    model.pickerKind = nil
-                }
-            VStack(spacing: 0) {
-                if let picker = model.picker {
-                    HStack(alignment: .firstTextBaseline, spacing: 10) {
-                        Text(picker.mode == .insert ? "INSERT" : "NORMAL")
-                            .font(.system(size: 10, weight: .bold, design: .monospaced))
-                            .foregroundStyle(picker.mode == .insert ? .green : .blue)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background((picker.mode == .insert ? Color.green : Color.blue).opacity(0.18))
-                            .clipShape(RoundedRectangle(cornerRadius: 4))
-                        Text("> " + picker.promptDisplay)
-                            .font(.system(size: 16, design: .monospaced))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        Text(picker.status)
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(12)
-                    Text(picker.mode == .insert
-                         ? "Type to filter · Ctrl-n / Ctrl-p · Enter opens · Esc → normal"
-                         : "j/k move · gg/G top/bottom · Enter opens · i/a insert · Esc or q closes")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 16) {
+            if let picker = model.picker {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text("> " + picker.promptDisplay)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 12)
-                        .padding(.bottom, 8)
-                    Divider()
-                    HStack(alignment: .top, spacing: 0) {
-                        ScrollViewReader { proxy in
-                            ScrollView {
-                                LazyVStack(alignment: .leading, spacing: 0) {
-                                    ForEach(Array(picker.items.enumerated()), id: \.offset) { index, item in
-                                        HStack {
-                                            Text(item.title)
-                                                .font(.system(size: 13, design: .monospaced))
-                                            Spacer()
-                                            Text(item.subtitle)
-                                                .font(.system(size: 11))
-                                                .foregroundStyle(.secondary)
-                                                .lineLimit(1)
-                                        }
-                                        .padding(.horizontal, 12)
-                                        .padding(.vertical, 5)
-                                        .background(index == picker.selectedIndex ? Color.accentColor.opacity(0.2) : .clear)
-                                        .id(index)
+                    Text(picker.status)
+                }
+                .font(.system(size: 13, design: .monospaced))
+                .foregroundStyle(Color(model.theme.dimColor))
+                .padding(.horizontal, 72)
+                .padding(.top, 64)
+
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(picker.items.enumerated()), id: \.offset) { index, item in
+                                HStack(alignment: .firstTextBaseline, spacing: 16) {
+                                    Text(item.title)
+                                        .font(.system(size: 15, design: .monospaced))
+                                        .foregroundStyle(Color(model.theme.textColor))
+                                    if !item.subtitle.isEmpty {
+                                        Text(item.subtitle)
+                                            .font(.system(size: 12, design: .monospaced))
+                                            .foregroundStyle(Color(model.theme.dimColor))
+                                            .lineLimit(1)
                                     }
+                                    Spacer(minLength: 0)
                                 }
-                            }
-                            .onChange(of: picker.selectedIndex) { _, idx in
-                                proxy.scrollTo(idx, anchor: .center)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 4)
+                                .background(
+                                    index == picker.selectedIndex
+                                        ? Color(model.theme.textColor).opacity(0.08)
+                                        : Color.clear
+                                )
+                                .id(index)
                             }
                         }
-                        Divider()
-                        ScrollView {
-                            Text(picker.selected?.preview ?? "")
-                                .font(.system(size: 12, design: .monospaced))
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(12)
-                                .textSelection(.enabled)
-                        }
-                        .frame(minWidth: 240)
+                        .padding(.horizontal, 56)
+                    }
+                    .onChange(of: picker.selectedIndex) { _, idx in
+                        proxy.scrollTo(idx, anchor: .center)
                     }
                     .id(model.pickerTick)
                 }
+
+                if let preview = picker.selected?.preview, !preview.isEmpty {
+                    Text(preview)
+                        .font(.system(size: 13, design: .monospaced))
+                        .foregroundStyle(Color(model.theme.dimColor))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 72)
+                        .textSelection(.enabled)
+                }
             }
-            .frame(minWidth: 640, minHeight: 420)
-            .background(.regularMaterial)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .shadow(radius: 24)
-            .padding(48)
         }
+        .padding(.bottom, 48)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color(model.theme.backgroundColor).ignoresSafeArea())
         .background(PickerKeyCatcher(model: model))
     }
 }

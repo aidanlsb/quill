@@ -16,6 +16,7 @@ struct QuillApp: App {
                     NSApplication.shared.setActivationPolicy(.regular)
                     model.consumeLaunchArguments(Array(CommandLine.arguments.dropFirst()))
                     NSApplication.shared.windows.forEach { $0.delegate = appDelegate }
+                    WindowChrome.apply(theme: model.theme)
                     AppSmoke.runIfRequested(model: model)
                 }
                 .onOpenURL { url in
@@ -23,6 +24,7 @@ struct QuillApp: App {
                 }
         }
         .defaultSize(width: 960, height: 760)
+        .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New") { model.newUntitled() }

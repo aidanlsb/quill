@@ -55,8 +55,8 @@ The `quill` script resolves `/Applications/Quill.app` (or a local `dist/Quill.ap
 
 ## Writing feel
 
-- Proportional body (New York / Iowan / Palatino) with generous line height
-- Centered ~76-character column
+- System body at 16pt (config `fontSize`, 10–32) with 1.5 line height
+- Centered ~70-character column (`columnWidth`)
 - Live markdown styling in the buffer (headings, emphasis, code, lists, checkboxes, `[[wikilinks]]`, dimmed syntax) without rewriting the file
 - Light and dark follow the system
 - Focus mode: **⌃⌘F** (hides the status bar, larger margins)
@@ -145,7 +145,8 @@ Example `~/.config/quill/config.json` (also under `examples/config.json`):
   "leader": " ",
   "leaderMaps": { "sf": "findFiles", "sg": "liveGrep" },
   "shellCommands": { "d": "rvn daily" },
-  "columnWidth": 76,
+  "columnWidth": 70,
+  "fontSize": 16,
   "shiftWidth": 2,
   "lsp": {
     "servers": [
