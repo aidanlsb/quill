@@ -268,24 +268,46 @@ public struct MarkdownTokenizer: Equatable, Sendable {
                 isBlank: line.isBlank
             )
         }
-        let newCount = newLines.count
-        var rebuilt: [LineSplit.Line] = []
-        rebuilt.reserveCapacity(lines.count - (last - first + 1) + newCount)
-        rebuilt.append(contentsOf: lines[..<first])
-        rebuilt.append(contentsOf: newLines)
-        if last + 1 < lines.count {
-            for index in (last + 1)..<lines.count {
-                var line = lines[index]
-                line.start += delta
-                line.end += delta
-                rebuilt.append(line)
+        let oldSpan = last - first + 1
+        if newLines.count == oldSpan {
+            // Mutate the suffix in place. Rebuilding the line array copied every
+            // later line's string on a keystroke at the top of the file.
+            for offset in 0..<newLines.count {
+                lines[first + offset] = newLines[offset]
+                if first + offset < lineStarts.count {
+                    lineStarts[first + offset] = newLines[offset].start
+                }
             }
+            if delta != 0 {
+                var index = last + 1
+                while index < lines.count {
+                    lines[index].start += delta
+                    lines[index].end += delta
+                    if index < lineStarts.count {
+                        lineStarts[index] += delta
+                    }
+                    index += 1
+                }
+            }
+        } else {
+            var rebuilt: [LineSplit.Line] = []
+            rebuilt.reserveCapacity(lines.count - oldSpan + newLines.count)
+            rebuilt.append(contentsOf: lines[..<first])
+            rebuilt.append(contentsOf: newLines)
+            if last + 1 < lines.count {
+                for index in (last + 1)..<lines.count {
+                    var line = lines[index]
+                    line.start += delta
+                    line.end += delta
+                    rebuilt.append(line)
+                }
+            }
+            lines = rebuilt
+            lineStarts = lines.map(\.start)
         }
-        lines = rebuilt
-        lineStarts = lines.map(\.start)
         sourceValid = false
 
-        let replacedEnd = first + newCount
+        let replacedEnd = first + newLines.count
         var scan = first
         var entering = first < states.count ? states[first] : BlockState()
         var produced: [TokenSpan] = []
@@ -360,6 +382,33 @@ public struct MarkdownTokenizer: Equatable, Sendable {
         while end < lines.count, !lines[end].isBlank { end += 1 }
         let upper = end < lines.count ? lines[end].start : (lines.last?.end ?? 0)
         return lines[index].start..<upper
+    }
+
+    /// UTF-16 span of the line containing `utf16`, including its newline.
+    public func lineContentSpan(containing utf16: Int) -> Range<Int> {
+        guard !lines.isEmpty, utf16Count > 0 else { return 0..<0 }
+        let probe = min(max(0, utf16), utf16Count - 1)
+        let index = LineSplit.lineIndex(containing: probe, starts: lineStarts)
+        return lineSpan(index..<(index + 1))
+    }
+
+    /// True when `after` is `before` with ranges shifted by an edit that did not
+    /// change tokens. AppKit already shifted those attribute runs.
+    public static func spansFollowEdit(
+        _ before: [TokenSpan],
+        _ after: [TokenSpan],
+        editAt: Int,
+        delta: Int
+    ) -> Bool {
+        guard before.count == after.count else { return false }
+        for (old, new) in zip(before, after) {
+            if old.token != new.token { return false }
+            if old.range.lowerBound < editAt && editAt < old.range.upperBound { return false }
+            let shift = old.range.lowerBound >= editAt ? delta : 0
+            let moved = (old.range.lowerBound + shift)..<(old.range.upperBound + shift)
+            if new.range != moved { return false }
+        }
+        return true
     }
 
     /// UTF-16 span of `changed` lines. The caller restyles that span; later lines

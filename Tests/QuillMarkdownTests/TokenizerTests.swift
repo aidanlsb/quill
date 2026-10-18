@@ -49,6 +49,23 @@ final class TokenizerTests: XCTestCase {
         XCTAssertEqual(lines.map(\.isBlank), bounds.map(\.isBlank))
     }
 
+    func testApplyAtStartMovesLaterLineSpan() {
+        let text = "aaaa\nbbbb\ncccc\n"
+        var doc = MarkdownTokenizer(text: text)
+        _ = doc.apply(start: 0, removedUTF16: 0, replacement: "Z")
+        XCTAssertEqual(doc.lineSpan(1..<2), 6..<11)
+        XCTAssertEqual(doc.utf16Count, text.utf16.count + 1)
+    }
+
+    func testSpansFollowEditOnlyWhenTokensAreUnchanged() {
+        let plain = TokenSpan(range: 4..<8, token: .codeSpan)
+        let shifted = TokenSpan(range: 5..<9, token: .codeSpan)
+        XCTAssertTrue(MarkdownTokenizer.spansFollowEdit([plain], [shifted], editAt: 0, delta: 1))
+        let grown = TokenSpan(range: 4..<9, token: .codeSpan)
+        XCTAssertFalse(MarkdownTokenizer.spansFollowEdit([plain], [grown], editAt: 6, delta: 1))
+        XCTAssertFalse(MarkdownTokenizer.spansFollowEdit([plain], [], editAt: 0, delta: 1))
+    }
+
     func testRepeatedApplyAtStartShiftsLaterSpans() {
         let text = (0..<40).map { "Line \($0) [[note]]\n" }.joined()
         var doc = MarkdownTokenizer(text: text)

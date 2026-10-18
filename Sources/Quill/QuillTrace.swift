@@ -50,3 +50,30 @@ enum QuillTrace {
         }
     }
 }
+
+/// Averages named spans while `QUILL_PERF=1`. `AppPerf` prints them next to
+/// the headline measurements.
+@MainActor
+enum QuillPerfSplit {
+    static let enabled = ProcessInfo.processInfo.environment["QUILL_PERF"] == "1"
+    private static var totals: [String: Double] = [:]
+    private static var counts: [String: Int] = [:]
+
+    static func add(_ name: String, since began: UInt64) {
+        guard enabled else { return }
+        let ms = Double(DispatchTime.now().uptimeNanoseconds &- began) / 1_000_000
+        totals[name, default: 0] += ms
+        counts[name, default: 0] += 1
+    }
+
+    static func flush() {
+        guard enabled else { return }
+        for name in totals.keys.sorted() {
+            let count = max(counts[name] ?? 1, 1)
+            let avg = (totals[name] ?? 0) / Double(count)
+            QuillTrace.write("quill perf \(name)=\(QuillTrace.format(avg))\n")
+        }
+        totals.removeAll()
+        counts.removeAll()
+    }
+}

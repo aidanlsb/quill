@@ -373,6 +373,9 @@ final class VimTextView: NSTextView {
         font = directory ? theme.directoryFont : theme.bodyFont
         textColor = theme.textColor
         if !directory {
+            typingAttributes = theme.bodyAttributes
+        }
+        if !directory {
             directoryGhostHeight = 0
             directoryHeaderText = ""
         }
@@ -401,10 +404,14 @@ final class VimTextView: NSTextView {
         let text = engine.text
         let replaced = string != text
         if replaced {
+            let began = DispatchTime.now().uptimeNanoseconds
             string = text
+            QuillPerfSplit.add("syncStringMs", since: began)
+            let tokenBegan = DispatchTime.now().uptimeNanoseconds
             let through = viewportLastLine()
             tokenizer = MarkdownTokenizer(text: text, scanThroughLine: through)
             styledCoverage = 0..<0
+            QuillPerfSplit.add("syncTokenMs", since: tokenBegan)
         }
         setSelectedRange(NSRange(location: clampUTF16(engine.cursor), length: 0))
         if let sel = engine.visualSelection, engine.mode.isVisual {
@@ -413,12 +420,18 @@ final class VimTextView: NSTextView {
             setSelectedRange(NSRange(location: loc, length: max(0, end - loc)))
         }
         if replaced {
+            let began = DispatchTime.now().uptimeNanoseconds
             queueRestyle(dirty: nil)
+            QuillPerfSplit.add("syncStyleMs", since: began)
         } else if focusMode {
             queueRestyle(dirty: engine.cursor)
         }
+        let frameBegan = DispatchTime.now().uptimeNanoseconds
         noteContentSizeChanged()
+        QuillPerfSplit.add("syncFrameMs", since: frameBegan)
+        let revealBegan = DispatchTime.now().uptimeNanoseconds
         revealCaret()
+        QuillPerfSplit.add("syncRevealMs", since: revealBegan)
     }
 
     func applyResult(_ result: EngineResult) {
@@ -429,6 +442,7 @@ final class VimTextView: NSTextView {
                 tokenizer = MarkdownTokenizer(text: string)
             } else if let storage = textStorage {
                 var ok = true
+                let replaceBegan = DispatchTime.now().uptimeNanoseconds
                 for edit in result.edits {
                     let nsRange = nsRange(edit.range)
                     if nsRange.location != NSNotFound, NSMaxRange(nsRange) <= storage.length {
@@ -438,6 +452,7 @@ final class VimTextView: NSTextView {
                         break
                     }
                 }
+                QuillPerfSplit.add("keyReplaceMs", since: replaceBegan)
                 if ok {
                     applied = result.edits
                 } else {
@@ -454,12 +469,16 @@ final class VimTextView: NSTextView {
             setSelectedRange(NSRange(location: loc, length: max(0, end - loc)))
         }
         if result.didChangeText {
+            let began = DispatchTime.now().uptimeNanoseconds
             queueRestyle(dirty: dirty, edits: applied)
+            QuillPerfSplit.add("keyRestyleMs", since: began)
         } else if focusMode {
             queueRestyle(dirty: engine.cursor)
         }
+        let caretBegan = DispatchTime.now().uptimeNanoseconds
         noteContentSizeChanged()
         revealCaret()
+        QuillPerfSplit.add("keyCaretMs", since: caretBegan)
         if isDirectoryBuffer { needsDisplay = true }
         vimDelegate?.vimTextView(self, didHandle: result)
     }
@@ -650,26 +669,45 @@ final class VimTextView: NSTextView {
         // Attribute edits used to hop to the next turn, so the key handler
         // returned before styling. Doing it here puts that cost on the keystroke.
         var styleLimit: Range<Int>? = viewport
+        var plainShift = false
         if viewport == nil, !edits.isEmpty, tokenizer.acceptsEdits {
+            plainShift = !focusMode
             var covered = 0..<0
             for edit in edits {
+                let delta = edit.replacement.utf16.count - edit.range.count
+                let probe = min(edit.range.lowerBound, max(0, tokenizer.utf16Count - 1))
+                let beforeRange = tokenizer.lineContentSpan(containing: probe)
+                let beforeSpans = beforeRange.isEmpty ? [] : tokenizer.spans(overlapping: beforeRange)
+                let styled = !beforeRange.isEmpty && coverageContains(beforeRange)
                 let changed = tokenizer.apply(
                     start: edit.range.lowerBound,
                     removedUTF16: edit.range.count,
                     replacement: edit.replacement
                 )
+                let afterRange = tokenizer.lineSpan(changed)
+                let afterSpans = afterRange.isEmpty ? [] : tokenizer.spans(overlapping: afterRange)
+                if !styled || !MarkdownTokenizer.spansFollowEdit(
+                    beforeSpans,
+                    afterSpans,
+                    editAt: edit.range.lowerBound,
+                    delta: delta
+                ) {
+                    plainShift = false
+                }
                 if covered.isEmpty {
                     covered = changed
                 } else {
                     covered = min(covered.lowerBound, changed.lowerBound)..<max(covered.upperBound, changed.upperBound)
                 }
             }
-            let span = tokenizer.lineSpan(covered)
-            if focusMode {
-                let focus = tokenizer.paragraphRange(containing: engine.cursor)
-                styleLimit = min(span.lowerBound, focus.lowerBound)..<max(span.upperBound, focus.upperBound)
-            } else {
-                styleLimit = span
+            if !plainShift {
+                let span = tokenizer.lineSpan(covered)
+                if focusMode {
+                    let focus = tokenizer.paragraphRange(containing: engine.cursor)
+                    styleLimit = min(span.lowerBound, focus.lowerBound)..<max(span.upperBound, focus.upperBound)
+                } else {
+                    styleLimit = span
+                }
             }
         } else if viewport == nil, tokenizer.acceptsEdits, storage.length == tokenizer.utf16Count {
             if let dirty {
@@ -680,6 +718,12 @@ final class VimTextView: NSTextView {
             if let dirty {
                 styleLimit = tokenizer.paragraphRange(containing: dirty)
             }
+        }
+        if plainShift {
+            // The edit did not change tokens. AppKit shifted the runs already
+            // on this line; painting them again invalidates layout past the caret.
+            shiftCoverage(for: edits)
+            return
         }
         if styleLimit == nil {
             // A nil limit used to paint every line. Opening a 10k-line note

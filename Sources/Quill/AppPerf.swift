@@ -124,6 +124,7 @@ enum AppPerf {
             }
         }
         emit("keystrokeMs", typing / 20.0)
+        QuillPerfSplit.flush()
         view.engine.mode = .normal
         let motion = millis {
             for _ in 0..<40 {
