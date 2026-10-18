@@ -308,9 +308,6 @@ final class VimTextView: NSTextView {
         isVerticallyResizable = true
         isHorizontallyResizable = false
         autoresizingMask = [.width]
-        // TextKit 1's compatibility layout manager lays out from the start of
-        // the buffer unless this is set. TextKit 2 leaves `layoutManager` nil.
-        layoutManager?.allowsNonContiguousLayout = true
     }
 
     func applyTheme(_ theme: QuillTheme, focus: Bool) {
