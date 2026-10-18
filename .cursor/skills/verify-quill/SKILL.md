@@ -29,6 +29,8 @@ Each invocation is its own process. The directory fixture uses a new temporary d
 
 There is no server to keep. Teardown is the process exiting. The app watchdog exits 2 before this script's 30 second kill, so `smoke.log` contains that diagnostic. If the process is still alive after 30 seconds, the script kills that pid and fails.
 
+After a passing smoke, the script runs a second process with `QUILL_PERF=1`. That process prints `quill perf <name>=<milliseconds>` lines and `quill perf done`, then exits. The log is `artifacts/verify-quill/perf.log`. It is a measurement, not a behavior pass: a missing `quill perf done` fails the script. `features/perf.md` names each number.
+
 ## Doctor
 
 ```bash

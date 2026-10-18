@@ -29,6 +29,74 @@ final class TokenizerTests: XCTestCase {
         XCTAssertEqual(MarkdownThemeMap.style(for: .heading(2)), .heading(2))
     }
 
+    func testEditShiftsLaterSpans() {
+        let text = "hello\n# Title\n"
+        var doc = MarkdownTokenizer(text: text)
+        let edited = "Xhello\n# Title\n"
+        let changed = doc.replace(text: edited, dirtyUTF16: 0)
+        XCTAssertLessThan(changed.upperBound, 2)
+        let heading = doc.spans.first { $0.token == .heading(1) }
+        XCTAssertEqual(heading?.range.lowerBound, 7)
+        XCTAssertTrue(doc.spans.contains { $0.token == .heading(1) })
+    }
+
+    func testBoundsMatchLineSplit() {
+        let text = "a\n\n# Title\n"
+        let lines = LineSplit.lines(in: text)
+        let bounds = LineSplit.bounds(in: text)
+        XCTAssertEqual(lines.map(\.start), bounds.map(\.start))
+        XCTAssertEqual(lines.map(\.end), bounds.map(\.end))
+        XCTAssertEqual(lines.map(\.isBlank), bounds.map(\.isBlank))
+    }
+
+    func testApplyEditKeepsEarlierSpans() {
+        let text = "hello\n# Title\n"
+        var doc = MarkdownTokenizer(text: text)
+        let changed = doc.apply(start: 0, removedUTF16: 0, replacement: "X")
+        XCTAssertEqual(changed, 0..<1)
+        let heading = doc.spans.first { $0.token == .heading(1) }
+        XCTAssertEqual(heading?.range.lowerBound, 7)
+        XCTAssertEqual(doc.utf16Count, text.utf16.count + 1)
+    }
+
+    func testApplyDeletesNewlineAndDropsHeading() {
+        var doc = MarkdownTokenizer(text: "ab\n# T\n")
+        let changed = doc.apply(start: 2, removedUTF16: 1, replacement: "")
+        XCTAssertEqual(changed.count, 1)
+        XCTAssertFalse(doc.spans.contains { $0.token == .heading(1) })
+        XCTAssertEqual(doc.utf16Count, 6)
+    }
+
+    func testApplyInsertsNewline() {
+        var doc = MarkdownTokenizer(text: "# ab\n")
+        let changed = doc.apply(start: 2, removedUTF16: 0, replacement: "\n")
+        XCTAssertEqual(doc.utf16Count, 6)
+        XCTAssertTrue(doc.spans.contains { $0.token == .heading(1) })
+        XCTAssertLessThan(changed.upperBound, 3)
+    }
+
+    func testIncrementalEditIsCheaperThanRetokenizing() {
+        let text = (0..<4_000).map { "Line \($0) with [[note]] and `code` and **bold**.\n" }.joined()
+        let full = ContinuousClock().now
+        _ = MarkdownTokenizer(text: text)
+        let fullMs = milliseconds(since: full)
+        var doc = MarkdownTokenizer(text: text)
+        let kept = doc.spans.first { $0.token == .wikilink }?.range
+        let edit = ContinuousClock().now
+        let changed = doc.apply(start: text.utf16.count - 2, removedUTF16: 1, replacement: "!")
+        let editMs = milliseconds(since: edit)
+        print(String(format: "quill bench styleFullMs=%.2f styleEditMs=%.2f changedLines=%d", fullMs, editMs, changed.count))
+        XCTAssertEqual(changed.count, 1)
+        XCTAssertEqual(doc.spans.first { $0.token == .wikilink }?.range, kept)
+        XCTAssertEqual(doc.utf16Count, text.utf16.count)
+    }
+
+    private func milliseconds(since start: ContinuousClock.Instant) -> Double {
+        let duration = start.duration(to: .now)
+        return Double(duration.components.seconds) * 1000
+            + Double(duration.components.attoseconds) / 1_000_000_000_000_000
+    }
+
     func testFenceStateConverges() {
         let text = "# A\n\n```\ncode\n```\n\nafter\n"
         var doc = MarkdownTokenizer(text: text)

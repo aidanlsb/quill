@@ -69,6 +69,8 @@ if [[ "${1:-}" == "--wait" ]]; then
   shift
 fi
 
+# `open -a` activates Quill. Do not pass `-g`; that would leave the window behind.
+# The app also orders its window front when a quill:// URL arrives.
 open_app() {
   if [[ "$APP" == "Quill" ]]; then
     open ${wait_flag[@]+"${wait_flag[@]}"} -a Quill "$@"
