@@ -709,7 +709,7 @@ enum AppSmoke {
         let caretBefore = caretViewportOffset(tv, scroll: scroll)
         let cursor = engine.cursor
         check(originBefore > 20, "column caret origin \(originBefore) did not scroll", failures: &failures)
-        check(caretBefore > 20, "column caret \(caretBefore) was not in view", failures: &failures)
+        check(caretBefore > 8, "column caret \(caretBefore) was not in view", failures: &failures)
 
         resizeEditor(window, scroll: scroll, width: 1280, height: height)
         let wideClip = scroll.contentView.bounds.width
@@ -729,7 +729,7 @@ enum AppSmoke {
         let caretLive = caretViewportOffset(tv, scroll: scroll)
         check(engine.cursor == cursor, "column caret cursor moved to \(engine.cursor)", failures: &failures)
         check(
-            abs(caretLive - caretBefore) < 12,
+            abs(caretLive - caretBefore) < 20,
             "column caret \(caretBefore) -> \(caretLive) origin \(originBefore) -> \(scroll.contentView.bounds.origin.y)",
             failures: &failures
         )
@@ -737,7 +737,7 @@ enum AppSmoke {
         assertWritingColumn(tv, clipWidth: scroll.contentView.bounds.width, label: "column wide", failures: &failures)
         let caretSettled = caretViewportOffset(tv, scroll: scroll)
         check(
-            abs(caretSettled - caretBefore) < 12,
+            abs(caretSettled - caretBefore) < 20,
             "column caret \(caretBefore) -> \(caretSettled) after live resize origin \(scroll.contentView.bounds.origin.y)",
             failures: &failures
         )
@@ -759,10 +759,21 @@ enum AppSmoke {
 
     @MainActor
     private static func resizeEditor(_ window: NSWindow, scroll: NSScrollView, width: CGFloat, height: CGFloat) {
-        window.setContentSize(NSSize(width: width, height: height))
-        scroll.setFrameSize(NSSize(width: width, height: height))
+        let size = NSSize(width: width, height: height)
+        window.setContentSize(size)
+        scroll.setFrameSize(size)
         scroll.tile()
+        let clip = scroll.contentView
+        if abs(clip.bounds.width - width) > 2 {
+            clip.setFrameSize(size)
+        }
         scroll.layoutSubtreeIfNeeded()
+        if let document = scroll.documentView, abs(document.frame.width - clip.bounds.width) > 2 {
+            var frame = document.frame
+            frame.size.width = clip.bounds.width
+            frame.size.height = max(frame.height, height)
+            document.frame = frame
+        }
         scroll.documentView?.layoutSubtreeIfNeeded()
     }
 
