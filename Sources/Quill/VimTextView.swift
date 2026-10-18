@@ -1133,13 +1133,21 @@ final class VimTextView: NSTextView {
         noteContentSizeChanged()
         guard let scroll = enclosingScrollView else { return }
         let clip = scroll.contentView
-        var rect = caretLineRect() ?? caretCell(suggested: NSRect(x: 0, y: 0, width: 1, height: rowHeight()))
+        let row = rowHeight()
         let line = engine.buffer.lineIndex(containing: clampUTF16(engine.cursor))
-        let estimatedMinY = textContainerOrigin.y + CGFloat(line) * rowHeight()
-        // A fragment TextKit has not laid out comes back inside the viewport,
-        // so the clip never follows the cursor. Use the logical row instead.
-        if line > 1, rect.maxY < rowHeight() * 2, estimatedMinY > clip.bounds.height {
-            rect = NSRect(x: rect.minX, y: estimatedMinY, width: max(rect.width, 1), height: rowHeight())
+        let estimated = NSRect(
+            x: 0,
+            y: textContainerOrigin.y + CGFloat(line) * row,
+            width: 1,
+            height: row
+        )
+        // `textLayoutFragment(for:)` returns the last fragment already built.
+        // On a long note that is not the caret's line, so `G` and search would
+        // scroll to the middle of the file. Use the buffer row instead.
+        let measured = caretLineRect()
+        var rect = measured ?? estimated
+        if let measured, abs(measured.midY - estimated.midY) > row * 4 {
+            rect = estimated
         }
         let visible = clip.bounds
         var origin = visible.origin
@@ -1266,7 +1274,10 @@ final class VimTextView: NSTextView {
         }
         guard let location, let fragment = lm.textLayoutFragment(for: location) else { return nil }
         let fragmentStart = lm.offset(from: doc, to: fragment.rangeInElement.location)
-        if fragmentStart == NSNotFound { return nil }
+        let fragmentEnd = lm.offset(from: doc, to: fragment.rangeInElement.endLocation)
+        if !fragmentCovers(clamped, start: fragmentStart, end: fragmentEnd, documentLength: length) {
+            return nil
+        }
         let local = clamped - fragmentStart
         let lines = fragment.textLineFragments
         let container = textContainerOrigin
@@ -1322,6 +1333,14 @@ final class VimTextView: NSTextView {
         )
     }
 
+    /// `textLayoutFragment(for:)` can hand back an earlier fragment. That fragment
+    /// does not contain `index`.
+    private func fragmentCovers(_ index: Int, start: Int, end: Int, documentLength: Int) -> Bool {
+        if start == NSNotFound || end == NSNotFound || start > end { return false }
+        if index >= start && index < end { return true }
+        return index >= documentLength && end >= documentLength && start <= documentLength
+    }
+
     private func caretLineRect() -> NSRect? {
         guard let lm = textLayoutManager else { return nil }
         let index = clampUTF16(selectedRange().location)
@@ -1329,6 +1348,11 @@ final class VimTextView: NSTextView {
         guard let location = lm.location(doc, offsetBy: index),
               let fragment = lm.textLayoutFragment(for: location) else { return nil }
         let fragmentStart = lm.offset(from: doc, to: fragment.rangeInElement.location)
+        let fragmentEnd = lm.offset(from: doc, to: fragment.rangeInElement.endLocation)
+        let length = (string as NSString).length
+        guard fragmentCovers(index, start: fragmentStart, end: fragmentEnd, documentLength: length) else {
+            return nil
+        }
         let local = index - fragmentStart
         guard let line = fragment.textLineFragments.first(where: { line in
             let span = line.characterRange

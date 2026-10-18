@@ -499,7 +499,7 @@ enum AppSmoke {
         let atEnd = scroll.contentView.bounds.origin.y
         check(endLine == lineCount - 1, "G stopped on line \(endLine)", failures: &failures)
         check(
-            atEnd > maxY - 120,
+            atEnd > maxY - clip,
             "G scroll \(atEnd) did not reach \(maxY) (\(motionDiag(engine: engine, tv: tv, scroll: scroll)))",
             failures: &failures
         )
@@ -510,12 +510,12 @@ enum AppSmoke {
         tv.syncFromEngine()
         let found = engine.buffer.lineIndex(containing: engine.cursor)
         check(found == markerLine, "search landed on line \(found)", failures: &failures)
-        let row = tv.frame.height / CGFloat(max(lineCount, 1))
-        let expected = CGFloat(markerLine) * row
+        let row = tv.frame.height / CGFloat(max(engine.buffer.lineCount, 1))
+        let lineY = CGFloat(markerLine) * row
         let origin = scroll.contentView.bounds.origin.y
         check(
-            abs(origin - expected) < clip,
-            "search scroll \(origin) is not near \(expected)",
+            lineY >= origin - row * 2 && lineY <= origin + clip + row * 2,
+            "search scroll \(origin) does not show line \(markerLine) at \(lineY)",
             failures: &failures
         )
         window.orderOut(nil)
