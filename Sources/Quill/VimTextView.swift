@@ -1133,21 +1133,22 @@ final class VimTextView: NSTextView {
         noteContentSizeChanged()
         guard let scroll = enclosingScrollView else { return }
         let clip = scroll.contentView
-        let row = rowHeight()
-        let line = engine.buffer.lineIndex(containing: clampUTF16(engine.cursor))
-        let estimated = NSRect(
-            x: 0,
-            y: textContainerOrigin.y + CGFloat(line) * row,
-            width: 1,
-            height: row
-        )
-        // `textLayoutFragment(for:)` returns the last fragment already built.
-        // On a long note that is not the caret's line, so `G` and search would
-        // scroll to the middle of the file. Use the buffer row instead.
-        let measured = caretLineRect()
-        var rect = measured ?? estimated
-        if let measured, abs(measured.midY - estimated.midY) > row * 4 {
-            rect = estimated
+        // A fragment that covers the caret is the real line box, including wrap.
+        // Replacing it with `line * rowHeight` left wrapped notes unscrolled.
+        // `textLayoutFragment(for:)` otherwise returns the last fragment already
+        // built, which on a long note is not the caret. Use the buffer row then.
+        let rect: NSRect
+        if let measured = caretLineRect() {
+            rect = measured
+        } else {
+            let row = rowHeight()
+            let line = engine.buffer.lineIndex(containing: clampUTF16(engine.cursor))
+            rect = NSRect(
+                x: 0,
+                y: textContainerOrigin.y + CGFloat(line) * row,
+                width: 1,
+                height: row
+            )
         }
         let visible = clip.bounds
         var origin = visible.origin
@@ -1354,10 +1355,12 @@ final class VimTextView: NSTextView {
             return nil
         }
         let local = index - fragmentStart
+        // `lines.last` is the last row TextKit has built, not the caret, when
+        // this paragraph is only partly laid out. Scrolling to it misses `G`.
         guard let line = fragment.textLineFragments.first(where: { line in
             let span = line.characterRange
             return local >= span.location && local < span.location + max(span.length, 1)
-        }) ?? fragment.textLineFragments.last else { return nil }
+        }) else { return nil }
         let container = textContainerOrigin
         let fragmentFrame = fragment.layoutFragmentFrame
         var rect = line.typographicBounds
