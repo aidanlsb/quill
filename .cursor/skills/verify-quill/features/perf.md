@@ -6,7 +6,7 @@
 
 - `launch` records milliseconds from process start to `applicationDidFinishLaunching`, and to the first key window when one appears.
 - `style` records a full tokenize of 10k markdown lines and one trailing-character `apply` on the cached lines of that same document.
-- `edit` records applying 20 insert keystrokes and 40 `j` motions on a real text view, plus one forced full TextKit layout of that document. Insert includes the synchronous restyle. `j` does not restyle.
+- `edit` records applying 20 insert keystrokes and 40 `j` motions on a real text view, plus one forced full TextKit layout of that document. An insert restyles the edited lines. Opening the buffer (`textSyncMs`) tokenizes and styles the visible lines, not every line. `j` does not restyle and does not lay out the whole document.
 - `picker` records ignore loading plus the file walk, and the mean of three query keystrokes over 400 names.
 - `grep` records one content search of that fixture.
 - `directory` records one directory snapshot.
@@ -32,5 +32,6 @@ Preconditions:
 
 - This host cannot launch AppKit. The macos job is the only place these numbers exist.
 - `layoutFullMs` is one walk of every TextKit fragment. `scrollMs` is one `j`. They are different operations; the point of printing both is that a motion used to pay the full walk.
+- `textSyncMs` is the visible-range style of a buffer that was just assigned. It is not a full-document restyle. `keystrokeMs` is one insert at the start of that same view.
 - `ignoreWalkAllMs` visits every file, which is what ignore loading used to do. `pickerOpenMs` is the load that skips ignored directories.
 - A five-second launch without `QUILL_PERF` does not produce this log.

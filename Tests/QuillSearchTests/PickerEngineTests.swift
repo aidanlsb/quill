@@ -79,15 +79,61 @@ final class PickerEngineTests: XCTestCase {
         XCTAssertEqual(p.selectedIndex, 0)
     }
 
-    func testInsertPromptShowsCaret() {
+    func testQueryStaysPlainText() {
         let p = sample()
-        XCTAssertEqual(p.promptDisplay, "▏")
+        XCTAssertEqual(p.query, "")
+        XCTAssertEqual(p.mode, .insert)
         _ = p.handle(.character("n"))
-        XCTAssertEqual(p.promptDisplay, "n▏")
+        XCTAssertEqual(p.query, "n")
+        XCTAssertEqual(p.queryCursor, 1)
+        XCTAssertFalse(p.query.contains("▏"))
         _ = p.handle(.escape)
-        XCTAssertEqual(p.promptDisplay, "n")
+        XCTAssertEqual(p.mode, .normal)
+        XCTAssertEqual(p.query, "n")
         _ = p.handle(.character("i"))
-        XCTAssertEqual(p.promptDisplay, "n▏")
+        XCTAssertEqual(p.mode, .insert)
+        XCTAssertEqual(p.query, "n")
+    }
+
+    func testReplacingSourceRefilters() {
+        let p = PickerEngine()
+        p.source = [PickerItem(title: "notes.md", payload: "notes.md")]
+        XCTAssertEqual(p.items.map(\.title), ["notes.md"])
+        _ = p.handle(.character("z"))
+        XCTAssertTrue(p.items.isEmpty)
+    }
+
+    func testHighlightRanges() {
+        XCTAssertEqual(
+            PickerHighlight.ranges(query: "no", candidate: "notes.md", style: .fuzzy),
+            [0..<2]
+        )
+        XCTAssertEqual(
+            PickerHighlight.ranges(query: "nm", candidate: "notes.md", style: .fuzzy),
+            [0..<1, 6..<7]
+        )
+        XCTAssertTrue(PickerHighlight.ranges(query: "zz", candidate: "notes.md", style: .fuzzy).isEmpty)
+        XCTAssertTrue(PickerHighlight.ranges(query: "", candidate: "notes.md", style: .fuzzy).isEmpty)
+        XCTAssertEqual(
+            PickerHighlight.ranges(query: "Alpha", candidate: "alpha notes", style: .literal),
+            [0..<5]
+        )
+        XCTAssertEqual(
+            PickerHighlight.ranges(query: "a", candidate: "alpha", style: .literal),
+            [0..<1, 4..<5]
+        )
+        let pairs = [("no", "notes.md"), ("nm", "notes.md"), ("md", "notes.md"), ("zz", "notes.md")]
+        for (query, candidate) in pairs {
+            let scored = Fuzzy.score(query: query, candidate: candidate) != nil
+            let ranges = PickerHighlight.ranges(query: query, candidate: candidate, style: .fuzzy)
+            let chars = Array(candidate.lowercased())
+            let matched = ranges.flatMap { Array(chars[$0]) }.map(String.init).joined()
+            if scored {
+                XCTAssertEqual(matched, query.lowercased(), query)
+            } else {
+                XCTAssertTrue(ranges.isEmpty, query)
+            }
+        }
     }
 
     func testEmptyConfirmIsNone() {

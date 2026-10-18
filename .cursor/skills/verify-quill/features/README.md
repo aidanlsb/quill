@@ -38,3 +38,4 @@ Each feature file has an H1, one paragraph, then four H2 sections: `Sub-features
 - [Directory buffer](directory.md) covers opening a folder, the mono listing layout, Enter, parent, and a rename that asks before writing.
 - [Theme](theme.md) covers light, dark, and system, including `:theme` and `<leader>tt`.
 - [Performance](perf.md) records launch, editing, and picker timings. It does not assert a speed limit.
+- [Picker](picker.md) covers the `<leader>sf` and `<leader>sg` prompt, caret, placeholder, and live filtering.

@@ -60,7 +60,8 @@ public enum MarkdownThemeMap {
 
 public struct MarkdownTokenizer: Equatable, Sendable {
     public private(set) var states: [BlockState]
-    public private(set) var spans: [TokenSpan]
+    /// Absolute ranges. Lines at or after `shiftLine` are stored without `shift` added.
+    private var storedSpans: [TokenSpan]
     private var source: String
     /// False after `apply`, which does not rewrite `source`. The next full
     /// `replace` rebuilds from the caller's string instead of diffing a stale one.
@@ -68,20 +69,49 @@ public struct MarkdownTokenizer: Equatable, Sendable {
     private var ready: Bool
     private var lines: [LineSplit.Line]
     private var lineStarts: [Int]
-    /// How many spans each line owns. Parallel to `lineStarts`.
+    /// How many spans each line owns. Parallel to the scanned prefix of `lineStarts`.
     private var spanCounts: [Int]
+    /// Stored ranges on this line and after are behind by `shift` UTF-16 units.
+    private var shiftLine: Int
+    private var shift: Int
 
-    public init(text: String) {
+    /// `scanThroughLine` tokenizes only that line and the ones above it.
+    /// The tail stays as line text until a later edit or `spans(overlapping:)` reaches it.
+    public init(text: String, scanThroughLine: Int? = nil) {
         states = []
-        spans = []
+        storedSpans = []
         source = ""
         sourceValid = false
         ready = false
         lines = []
         lineStarts = []
         spanCounts = []
-        _ = replace(text: text, dirtyUTF16: 0)
+        shiftLine = 0
+        shift = 0
+        if let scanThroughLine {
+            installLines(text)
+            if !lines.isEmpty {
+                ensureScanned(throughLine: scanThroughLine)
+            }
+        } else {
+            installFull(text)
+        }
     }
+
+    /// Spans with absolute UTF-16 ranges. Reading this does not scan an unscanned tail.
+    public var spans: [TokenSpan] {
+        guard shift != 0, shiftLine < spanCounts.count else { return storedSpans }
+        let start = spanIndex(ofLine: shiftLine)
+        guard start < storedSpans.count else { return storedSpans }
+        var copy = storedSpans
+        for index in start..<copy.count {
+            let range = copy[index].range
+            copy[index].range = (range.lowerBound + shift)..<(range.upperBound + shift)
+        }
+        return copy
+    }
+
+    public var scannedLineCount: Int { spanCounts.count }
 
     public var utf16Count: Int { lines.last?.end ?? 0 }
 
@@ -154,17 +184,20 @@ public struct MarkdownTokenizer: Equatable, Sendable {
             scan = nextNew
         }
 
+        materializeAll()
         let prefixSpans = spanCounts.prefix(first).reduce(0, +)
-        var mergedSpans = Array(spans.prefix(prefixSpans))
+        var mergedSpans = Array(storedSpans.prefix(prefixSpans))
         mergedSpans.append(contentsOf: produced)
         var mergedCounts = Array(spanCounts.prefix(first)) + producedCounts
         var mergedStates = Array(states.prefix(first)) + producedStates
         if let nextOld = convergedOld {
             let suffixSpanStart = spanCounts.prefix(nextOld).reduce(0, +)
             if delta == 0 {
-                mergedSpans.append(contentsOf: spans[suffixSpanStart...])
-            } else {
-                for span in spans[suffixSpanStart...] {
+                if suffixSpanStart < storedSpans.count {
+                    mergedSpans.append(contentsOf: storedSpans[suffixSpanStart...])
+                }
+            } else if suffixSpanStart < storedSpans.count {
+                for span in storedSpans[suffixSpanStart...] {
                     mergedSpans.append(TokenSpan(
                         range: (span.range.lowerBound + delta)..<(span.range.upperBound + delta),
                         token: span.token
@@ -181,7 +214,9 @@ public struct MarkdownTokenizer: Equatable, Sendable {
 
         source = text
         sourceValid = true
-        spans = mergedSpans
+        storedSpans = mergedSpans
+        shift = 0
+        shiftLine = 0
         spanCounts = mergedCounts
         states = mergedStates
         lines = LineSplit.lines(in: text)
@@ -211,6 +246,9 @@ public struct MarkdownTokenizer: Equatable, Sendable {
         // Deleting the newline joins the next line. That line has to be part of the splice.
         if removed > 0, last + 1 < lines.count, oldEnd == lines[last].end, oldEnd < oldLen {
             last += 1
+        }
+        if spanCounts.count <= last {
+            ensureScanned(throughLine: last)
         }
         let blockStart = lines[first].start
         var block = ""
@@ -272,24 +310,21 @@ public struct MarkdownTokenizer: Equatable, Sendable {
             scan = nextNew
         }
 
-        let prefixSpans = spanCounts.prefix(first).reduce(0, +)
-        var mergedSpans = Array(spans.prefix(prefixSpans))
+        let boundary = convergedOld ?? spanCounts.count
+        materialize(beforeLine: boundary)
+        if shift != 0, shiftLine > boundary {
+            materializeAll()
+        }
+        let carried = shift
+        let prefixSpans = spanIndex(ofLine: first)
+        var mergedSpans = Array(storedSpans.prefix(prefixSpans))
         mergedSpans.append(contentsOf: produced)
         var mergedCounts = Array(spanCounts.prefix(first)) + producedCounts
         var mergedStates = Array(states.prefix(first)) + producedStates
         if let nextOld = convergedOld {
-            let suffixSpanStart = spanCounts.prefix(nextOld).reduce(0, +)
-            if delta == 0 {
-                if suffixSpanStart < spans.count {
-                    mergedSpans.append(contentsOf: spans[suffixSpanStart...])
-                }
-            } else if suffixSpanStart < spans.count {
-                for span in spans[suffixSpanStart...] {
-                    mergedSpans.append(TokenSpan(
-                        range: (span.range.lowerBound + delta)..<(span.range.upperBound + delta),
-                        token: span.token
-                    ))
-                }
+            let suffixSpanStart = spanIndex(ofLine: nextOld)
+            if suffixSpanStart < storedSpans.count {
+                mergedSpans.append(contentsOf: storedSpans[suffixSpanStart...])
             }
             if nextOld < spanCounts.count {
                 mergedCounts.append(contentsOf: spanCounts[nextOld...])
@@ -300,9 +335,17 @@ public struct MarkdownTokenizer: Equatable, Sendable {
         } else {
             mergedStates.append(entering)
         }
-        spans = mergedSpans
+        storedSpans = mergedSpans
         spanCounts = mergedCounts
         states = mergedStates
+        let suffixStart = first + producedCounts.count
+        if carried + delta != 0, suffixStart < spanCounts.count {
+            shift = carried + delta
+            shiftLine = suffixStart
+        } else {
+            shift = 0
+            shiftLine = 0
+        }
         return first..<max(first, scan)
     }
 
@@ -329,32 +372,107 @@ public struct MarkdownTokenizer: Equatable, Sendable {
         return lines[lower].start..<max(lines[lower].start, upper)
     }
 
-    private mutating func installFull(_ text: String) {
+    private mutating func installLines(_ text: String) {
         let parsed = LineSplit.lines(in: text)
         var entering = BlockState()
         if text.hasPrefix("---") { entering.inFrontmatter = true }
-        var nextStates: [BlockState] = []
-        var nextSpans: [TokenSpan] = []
-        var counts: [Int] = []
-        nextStates.reserveCapacity(parsed.count + 1)
-        counts.reserveCapacity(parsed.count)
-        for line in parsed {
-            nextStates.append(entering)
-            let before = nextSpans.count
-            let (produced, exit) = Scanner.scan(line: line, entering: entering)
-            nextSpans.append(contentsOf: produced)
-            counts.append(nextSpans.count - before)
-            entering = exit
-        }
-        nextStates.append(entering)
         source = text
         sourceValid = true
         ready = true
         lines = parsed
         lineStarts = parsed.map(\.start)
-        states = nextStates
-        spans = nextSpans
-        spanCounts = counts
+        states = [entering]
+        storedSpans = []
+        spanCounts = []
+        shift = 0
+        shiftLine = 0
+    }
+
+    private mutating func installFull(_ text: String) {
+        installLines(text)
+        if !lines.isEmpty {
+            ensureScanned(throughLine: lines.count - 1)
+        }
+    }
+
+    /// Tokenize lines up through `target` that are not scanned yet. Already-scanned
+    /// lines are left alone, including a pending suffix shift.
+    public mutating func ensureScanned(throughLine target: Int) {
+        guard ready, !lines.isEmpty else { return }
+        let goal = min(max(0, target), lines.count - 1)
+        guard spanCounts.count <= goal else { return }
+        materializeAll()
+        var entering = states.last ?? BlockState()
+        if states.isEmpty {
+            entering = BlockState()
+            states = [entering]
+        }
+        var index = spanCounts.count
+        while index <= goal {
+            let (produced, exit) = Scanner.scan(line: lines[index], entering: entering)
+            storedSpans.append(contentsOf: produced)
+            spanCounts.append(produced.count)
+            entering = exit
+            states.append(entering)
+            index += 1
+        }
+    }
+
+    /// Absolute spans that overlap `utf16`, scanning any gap in front of that range.
+    public mutating func spans(overlapping utf16: Range<Int>) -> [TokenSpan] {
+        guard !lines.isEmpty, !utf16.isEmpty, utf16Count > 0 else { return [] }
+        let endProbe = min(max(utf16.lowerBound, utf16.upperBound - 1), utf16Count - 1)
+        let first = LineSplit.lineIndex(containing: min(utf16.lowerBound, utf16Count - 1), starts: lineStarts)
+        let last = LineSplit.lineIndex(containing: endProbe, starts: lineStarts)
+        ensureScanned(throughLine: last)
+        guard first < spanCounts.count else { return [] }
+        var index = spanIndex(ofLine: first)
+        var result: [TokenSpan] = []
+        let stop = min(last, spanCounts.count - 1)
+        for line in first...stop {
+            let count = spanCounts[line]
+            let extra = (shift != 0 && line >= shiftLine) ? shift : 0
+            for _ in 0..<count {
+                guard index < storedSpans.count else { break }
+                var span = storedSpans[index]
+                index += 1
+                if extra != 0 {
+                    span.range = (span.range.lowerBound + extra)..<(span.range.upperBound + extra)
+                }
+                if span.range.upperBound > utf16.lowerBound, span.range.lowerBound < utf16.upperBound {
+                    result.append(span)
+                }
+            }
+        }
+        return result
+    }
+
+    private func spanIndex(ofLine line: Int) -> Int {
+        spanCounts.prefix(min(max(0, line), spanCounts.count)).reduce(0, +)
+    }
+
+    private mutating func materializeAll() {
+        materialize(beforeLine: spanCounts.count)
+    }
+
+    /// Make stored ranges absolute for lines before `line`. The tail keeps `shift`.
+    private mutating func materialize(beforeLine line: Int) {
+        guard shift != 0 else { return }
+        let endLine = min(max(0, line), spanCounts.count)
+        guard shiftLine < endLine else { return }
+        let start = spanIndex(ofLine: shiftLine)
+        let end = spanIndex(ofLine: endLine)
+        if start < end {
+            for index in start..<min(end, storedSpans.count) {
+                let range = storedSpans[index].range
+                storedSpans[index].range = (range.lowerBound + shift)..<(range.upperBound + shift)
+            }
+        }
+        shiftLine = endLine
+        if shiftLine >= spanCounts.count {
+            shift = 0
+            shiftLine = 0
+        }
     }
 
     public func spans(onLine line: Int, in text: String) -> [TokenSpan] {

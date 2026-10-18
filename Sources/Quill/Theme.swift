@@ -226,10 +226,11 @@ enum MarkdownStyler {
             apply(span.token, range: range, theme: theme, storage: storage, dimmed: dimmed)
         }
         for (range, severity) in diagnostics {
-            guard NSMaxRange(range) <= storage.length else { continue }
+            let marked = NSIntersectionRange(range, limit)
+            guard marked.length > 0, NSMaxRange(marked) <= storage.length else { continue }
             let color: NSColor = severity <= 1 ? .systemRed : .systemOrange
-            storage.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: range)
-            storage.addAttribute(.underlineColor, value: color, range: range)
+            storage.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: marked)
+            storage.addAttribute(.underlineColor, value: color, range: marked)
         }
         storage.endEditing()
     }

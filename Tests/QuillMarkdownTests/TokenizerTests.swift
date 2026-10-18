@@ -49,6 +49,27 @@ final class TokenizerTests: XCTestCase {
         XCTAssertEqual(lines.map(\.isBlank), bounds.map(\.isBlank))
     }
 
+    func testRepeatedApplyAtStartShiftsLaterSpans() {
+        let text = (0..<40).map { "Line \($0) [[note]]\n" }.joined()
+        var doc = MarkdownTokenizer(text: text)
+        let before = doc.spans.first { $0.range.lowerBound > 80 && $0.token == .wikilink }?.range.lowerBound
+        _ = doc.apply(start: 0, removedUTF16: 0, replacement: "X")
+        _ = doc.apply(start: 0, removedUTF16: 0, replacement: "Y")
+        let after = doc.spans.first { $0.range.lowerBound > 80 && $0.token == .wikilink }?.range.lowerBound
+        XCTAssertEqual(after, (before ?? -1) + 2)
+        XCTAssertEqual(doc.utf16Count, text.utf16.count + 2)
+    }
+
+    func testPrescanLeavesTheTailUntokenized() {
+        let text = (0..<30).map { "line\($0) [[n]]\n" }.joined()
+        var doc = MarkdownTokenizer(text: text, scanThroughLine: 1)
+        XCTAssertEqual(doc.scannedLineCount, 2)
+        XCTAssertTrue(doc.spans.allSatisfy { $0.range.lowerBound < 40 })
+        let tail = doc.spans(overlapping: doc.lineSpan(20..<21))
+        XCTAssertEqual(doc.scannedLineCount, 21)
+        XCTAssertTrue(tail.contains { $0.token == .wikilink })
+    }
+
     func testApplyEditKeepsEarlierSpans() {
         let text = "hello\n# Title\n"
         var doc = MarkdownTokenizer(text: text)
