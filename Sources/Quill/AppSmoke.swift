@@ -782,20 +782,17 @@ enum AppSmoke {
             failures.append("picker did not open (\(model.message))")
             return
         }
-        let host = NSHostingView(rootView: PickerPanel(model: model))
-        host.autoresizingMask = [.width, .height]
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 800, height: 640),
             styleMask: [.titled, .resizable],
             backing: .buffered,
             defer: false
         )
-        window.contentView = host
-        host.frame = window.contentView?.bounds ?? host.frame
         window.makeKeyAndOrderFront(nil)
         defer { window.orderOut(nil) }
-
-        showPicker(host, window, model)
+        // A new hosting view each time. Assigning rootView on the same
+        // NSHostingView leaves the previous caret in the hierarchy.
+        var host = showPicker(window, model)
         let opened = waitUntil(seconds: 0.8) {
             settle(host, window)
             let hint = queryField(in: host)?.placeholderAttributedString?.string ?? ""
@@ -831,7 +828,7 @@ enum AppSmoke {
 
         model.handlePicker(.character("n"))
         model.handlePicker(.character("o"))
-        showPicker(host, window, model)
+        host = showPicker(window, model)
         let filtered = waitUntil(seconds: 0.6) {
             settle(host, window)
             let titles = resultTitles(in: host)
@@ -859,7 +856,7 @@ enum AppSmoke {
         }
 
         model.handlePicker(.escape)
-        showPicker(host, window, model)
+        host = showPicker(window, model)
         let leftInsert = waitUntil(seconds: 0.4) {
             settle(host, window)
             return modeField(in: host)?.stringValue == "NORMAL" && caretView(in: host) == nil
@@ -871,7 +868,7 @@ enum AppSmoke {
 
         model.handlePicker(.character("q"))
         model.presentGrepPicker()
-        showPicker(host, window, model)
+        host = showPicker(window, model)
         let grepOpen = waitUntil(seconds: 0.4) {
             settle(host, window)
             let hint = queryField(in: host)?.placeholderAttributedString?.string ?? ""
@@ -882,11 +879,11 @@ enum AppSmoke {
             model.handlePicker(.character(character))
         }
         var seenGrepTick = model.pickerTick
-        showPicker(host, window, model)
+        host = showPicker(window, model)
         let grepped = waitUntil(seconds: 1.5) {
             if model.pickerTick != seenGrepTick {
                 seenGrepTick = model.pickerTick
-                showPicker(host, window, model)
+                host = showPicker(window, model)
             } else {
                 settle(host, window)
             }
@@ -910,12 +907,17 @@ enum AppSmoke {
         }
     }
 
-    /// `NSHostingView` keeps the tree from its first `rootView`. Replacing it
-    /// publishes the picker's current query, caret, and rows.
+    /// A fresh hosting view shows the picker's current query, caret, and rows.
+    /// Reusing one view left the previous insert-mode caret in the tree.
     @MainActor
-    private static func showPicker(_ host: NSHostingView<PickerPanel>, _ window: NSWindow, _ model: AppModel) {
-        host.rootView = PickerPanel(model: model)
+    private static func showPicker(_ window: NSWindow, _ model: AppModel) -> NSHostingView<PickerPanel> {
+        let host = NSHostingView(rootView: PickerPanel(model: model))
+        host.autoresizingMask = [.width, .height]
+        let bounds = window.contentView?.bounds ?? NSRect(x: 0, y: 0, width: 800, height: 640)
+        window.contentView = host
+        host.frame = bounds
         settle(host, window)
+        return host
     }
 
     @MainActor
