@@ -255,6 +255,9 @@ final class TextKit2Layout: TextLayout, @unchecked Sendable {
 
     func ensureFullLayout() {
         guard let lm = textView?.textLayoutManager else { return }
+        let length = lm.offset(from: lm.documentRange.location, to: lm.documentRange.endLocation)
+        QuillTrace.write("quill boot layout-full-len \(length)\n")
+        guard length != NSNotFound, length > 0 else { return }
         _ = enumerateVisualLines(layout: lm)
     }
 
@@ -404,6 +407,17 @@ final class VimTextView: NSTextView {
         QuillTrace.write("quill boot \(step)\n")
     }
 
+    private func bootViewport(_ step: String) {
+        guard textLayoutManager?.textContentManager is ViewportContentStorage else { return }
+        boot(step)
+    }
+
+    /// Reveal the real document length once this edit's storage mutations,
+    /// including restyle, have finished.
+    private func finishViewportEdit() {
+        (textLayoutManager?.textContentManager as? ViewportContentStorage)?.finishFastEdit()
+    }
+
     func applyTheme(_ theme: QuillTheme, focus: Bool) {
         self.theme = theme
         self.focusMode = focus
@@ -499,6 +513,7 @@ final class VimTextView: NSTextView {
             let began = DispatchTime.now().uptimeNanoseconds
             string = text
             QuillPerfSplit.add("syncStringMs", since: began)
+            bootViewport("sync-assigned")
             let tokenBegan = DispatchTime.now().uptimeNanoseconds
             let through = viewportLastLine()
             tokenizer = MarkdownTokenizer(text: text, scanThroughLine: through)
@@ -511,19 +526,23 @@ final class VimTextView: NSTextView {
             let end = clampUTF16(sel.upperBound)
             setSelectedRange(NSRange(location: loc, length: max(0, end - loc)))
         }
+        bootViewport("sync-selected")
         if replaced {
             let began = DispatchTime.now().uptimeNanoseconds
             queueRestyle(dirty: nil)
             QuillPerfSplit.add("syncStyleMs", since: began)
+            bootViewport("sync-styled")
         } else if focusMode {
             queueRestyle(dirty: engine.cursor)
         }
+        finishViewportEdit()
         let frameBegan = DispatchTime.now().uptimeNanoseconds
         noteContentSizeChanged()
         QuillPerfSplit.add("syncFrameMs", since: frameBegan)
         let revealBegan = DispatchTime.now().uptimeNanoseconds
         revealCaret()
         QuillPerfSplit.add("syncRevealMs", since: revealBegan)
+        bootViewport("sync-revealed")
     }
 
     func applyResult(_ result: EngineResult) {
@@ -568,6 +587,7 @@ final class VimTextView: NSTextView {
         } else if focusMode {
             queueRestyle(dirty: engine.cursor)
         }
+        finishViewportEdit()
         let caretBegan = DispatchTime.now().uptimeNanoseconds
         noteContentSizeChanged()
         revealCaret()

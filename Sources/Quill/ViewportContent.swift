@@ -14,7 +14,12 @@ final class ViewportContentStorage: NSTextContentStorage {
     /// Once a long note skips the stock element array, stay there. Calling
     /// super later would walk that stale array and trap.
     private var lineIndexOnly = false
+    /// Non-zero while TextKit is still inside the edit notification. The stock
+    /// location objects have to stay in force for that whole call; handing it a
+    /// custom location traps (status 133) after `processEditing` returns.
+    private var editDepth = 0
     private var loggedFastEdit = false
+    private var loggedRecord = false
     /// Below this, smoke and normal notes keep TextKit's own content storage.
     /// The 10k-line perf note is far above it.
     static let adoptionThreshold = 20_000
@@ -34,14 +39,21 @@ final class ViewportContentStorage: NSTextContentStorage {
         rebuildLineStarts()
     }
 
+    /// Call after the text view has finished mutating the storage for this
+    /// edit, including the attribute pass. Layout queries after this see the
+    /// real document length.
+    func finishFastEdit() {
+        editDepth = 0
+    }
+
     override var documentRange: NSTextRange {
-        guard lineIndexOnly else { return super.documentRange }
+        guard reportsLineIndex else { return super.documentRange }
         let length = textStorage?.length ?? 0
         return NSTextRange(location: UTF16Location(0), end: UTF16Location(length)) ?? super.documentRange
     }
 
     override func location(_ location: any NSTextLocation, offsetBy delta: Int) -> (any NSTextLocation)? {
-        guard lineIndexOnly else { return super.location(location, offsetBy: delta) }
+        guard reportsLineIndex else { return super.location(location, offsetBy: delta) }
         let base = (location as? UTF16Location)?.offset ?? 0
         let next = base + delta
         let length = textStorage?.length ?? 0
@@ -50,9 +62,20 @@ final class ViewportContentStorage: NSTextContentStorage {
     }
 
     override func offset(from: any NSTextLocation, to: any NSTextLocation) -> Int {
-        guard lineIndexOnly else { return super.offset(from: from, to: to) }
+        guard reportsLineIndex else { return super.offset(from: from, to: to) }
         guard let start = from as? UTF16Location, let end = to as? UTF16Location else { return NSNotFound }
         return end.offset - start.offset
+    }
+
+    override func recordEditAction(in originalTextRange: NSTextRange, newTextRange: NSTextRange) {
+        if lineIndexOnly {
+            if !loggedRecord {
+                loggedRecord = true
+                QuillTrace.write("quill boot record-edit-skip\n")
+            }
+            return
+        }
+        super.recordEditAction(in: originalTextRange, newTextRange: newTextRange)
     }
 
     override func enumerateTextElements(
@@ -60,7 +83,7 @@ final class ViewportContentStorage: NSTextContentStorage {
         options: NSTextContentManager.EnumerationOptions = [],
         using block: (NSTextElement) -> Bool
     ) -> NSTextLocation? {
-        if !prefersLineIndex(length: textStorage?.length ?? 0) {
+        if !reportsLineIndex {
             return super.enumerateTextElements(from: textLocation, options: options, using: block)
         }
         ensureIndex()
@@ -116,10 +139,11 @@ final class ViewportContentStorage: NSTextContentStorage {
             return
         }
         lineIndexOnly = true
-        // The superclass shifts every paragraph object past the edit. Record
-        // the line-start delta and return. `invalidateLayout` from inside
-        // `processEditing` traps (status 133) once the document range matches
-        // the string; viewport layout is requested later, outside this call.
+        // Stay on the stock locations until `finishFastEdit()`. The layout
+        // manager records this edit after we return, and a custom location in
+        // that window traps. Line starts are updated here; layout is pulled
+        // later for the visible range only.
+        editDepth += 1
         let length = textStorage.length
         let previous = length - delta
         if indexedLength != previous || delta < 0 || rangeContainsNewline(newCharRange, storage: textStorage) {
@@ -133,13 +157,16 @@ final class ViewportContentStorage: NSTextContentStorage {
         }
         if !loggedFastEdit {
             loggedFastEdit = true
-            let docLen = offset(from: documentRange.location, to: documentRange.endLocation)
             QuillTrace.write("quill boot fast-enter lines=\(lineStarts.count) len=\(length)\n")
-            QuillTrace.write("quill boot fast-doc \(docLen)\n")
             QuillTrace.write("quill boot fast-return\n")
         }
         _ = editMask
         _ = invalidatedCharRange
+    }
+
+    /// Custom locations are visible only once the edit notification has ended.
+    private var reportsLineIndex: Bool {
+        lineIndexOnly && editDepth == 0 && !stockEditing
     }
 
     private func prefersLineIndex(length: Int) -> Bool {
@@ -226,6 +253,18 @@ final class ViewportContentStorage: NSTextContentStorage {
         let paragraph = NSTextParagraph(attributedString: text)
         paragraph.textContentManager = self
         paragraph.elementRange = elementRange
+        if end > start {
+            let ns = storage.string as NSString
+            let last = end - 1
+            if last < ns.length {
+                let ch = ns.character(at: last)
+                if ch == 10 || ch == 13,
+                   let sepStart = self.location(elementRange.location, offsetBy: end - start - 1),
+                   let separator = NSTextRange(location: sepStart, end: elementRange.endLocation) {
+                    paragraph.paragraphSeparatorRange = separator
+                }
+            }
+        }
         return paragraph
     }
 }
