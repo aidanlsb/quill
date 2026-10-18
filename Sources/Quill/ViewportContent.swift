@@ -7,13 +7,23 @@ import AppKit
 final class ViewportContentStorage: NSTextContentStorage {
     private var lineStarts: [Int] = [0]
     private var indexedLength = 0
+    /// True while the superclass still owns the element array. Turned off
+    /// after the layout manager has adopted this storage, so a long note does
+    /// not shift one paragraph object per line on each insert.
+    private var stockEditing = true
+    private var loggedFastEdit = false
 
-    /// Wire an empty backing store before the text view exists. Tearing a live
-    /// text view's content storage out from under it crashes at launch.
-    func attach(_ storage: NSTextStorage, layoutManager: NSTextLayoutManager) {
+    /// The text-storage setter runs `processEditing`. Keep the superclass's
+    /// element array valid until `useLineIndex()` — skipping that on an empty
+    /// storage crashes inside the setter.
+    func prime(_ storage: NSTextStorage) {
+        stockEditing = true
         textStorage = storage
-        addTextLayoutManager(layoutManager)
-        storage.textStorageObserver = self
+        rebuildLineStarts()
+    }
+
+    func useLineIndex() {
+        stockEditing = false
         rebuildLineStarts()
     }
 
@@ -22,7 +32,7 @@ final class ViewportContentStorage: NSTextContentStorage {
         options: NSTextContentManager.EnumerationOptions = [],
         using block: (NSTextElement) -> Bool
     ) -> NSTextLocation? {
-        guard textStorage != nil else {
+        if stockEditing || textStorage == nil || (textStorage?.length ?? 0) == 0 {
             return super.enumerateTextElements(from: textLocation, options: options, using: block)
         }
         ensureIndex()
@@ -66,6 +76,21 @@ final class ViewportContentStorage: NSTextContentStorage {
         changeInLength delta: Int,
         invalidatedRange invalidatedCharRange: NSRange
     ) {
+        if stockEditing || textLayoutManagers.isEmpty || textStorage.length == 0 {
+            super.processEditing(
+                for: textStorage,
+                edited: editMask,
+                range: newCharRange,
+                changeInLength: delta,
+                invalidatedRange: invalidatedCharRange
+            )
+            rebuildLineStarts()
+            return
+        }
+        if !loggedFastEdit {
+            loggedFastEdit = true
+            QuillTrace.write("quill boot fast-edit\n")
+        }
         // The superclass shifts every paragraph object past the edit. Record
         // the line-start delta and invalidate from this line downward so the
         // next layout pass builds only the paragraph it displays.

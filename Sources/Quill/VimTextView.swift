@@ -348,20 +348,46 @@ final class VimTextView: NSTextView {
         isVerticallyResizable = true
         isHorizontallyResizable = false
         autoresizingMask = [.width]
+        installViewportContent()
     }
 
-    /// TextKit 2 view whose content storage does not build a paragraph per line.
-    /// Replacing the storage on a view `usingTextLayoutManager` already created
-    /// segfaults during launch, so the stack is assembled before `NSTextView` init.
+    /// TextKit 2 view. The content storage is swapped in `commonInit` via
+    /// `replaceTextContentManager`, after `isRichText` has settled. Nilling the
+    /// live storage, or building the stack and passing it to `init(frame:textContainer:)`,
+    /// both segfaulted during launch.
     static func make(frame: NSRect = .zero) -> VimTextView {
-        let container = NSTextContainer(size: NSSize(width: max(frame.width, 1), height: CGFloat.greatestFiniteMagnitude))
-        let layout = NSTextLayoutManager()
-        layout.textContainer = container
-        let content = ViewportContentStorage()
-        content.attach(NSTextStorage(), layoutManager: layout)
-        let view = VimTextView(frame: frame, textContainer: container)
-        view.ownsViewportContent = content
+        let view = VimTextView(usingTextLayoutManager: true)
+        if frame != .zero {
+            view.frame = frame
+        }
         return view
+    }
+
+    /// Move the layout manager onto storage that does not build a paragraph per line.
+    private func installViewportContent() {
+        guard let layout = textLayoutManager else {
+            boot("install-no-layout")
+            return
+        }
+        if layout.textContentManager is ViewportContentStorage { return }
+        boot("install-begin")
+        let content = ViewportContentStorage()
+        let existing = (layout.textContentManager as? NSTextContentStorage)?.textStorage?.string ?? ""
+        content.prime(NSTextStorage(string: existing))
+        boot("install-primed")
+        layout.replaceTextContentManager(content)
+        boot("install-replaced")
+        if !content.textLayoutManagers.contains(where: { $0 === layout }) {
+            boot("install-relink")
+            content.addTextLayoutManager(layout)
+        }
+        content.useLineIndex()
+        ownsViewportContent = content
+        boot("install-done")
+    }
+
+    private func boot(_ step: String) {
+        QuillTrace.write("quill boot \(step)\n")
     }
 
     func applyTheme(_ theme: QuillTheme, focus: Bool) {
