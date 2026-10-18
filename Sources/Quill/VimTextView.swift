@@ -791,12 +791,14 @@ final class VimTextView: NSTextView {
         // returned before styling. Doing it here puts that cost on the keystroke.
         var styleLimit: Range<Int>? = viewport
         var plainShift = false
+        var tableEdit = false
         if viewport == nil, !edits.isEmpty, tokenizer.acceptsEdits {
             plainShift = !focusMode
             var covered = 0..<0
             for edit in edits {
                 let delta = edit.replacement.utf16.count - edit.range.count
                 let probe = min(edit.range.lowerBound, max(0, tokenizer.utf16Count - 1))
+                if tokenizer.lineContainsPipe(at: probe) { tableEdit = true }
                 let beforeRange = tokenizer.lineContentSpan(containing: probe)
                 let beforeSpans = beforeRange.isEmpty ? [] : tokenizer.spans(overlapping: beforeRange)
                 let styled = !beforeRange.isEmpty && coverageContains(beforeRange)
@@ -805,6 +807,8 @@ final class VimTextView: NSTextView {
                     removedUTF16: edit.range.count,
                     replacement: edit.replacement
                 )
+                let afterProbe = min(edit.range.lowerBound, max(0, tokenizer.utf16Count - 1))
+                if tokenizer.lineContainsPipe(at: afterProbe) { tableEdit = true }
                 let afterRange = tokenizer.lineSpan(changed)
                 let afterSpans = afterRange.isEmpty ? [] : tokenizer.spans(overlapping: afterRange)
                 if !styled || !MarkdownTokenizer.spansFollowEdit(
@@ -820,6 +824,11 @@ final class VimTextView: NSTextView {
                 } else {
                     covered = min(covered.lowerBound, changed.lowerBound)..<max(covered.upperBound, changed.upperBound)
                 }
+            }
+            if tableEdit {
+                // A cell edit changes column widths without changing markdown tokens.
+                // The plain-shift path would keep the previous kern.
+                plainShift = false
             }
             if !plainShift {
                 let span = tokenizer.lineSpan(covered)
@@ -853,7 +862,12 @@ final class VimTextView: NSTextView {
             styleLimit = viewportUTF16()
         }
         shiftCoverage(for: edits)
-        let limit = styleLimit ?? 0..<0
+        var limit = styleLimit ?? 0..<0
+        let tables = tablesOverlapping(limit)
+        if !tables.isEmpty {
+            limit = tablePaintRange(limit, tables: tables)
+            styleLimit = limit
+        }
         let visibleSpans = limit.isEmpty ? [] : tokenizer.spans(overlapping: limit)
         let focusParagraph = focusMode ? tokenizer.paragraphRange(containing: engine.cursor) : nil
         MarkdownStyler.restyle(
@@ -865,7 +879,8 @@ final class VimTextView: NSTextView {
             focus: focusMode,
             caret: engine.cursor,
             focusParagraph: focusParagraph,
-            diagnostics: diagnosticRanges
+            diagnostics: diagnosticRanges,
+            tables: tables
         )
         if let styleLimit, !styleLimit.isEmpty {
             noteStyled(styleLimit)
@@ -913,7 +928,13 @@ final class VimTextView: NSTextView {
         }
         let overlaps = range.lowerBound <= styledCoverage.upperBound + 1
             && styledCoverage.lowerBound <= range.upperBound + 1
-        guard overlaps else { return }
+        // A jump leaves a gap. Remember the screen just painted so the next
+        // keystroke there can skip painting. The screen above is styled again
+        // when the clip scrolls back onto it.
+        guard overlaps else {
+            styledCoverage = range
+            return
+        }
         styledCoverage = min(styledCoverage.lowerBound, range.lowerBound)..<max(styledCoverage.upperBound, range.upperBound)
     }
 
@@ -927,6 +948,50 @@ final class VimTextView: NSTextView {
             } else if edit.range.lowerBound < styledCoverage.upperBound {
                 styledCoverage = styledCoverage.lowerBound..<(styledCoverage.upperBound + delta)
             }
+        }
+    }
+
+    /// Tables that intersect `limit`, using the tokenizer's line cache.
+    /// An empty limit skips the lookup so a plain keystroke does not parse one.
+    private func tablesOverlapping(_ limit: Range<Int>) -> [TableBlock] {
+        guard tokenizer.acceptsEdits, !limit.isEmpty else { return [] }
+        return tokenizer.tableBlocks(overlapping: limit)
+    }
+
+    /// Rows on screen, rows already painted, and the edited line. A cell edit
+    /// changes every column's kern, including rows the caret is not on.
+    /// Off-screen rows are dropped from coverage so the next scroll recomputes them.
+    private func tablePaintRange(_ limit: Range<Int>, tables: [TableBlock]) -> Range<Int> {
+        let viewport = viewportUTF16()
+        let painted = styledCoverage
+        var lower = limit.lowerBound
+        var upper = limit.upperBound
+        for block in tables {
+            dropCoverage(overlapping: block.range)
+            for row in block.rows {
+                let rowEnd = min(block.range.upperBound, row.range.upperBound + 1)
+                let span = row.range.lowerBound..<max(row.range.lowerBound + 1, rowEnd)
+                if rangesOverlap(span, viewport) || rangesOverlap(span, limit) || rangesOverlap(span, painted) {
+                    lower = min(lower, span.lowerBound)
+                    upper = max(upper, span.upperBound)
+                }
+            }
+        }
+        return lower..<max(lower, upper)
+    }
+
+    private func rangesOverlap(_ lhs: Range<Int>, _ rhs: Range<Int>) -> Bool {
+        !lhs.isEmpty && !rhs.isEmpty && lhs.lowerBound < rhs.upperBound && rhs.lowerBound < lhs.upperBound
+    }
+
+    private func dropCoverage(overlapping range: Range<Int>) {
+        guard !styledCoverage.isEmpty else { return }
+        let overlaps = range.lowerBound < styledCoverage.upperBound && styledCoverage.lowerBound < range.upperBound
+        guard overlaps else { return }
+        if styledCoverage.lowerBound < range.lowerBound {
+            styledCoverage = styledCoverage.lowerBound..<range.lowerBound
+        } else {
+            styledCoverage = 0..<0
         }
     }
 
@@ -1370,11 +1435,14 @@ final class VimTextView: NSTextView {
 
     @objc private func clipViewBoundsChanged(_ notification: Notification) {
         guard let clip = notification.object as? NSClipView else { return }
-        guard abs(clip.bounds.width - appliedClipWidth) > 0.5 else { return }
-        updateInsets()
-        if abs(clip.bounds.width - bounds.width) > 1 {
-            noteContentSizeChanged()
+        if abs(clip.bounds.width - appliedClipWidth) > 0.5 {
+            updateInsets()
+            if abs(clip.bounds.width - bounds.width) > 1 {
+                noteContentSizeChanged()
+            }
         }
+        // Vertical scrolling used to return above. A table below the fold stays
+        // unstyled until this pass paints the lines that just came on screen.
         restyleVisibleIfNeeded()
     }
 

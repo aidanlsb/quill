@@ -496,6 +496,53 @@ public struct MarkdownTokenizer: Equatable, Sendable {
         return result
     }
 
+    /// True when the line under `utf16` contains a pipe. Table edits use this
+    /// to skip the plain-shift fast path, which would leave column kern stale.
+    public func lineContainsPipe(at utf16: Int) -> Bool {
+        guard !lines.isEmpty, utf16Count > 0 else { return false }
+        let probe = min(max(0, utf16), utf16Count - 1)
+        let index = LineSplit.lineIndex(containing: probe, starts: lineStarts)
+        return lines[index].text.contains("|")
+    }
+
+    /// Tables overlapping `utf16`. Rows outside the range are included so column
+    /// widths stay correct. Lines with no pipe nearby are not parsed.
+    public mutating func tableBlocks(overlapping utf16: Range<Int>) -> [TableBlock] {
+        guard ready, !lines.isEmpty, !utf16.isEmpty, utf16Count > 0 else { return [] }
+        let lower = min(max(0, utf16.lowerBound), utf16Count - 1)
+        let upper = min(max(lower, utf16.upperBound - 1), utf16Count - 1)
+        let first = LineSplit.lineIndex(containing: lower, starts: lineStarts)
+        let last = LineSplit.lineIndex(containing: upper, starts: lineStarts)
+        if !pipeNear(first, last) { return [] }
+        ensureScanned(throughLine: last)
+        var start = first
+        while start > 0, MarkdownTables.tableLine(lines, start - 1, isBlocked: lineBlocked) {
+            start -= 1
+        }
+        var end = last
+        while end + 1 < lines.count {
+            ensureScanned(throughLine: end + 1)
+            if !MarkdownTables.tableLine(lines, end + 1, isBlocked: lineBlocked) { break }
+            end += 1
+        }
+        return MarkdownTables.blocks(lines: lines, from: start, through: end, isBlocked: lineBlocked)
+    }
+
+    private func pipeNear(_ first: Int, _ last: Int) -> Bool {
+        let lower = max(0, first - 1)
+        let upper = min(lines.count - 1, last + 1)
+        guard lower <= upper else { return false }
+        for index in lower...upper where lines[index].text.contains("|") {
+            return true
+        }
+        return false
+    }
+
+    private func lineBlocked(_ index: Int) -> Bool {
+        guard index >= 0, index < states.count else { return false }
+        return states[index].inFence || states[index].inFrontmatter
+    }
+
     private func spanIndex(ofLine line: Int) -> Int {
         spanCounts.prefix(min(max(0, line), spanCounts.count)).reduce(0, +)
     }

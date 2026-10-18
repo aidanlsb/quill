@@ -57,7 +57,7 @@ The `quill` script resolves `/Applications/Quill.app` (or a local `dist/Quill.ap
 
 - Sans-serif body: the system font at 16pt (`fontSize` 10–32, `font` a family name; blank or missing uses the system font). Headings are semibold system at 1.5 / 1.3 / 1.15 / 1.05 / 1.0 / 1.0. Code and frontmatter are SF Mono. Line height is 1.5
 - Centered ~70-character column (`columnWidth`), with at least 128pt between the text and the window edge
-- Live markdown styling in the buffer (headings, emphasis, code, lists, checkboxes, `[[wikilinks]]`, dimmed syntax) without rewriting the file
+- Live markdown styling in the buffer (headings, emphasis, code, lists, checkboxes, GFM tables, `[[wikilinks]]`, dimmed syntax) without rewriting the file. Tables use a monospaced face, a quiet alignment rule, and an emphasized header. Wide rows clip instead of wrapping. `:TableFormat` pads cells so the pipes line up; set `formatTablesOnInsertLeave = true` to do that when leaving insert mode
 - Light and dark follow the system
 - Focus mode: **⌃⌘F** (hides the status bar, larger margins)
 - `[[` completion from filenames in the opened folder
@@ -80,7 +80,7 @@ Own engine: parse **count → operator → motion or text object**. Motions retu
 
 **Registers:** unnamed, plus `"+` / `"*` for the system clipboard.
 
-**Ex:** `:w` `:q` `:wq`. `:q` refuses a dirty buffer. `:theme` toggles light and dark; `:theme light`, `:theme dark`, and `:theme system` set it. The last runtime choice is remembered in `~/.config/quill/state.toml` and overrides `theme` in `config.toml` on the next launch.
+**Ex:** `:w` `:q` `:wq`. `:q` refuses a dirty buffer. `:theme` toggles light and dark; `:theme light`, `:theme dark`, and `:theme system` set it. The last runtime choice is remembered in `~/.config/quill/state.toml` and overrides `theme` in `config.toml` on the next launch. `:TableFormat` pads the GFM table under the cursor (`:%TableFormat` pads every table).
 
 **Other:** `gd` (definition / wikilink), `gr` (references), `-` (parent directory), **leader** (Space by default).
 

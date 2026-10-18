@@ -87,6 +87,9 @@ struct QuillTheme {
     var directoryCreatedColor: NSColor
     var directoryRenamedColor: NSColor
     var directoryDeletedColor: NSColor
+    var tableBackground: NSColor
+    var tableHeaderRule: NSColor
+    var tableRowRule: NSColor
 
     @MainActor
     static func current(
@@ -146,8 +149,35 @@ struct QuillTheme {
                 : NSColor(calibratedRed: 0.62, green: 0.46, blue: 0.24, alpha: 1),
             directoryDeletedColor: dark
                 ? NSColor(calibratedRed: 0.78, green: 0.52, blue: 0.48, alpha: 1)
-                : NSColor(calibratedRed: 0.55, green: 0.32, blue: 0.30, alpha: 1)
+                : NSColor(calibratedRed: 0.55, green: 0.32, blue: 0.30, alpha: 1),
+            tableBackground: dark
+                ? NSColor(calibratedWhite: 1, alpha: 0.045)
+                : NSColor(calibratedWhite: 0, alpha: 0.04),
+            tableHeaderRule: dark
+                ? NSColor(calibratedWhite: 1, alpha: 0.32)
+                : NSColor(calibratedWhite: 0, alpha: 0.28),
+            tableRowRule: dark
+                ? NSColor(calibratedWhite: 1, alpha: 0.12)
+                : NSColor(calibratedWhite: 0, alpha: 0.10)
         )
+    }
+
+    /// Semibold mono so the header reads as emphasis and columns stay aligned.
+    @MainActor
+    func tableHeaderFont() -> NSFont {
+        let font = NSFont.monospacedSystemFont(ofSize: monoFont.pointSize, weight: .semibold)
+        return font.isFixedPitch ? font : monoFont
+    }
+
+    /// Table lines do not wrap. A wide row clips at the column instead of breaking the grid.
+    @MainActor
+    func tableParagraphStyle() -> NSParagraphStyle {
+        let para = NSMutableParagraphStyle()
+        para.lineHeightMultiple = lineHeight
+        para.paragraphSpacing = 0
+        para.lineBreakMode = .byClipping
+        para.allowsDefaultTighteningForTruncation = false
+        return para
     }
 
     var bodyAttributes: [NSAttributedString.Key: Any] {
@@ -192,7 +222,8 @@ enum MarkdownStyler {
         focus: Bool = false,
         caret: Int = 0,
         focusParagraph: Range<Int>? = nil,
-        diagnostics: [(NSRange, Int)] = []
+        diagnostics: [(NSRange, Int)] = [],
+        tables: [TableBlock]? = nil
     ) {
         let ns = storage.string as NSString
         let full = NSRange(location: 0, length: ns.length)
@@ -225,6 +256,16 @@ enum MarkdownStyler {
             let dimmed = focus && (range.location >= focusRange.upperBound || NSMaxRange(range) <= focusRange.lowerBound)
             apply(span.token, range: range, theme: theme, storage: storage, dimmed: dimmed)
         }
+        let discovered = tables ?? Self.tables(in: storage.string, limit: limit)
+        applyTables(
+            storage,
+            theme: theme,
+            limit: limit,
+            focus: focus,
+            focusRange: focusRange,
+            spans: spans,
+            tables: discovered
+        )
         for (range, severity) in diagnostics {
             let marked = NSIntersectionRange(range, limit)
             guard marked.length > 0, NSMaxRange(marked) <= storage.length else { continue }
@@ -233,6 +274,20 @@ enum MarkdownStyler {
             storage.addAttribute(.underlineColor, value: color, range: marked)
         }
         storage.endEditing()
+    }
+
+    /// A caller that already parsed the visible tables passes them in.
+    /// `nil` discovers tables from the string, and a partial limit only walks
+    /// the lines that can belong to those tables.
+    private static func tables(in text: String, limit: NSRange) -> [TableBlock] {
+        guard limit.length > 0, !text.isEmpty else { return [] }
+        let length = (text as NSString).length
+        if limit.location == 0, limit.length == length {
+            return MarkdownTables.blocks(in: text)
+        }
+        let end = min(length, NSMaxRange(limit))
+        guard limit.location < end else { return [] }
+        return MarkdownTables.blocks(in: text, overlapping: limit.location..<end)
     }
 
     /// Spans are ordered by start. Skip the prefix that ends before `limit`

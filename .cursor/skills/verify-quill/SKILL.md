@@ -1,13 +1,13 @@
 ---
 name: verify-quill
-description: "Drive the Quill macOS editor and prove the caret, scrolling, directory buffer, and picker prompt. Use when changing the app target, TextKit layout, vim key handling, oil-style directories, or the Telescope-style picker. The harness is QUILL_SMOKE via Scripts/verify-quill."
+description: "Drive the Quill macOS editor and prove the caret, scrolling, directory buffer, picker prompt, and markdown tables. Use when changing the app target, TextKit layout, vim key handling, oil-style directories, the Telescope-style picker, or markdown table styling. The harness is QUILL_SMOKE via Scripts/verify-quill."
 ---
 
 # Verify Quill
 
 Quill is a native macOS markdown editor (SwiftUI + AppKit + TextKit 2). The user-facing surface is the app window and the `quill` launcher. Linux `swift test` does not compile the app and is not proof that the editor works.
 
-The harness is `Scripts/verify-quill`. It builds or accepts the release binary and runs it with `QUILL_SMOKE=1`. That process drives the caret, scrolling, a real temporary directory, and the file and grep pickers, then exits. It is the same check the macOS CI job runs.
+The harness is `Scripts/verify-quill`. It builds or accepts the release binary and runs it with `QUILL_SMOKE=1`. That process drives the caret, scrolling, a real temporary directory, the file and grep pickers, and markdown table styling, then exits. It is the same check the macOS CI job runs.
 
 ## Launch
 

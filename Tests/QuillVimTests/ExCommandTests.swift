@@ -29,6 +29,31 @@ final class ExCommandTests: XCTestCase {
         XCTAssertEqual(r.actions, [.writeQuit])
     }
 
+    func testTableFormatCommand() {
+        let text = "| a | bb |\n| - | -- |\n| c | d |\n"
+        let engine = Engine(text: text)
+        let result = engine.type(":TableFormat<CR>")
+        XCTAssertFalse(result.beep)
+        XCTAssertEqual(result.actions, [.formatTables(startLine: nil, endLine: nil, quiet: false)])
+        let all = engine.type(":%tableformat<CR>")
+        XCTAssertEqual(
+            all.actions,
+            [.formatTables(startLine: 0, endLine: engine.buffer.lineCount - 1, quiet: false)]
+        )
+        let bad = engine.type(":TableFormat extra<CR>")
+        XCTAssertTrue(bad.beep)
+        XCTAssertTrue(bad.actions.isEmpty)
+    }
+
+    func testTableFormatOnInsertLeave() {
+        let engine = Engine(text: "| a | b |\n| - | - |\n")
+        let idle = engine.type("ix<Esc>")
+        XCTAssertTrue(idle.actions.isEmpty)
+        engine.formatTablesOnInsertLeave = true
+        let result = engine.type("iy<Esc>")
+        XCTAssertEqual(result.actions, [.formatTables(startLine: nil, endLine: nil, quiet: true)])
+    }
+
     func testUnknownEx() {
         let r = Engine(text: "hello").type(":foo<CR>")
         XCTAssertTrue(r.beep)
