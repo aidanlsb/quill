@@ -10,13 +10,17 @@ enum QuillTrace {
     private static let startNanos = DispatchTime.now().uptimeNanoseconds
 
     static func millisSinceStart() -> Double {
-        Double(DispatchTime.now().uptimeNanoseconds &- startNanos) / 1_000_000
+        // Touch the origin first. Sampling `now` and then lazily initializing
+        // `startNanos` makes the unsigned subtract wrap on the first call.
+        let origin = startNanos
+        return Double(DispatchTime.now().uptimeNanoseconds &- origin) / 1_000_000
     }
 
     static func event(_ name: StaticString) {
+        let ms = millisSinceStart()
         guard enabled else { return }
         os_signpost(.event, log: log, name: name)
-        write("quill trace \(name) \(format(millisSinceStart()))\n")
+        write("quill trace \(name) \(format(ms))\n")
     }
 
     @discardableResult
