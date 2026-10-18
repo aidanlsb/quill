@@ -78,8 +78,7 @@ final class ViewportContentStorage: NSTextContentStorage {
         guard let layout = textLayoutManagers.first ?? primaryTextLayoutManager else { return }
         let end = min(textStorage.length, newCharRange.location + newCharRange.length)
         guard let start = self.location(documentRange.location, offsetBy: newCharRange.location),
-              let finish = self.location(documentRange.location, offsetBy: end) ?? documentRange.endLocation,
-              let textRange = NSTextRange(location: start, end: finish) else { return }
+              let textRange = NSTextRange(location: start, end: location(at: end)) else { return }
         layout.invalidateLayout(for: textRange)
         _ = editMask
         _ = invalidatedCharRange
@@ -120,6 +119,11 @@ final class ViewportContentStorage: NSTextContentStorage {
         return slice.contains("\n") || slice.contains("\r")
     }
 
+    /// `location(_:offsetBy:)` is nil past the document. The end location is not optional.
+    private func location(at offset: Int) -> any NSTextLocation {
+        self.location(documentRange.location, offsetBy: offset) ?? documentRange.endLocation
+    }
+
     private func locationOffset(_ location: NSTextLocation?) -> Int {
         guard let location else { return 0 }
         let value = offset(from: documentRange.location, to: location)
@@ -146,8 +150,7 @@ final class ViewportContentStorage: NSTextContentStorage {
         let end = line + 1 < lineStarts.count ? lineStarts[line + 1] : length
         guard start <= end, end <= length,
               let startLocation = self.location(documentRange.location, offsetBy: start),
-              let endLocation = self.location(documentRange.location, offsetBy: end) ?? documentRange.endLocation,
-              let elementRange = NSTextRange(location: startLocation, end: endLocation) else { return nil }
+              let elementRange = NSTextRange(location: startLocation, end: location(at: end)) else { return nil }
         let text = storage.attributedSubstring(from: NSRange(location: start, length: end - start))
         let paragraph = NSTextParagraph(attributedString: text)
         paragraph.textContentManager = self
