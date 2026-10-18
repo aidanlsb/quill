@@ -16,9 +16,9 @@ final class ViewportContentStorage: NSTextContentStorage {
     private var lineIndexOnly = false
     private var loggedFastEdit = false
     private var loggedDocLen = false
-    /// Below this, smoke and normal notes use the stock element update.
+    /// Below this, smoke and normal notes keep TextKit's own content storage.
     /// The 10k-line perf note is far above it.
-    private static let lineIndexUTF16Threshold = 20_000
+    static let adoptionThreshold = 20_000
 
     /// The text-storage setter runs `processEditing`. Keep the superclass's
     /// element array valid until `useLineIndex()` — skipping that on an empty
@@ -31,7 +31,29 @@ final class ViewportContentStorage: NSTextContentStorage {
 
     func useLineIndex() {
         stockEditing = false
+        lineIndexOnly = true
         rebuildLineStarts()
+    }
+
+    override var documentRange: NSTextRange {
+        guard lineIndexOnly else { return super.documentRange }
+        let length = textStorage?.length ?? 0
+        return NSTextRange(location: UTF16Location(0), end: UTF16Location(length)) ?? super.documentRange
+    }
+
+    override func location(_ location: any NSTextLocation, offsetBy delta: Int) -> (any NSTextLocation)? {
+        guard lineIndexOnly else { return super.location(location, offsetBy: delta) }
+        let base = (location as? UTF16Location)?.offset ?? 0
+        let next = base + delta
+        let length = textStorage?.length ?? 0
+        if next < 0 || next > length { return nil }
+        return UTF16Location(next)
+    }
+
+    override func offset(from: any NSTextLocation, to: any NSTextLocation) -> Int {
+        guard lineIndexOnly else { return super.offset(from: from, to: to) }
+        guard let start = from as? UTF16Location, let end = to as? UTF16Location else { return NSNotFound }
+        return end.offset - start.offset
     }
 
     override func enumerateTextElements(
@@ -157,7 +179,7 @@ final class ViewportContentStorage: NSTextContentStorage {
     private func prefersLineIndex(length: Int) -> Bool {
         if stockEditing || textLayoutManagers.isEmpty || length == 0 { return false }
         if lineIndexOnly { return true }
-        return length >= Self.lineIndexUTF16Threshold
+        return length >= Self.adoptionThreshold
     }
 
     private var invalidating = false
@@ -241,5 +263,23 @@ final class ViewportContentStorage: NSTextContentStorage {
         paragraph.textContentManager = self
         paragraph.elementRange = elementRange
         return paragraph
+    }
+}
+
+/// Integer offset into the note. The stock content storage's locations stay at
+/// the empty document when paragraph objects are not built, and laying those
+/// out traps.
+private final class UTF16Location: NSObject, NSTextLocation {
+    let offset: Int
+
+    init(_ offset: Int) {
+        self.offset = offset
+    }
+
+    func compare(_ location: any NSTextLocation) -> ComparisonResult {
+        let other = (location as? UTF16Location)?.offset ?? 0
+        if offset < other { return .orderedAscending }
+        if offset > other { return .orderedDescending }
+        return .orderedSame
     }
 }

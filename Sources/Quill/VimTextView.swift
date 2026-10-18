@@ -357,19 +357,24 @@ final class VimTextView: NSTextView {
         isVerticallyResizable = true
         isHorizontallyResizable = false
         autoresizingMask = [.width]
-        installViewportContent()
     }
 
-    /// TextKit 2 view. The content storage is swapped in `commonInit` via
-    /// `replace(_:)`, after `isRichText` has settled. Nilling the live storage,
-    /// or building the stack and passing it to `init(frame:textContainer:)`,
-    /// both segfaulted during launch.
+    /// TextKit 2 view. A long note swaps in viewport storage later; doing that
+    /// for every view threw the caret off when the writing column resized.
     static func make(frame: NSRect = .zero) -> VimTextView {
         let view = VimTextView(usingTextLayoutManager: true)
         if frame != .zero {
             view.frame = frame
         }
         return view
+    }
+
+    /// Long notes skip the per-line paragraph shift. Short notes, including the
+    /// resize check, keep the text view's original content storage so caret
+    /// geometry stays on TextKit's own elements.
+    private func adoptViewportStorageIfNeeded() {
+        guard (engine.text as NSString).length >= ViewportContentStorage.adoptionThreshold else { return }
+        installViewportContent()
     }
 
     /// Move the layout manager onto storage that does not build a paragraph per line.
@@ -490,6 +495,7 @@ final class VimTextView: NSTextView {
         let text = engine.text
         let replaced = string != text
         if replaced {
+            adoptViewportStorageIfNeeded()
             let began = DispatchTime.now().uptimeNanoseconds
             string = text
             QuillPerfSplit.add("syncStringMs", since: began)
@@ -523,6 +529,7 @@ final class VimTextView: NSTextView {
     func applyResult(_ result: EngineResult) {
         var applied: [TextEdit] = []
         if result.didChangeText {
+            adoptViewportStorageIfNeeded()
             if result.edits.isEmpty {
                 string = engine.text
                 tokenizer = MarkdownTokenizer(text: string)
