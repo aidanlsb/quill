@@ -763,17 +763,7 @@ enum AppSmoke {
         window.setContentSize(size)
         scroll.setFrameSize(size)
         scroll.tile()
-        let clip = scroll.contentView
-        if abs(clip.bounds.width - width) > 2 {
-            clip.setFrameSize(size)
-        }
         scroll.layoutSubtreeIfNeeded()
-        if let document = scroll.documentView, abs(document.frame.width - clip.bounds.width) > 2 {
-            var frame = document.frame
-            frame.size.width = clip.bounds.width
-            frame.size.height = max(frame.height, height)
-            document.frame = frame
-        }
         scroll.documentView?.layoutSubtreeIfNeeded()
     }
 
