@@ -307,6 +307,15 @@ final class VimTextView: NSTextView {
     var diagnosticRanges: [(NSRange, Int)] = []
     private var restyleQueued = false
     private var sizing = false
+    /// True while `viewDidEndLiveResize` has cleared the inset for `super`.
+    private var endingLiveResize = false
+    /// Setting the text container lays out, which can call back into this view.
+    private var updatingInsets = false
+    /// Clip width the current inset was computed from. Scrolling changes the origin only.
+    private var appliedClipWidth: CGFloat = -1
+    /// Vertical clip origin to restore after the inset change in progress.
+    private var resizeAnchorY: CGFloat?
+    private weak var observedClip: NSClipView?
     private var tokenizer = MarkdownTokenizer(text: "")
     /// UTF-16 ranges already given span attributes. A gap between two styled
     /// screens is not covered; scrolling into it styles that screen only.
@@ -428,20 +437,53 @@ final class VimTextView: NSTextView {
         placeCaret()
     }
 
-    func updateInsets() {
-        guard let clip = enclosingScrollView?.contentView else { return }
+    func updateInsets(preservingOriginY: CGFloat? = nil) {
+        if endingLiveResize || updatingInsets { return }
+        guard let scroll = enclosingScrollView else { return }
+        let clip = scroll.contentView
         let width = max(clip.bounds.width, 1)
+        let target = columnMetrics(clipWidth: width)
+        let currentColumn = textContainer?.size.width ?? -1
+        let oldVertical = textContainerInset.height
+        let hadInsets = textContainerInset.width > 0.5 || oldVertical > 0.5
+        let metricsMatch = abs(textContainerInset.width - target.inset) < 0.5
+            && abs(oldVertical - target.vertical) < 0.5
+            && abs(currentColumn - target.column) < 0.5
+        appliedClipWidth = width
+        let baseline = preservingOriginY ?? clip.bounds.origin.y
+        if metricsMatch {
+            if preservingOriginY != nil, hadInsets {
+                resizeAnchorY = baseline
+                pinVerticalOrigin(baseline)
+            }
+            return
+        }
+        let columnChanged = abs(currentColumn - target.column) > 0.5
+        let caretBefore = (hadInsets && columnChanged) ? caretDocumentMidY() : nil
+        updatingInsets = true
+        textContainerInset = NSSize(width: target.inset, height: target.vertical)
+        textContainer?.size = NSSize(width: max(1, target.column), height: CGFloat.greatestFiniteMagnitude)
+        updatingInsets = false
+        guard hadInsets else { return }
+        let origin: CGFloat
+        if let caretBefore, let caretAfter = caretDocumentMidY() {
+            origin = baseline + (caretAfter - caretBefore)
+        } else {
+            origin = baseline + (target.vertical - oldVertical)
+        }
+        resizeAnchorY = origin
+        pinVerticalOrigin(origin)
+    }
+
+    private func columnMetrics(clipWidth: CGFloat) -> (inset: CGFloat, vertical: CGFloat, column: CGFloat) {
         if isDirectoryBuffer {
             let inset = QuillMetrics.directoryHorizontalInset
             let vertical = QuillMetrics.directoryHeaderHeight + QuillMetrics.directoryHeaderGap
-            textContainerInset = NSSize(width: inset, height: vertical)
-            textContainer?.size = NSSize(width: max(1, width - inset * 2), height: CGFloat.greatestFiniteMagnitude)
-            return
+            return (inset, vertical, max(1, clipWidth - inset * 2))
         }
         let vertical = focusMode ? QuillMetrics.focusVerticalInset : QuillMetrics.verticalInset
-        let span = QuillMetrics.columnSpan(width: width, column: columnWidth)
-        textContainerInset = NSSize(width: span.inset, height: vertical)
-        textContainer?.size = NSSize(width: span.column, height: CGFloat.greatestFiniteMagnitude)
+        let span = QuillMetrics.columnSpan(width: clipWidth, column: columnWidth)
+        return (span.inset, vertical, span.column)
     }
 
     func syncFromEngine() {
@@ -634,23 +676,89 @@ final class VimTextView: NSTextView {
             return
         }
         sizing = true
-        var size = newSize
-        size.height = max(size.height, fittedContentHeight())
-        if let scroll = enclosingScrollView {
-            size.width = max(size.width, scroll.contentSize.width)
+        let originY = enclosingScrollView?.contentView.bounds.origin.y
+        let columnBefore = textContainer?.size.width ?? -1
+        resizeAnchorY = nil
+        let visible = visibleWidth(proposed: newSize.width)
+        // Height-only frame changes must leave an inset a caller just set. The
+        // caret smoke pins a 12×36 inset and then clears it; recomputing here
+        // would put the writing column back.
+        if abs(visible - appliedClipWidth) > 0.5 {
+            updateInsets(preservingOriginY: originY)
         }
+        let columnAfter = textContainer?.size.width ?? columnBefore
+        var size = newSize
+        size.width = visibleWidth(proposed: newSize.width)
+        let columnChanged = abs(columnAfter - columnBefore) > 0.5
+        if inLiveResize, !columnChanged, bounds.height > 1 {
+            size.height = max(size.height, bounds.height)
+        } else {
+            size.height = max(size.height, fittedContentHeight())
+        }
+        let anchor = resizeAnchorY
         super.setFrameSize(size)
         sizing = false
+        if let anchor {
+            pinVerticalOrigin(anchor)
+            resizeAnchorY = nil
+        }
+    }
+
+    override func viewDidEndLiveResize() {
+        let originY = enclosingScrollView?.contentView.bounds.origin.y ?? 0
+        let preserved = textContainerInset
+        // NSTextView scrolls by about the vertical inset when a live resize ends.
+        // Hide the inset from that adjustment, then put the column back.
+        endingLiveResize = true
+        textContainerInset = .zero
+        super.viewDidEndLiveResize()
+        textContainerInset = preserved
+        endingLiveResize = false
+        appliedClipWidth = -1
+        resizeAnchorY = nil
+        updateInsets(preservingOriginY: originY)
+        if !sizing {
+            sizing = true
+            let height = fittedContentHeight()
+            let width = visibleWidth(proposed: bounds.width)
+            if abs(bounds.height - height) > 1 || abs(bounds.width - width) > 1 {
+                super.setFrameSize(NSSize(width: width, height: height))
+            }
+            sizing = false
+        }
+        if let anchor = resizeAnchorY {
+            pinVerticalOrigin(anchor)
+            resizeAnchorY = nil
+        }
     }
 
     override func viewDidMoveToSuperview() {
         super.viewDidMoveToSuperview()
-        guard let clip = enclosingScrollView?.contentView else { return }
+        observeClipView()
+    }
+
+    private func observeClipView() {
+        if let old = observedClip {
+            NotificationCenter.default.removeObserver(self, name: NSView.boundsDidChangeNotification, object: old)
+            NotificationCenter.default.removeObserver(self, name: NSView.frameDidChangeNotification, object: old)
+        }
+        guard let clip = enclosingScrollView?.contentView else {
+            observedClip = nil
+            return
+        }
+        observedClip = clip
         clip.postsBoundsChangedNotifications = true
+        clip.postsFrameChangedNotifications = true
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(clipViewBoundsChanged(_:)),
             name: NSView.boundsDidChangeNotification,
+            object: clip
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(clipViewBoundsChanged(_:)),
+            name: NSView.frameDidChangeNotification,
             object: clip
         )
     }
@@ -1045,7 +1153,7 @@ final class VimTextView: NSTextView {
         guard !sizing, enclosingScrollView != nil else { return }
         sizing = true
         let height = fittedContentHeight()
-        let width = max(enclosingScrollView?.contentSize.width ?? bounds.width, 1)
+        let width = visibleWidth(proposed: bounds.width)
         if abs(bounds.width - width) > 1 || abs(bounds.height - height) > 1 {
             super.setFrameSize(NSSize(width: width, height: height))
         }
@@ -1267,10 +1375,40 @@ final class VimTextView: NSTextView {
 
     @objc private func clipViewBoundsChanged(_ notification: Notification) {
         guard let clip = notification.object as? NSClipView else { return }
+        guard abs(clip.bounds.width - appliedClipWidth) > 0.5 else { return }
+        updateInsets()
         if abs(clip.bounds.width - bounds.width) > 1 {
             noteContentSizeChanged()
         }
         restyleVisibleIfNeeded()
+    }
+
+    private func visibleWidth(proposed: CGFloat) -> CGFloat {
+        if let clip = enclosingScrollView?.contentView, clip.bounds.width > 1 {
+            return clip.bounds.width
+        }
+        if let content = enclosingScrollView?.contentSize.width, content > 1 {
+            return content
+        }
+        return max(proposed, 1)
+    }
+
+    private func caretDocumentMidY() -> CGFloat? {
+        guard engine != nil else { return nil }
+        return caretLineRect()?.midY
+    }
+
+    private func pinVerticalOrigin(_ y: CGFloat) {
+        guard let scroll = enclosingScrollView else { return }
+        let clip = scroll.contentView
+        guard clip.bounds.height > 1, bounds.height > 1 else { return }
+        let maxY = max(0, bounds.height - clip.bounds.height)
+        let clamped = min(max(0, y), maxY)
+        guard abs(clamped - clip.bounds.origin.y) > 0.5 else { return }
+        var origin = clip.bounds.origin
+        origin.y = clamped
+        clip.setBoundsOrigin(origin)
+        scroll.reflectScrolledClipView(clip)
     }
 
     func clampUTF16(_ offset: Int) -> Int {
