@@ -33,6 +33,7 @@ Preconditions:
 
 - A caret that matches the line-fragment height is the old bug. The smoke fails it with `used the line fragment` and with `1.3x`. TextKit 2's system insertion indicator is that tall rectangle; the smoke fails it with `system caret` when it is still showing.
 - The caret rect has to sit inside the line's glyph bounds. The smoke fails that with `glyph bounds` and a miss against the segment baseline with `baseline`.
+- Past a trailing newline the caret is on the next line, on that line's baseline. The empty extra line fragment's frame is wrong, so a caret parked on the fragment top fails `end caret` and `baseline`.
 - The sample the smoke styles is `iiii`, a blank line, and `Heading` in a larger font, plus the caret past the final newline. Asserting against `maximumAdvancement` does not match this check.
 - This host cannot draw the caret if it is not macOS. Doctor fails before a log exists.
 - The cell check forces a 20pt body and a 32pt heading so the glyph box stays independent of the 16pt default. `type-scale` reads `QuillTheme.current()` and `QuillConfig.default` without those fixture fonts.

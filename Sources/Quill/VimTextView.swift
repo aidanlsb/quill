@@ -871,6 +871,13 @@ final class VimTextView: NSTextView {
         return (storage.attribute(.font, at: probe, effectiveRange: nil) as? NSFont) ?? fallback
     }
 
+    private func paragraphStyle(atUTF16 index: Int) -> NSParagraphStyle {
+        let fallback = defaultParagraphStyle ?? NSParagraphStyle.default
+        guard let storage = textStorage, storage.length > 0 else { return fallback }
+        let probe = min(max(0, index), storage.length - 1)
+        return (storage.attribute(.paragraphStyle, at: probe, effectiveRange: nil) as? NSParagraphStyle) ?? fallback
+    }
+
     private func glyphAdvance(atUTF16 index: Int, font: NSFont) -> CGFloat {
         let ns = string as NSString
         if index < ns.length {
@@ -923,22 +930,50 @@ final class VimTextView: NSTextView {
         if fragmentStart == NSNotFound { return nil }
         let local = clamped - fragmentStart
         let lines = fragment.textLineFragments
+        let container = textContainerOrigin
+        let fragmentFrame = fragment.layoutFragmentFrame
         // A trailing newline grows an extra line fragment with an empty range.
-        // The caret past the document sits on that line, not on the previous glyph.
-        let line: NSTextLineFragment?
-        if clamped >= length, let extra = lines.last, extra.characterRange.length == 0 {
-            line = extra
-        } else {
-            line = lines.first { candidate in
-                let span = candidate.characterRange
-                return local >= span.location && local < span.location + max(span.length, 1)
-            } ?? lines.last
+        // Its typographic bounds are wrong (FB15131180): the origin is too high and
+        // the height drops the paragraph's line spacing, so the em box lands on the
+        // fragment top. Place it from the previous line's bottom instead.
+        if clamped >= length, lines.last?.characterRange.length == 0 {
+            let content = lines.dropLast().last
+            let lineTop: CGFloat
+            let lineMinX: CGFloat
+            if let content {
+                let bounds = content.typographicBounds
+                lineTop = container.y + fragmentFrame.minY + bounds.maxY
+                lineMinX = container.x + fragmentFrame.minX + bounds.minX
+            } else {
+                lineTop = container.y + fragmentFrame.minY
+                lineMinX = container.x + fragmentFrame.minX
+            }
+            let caretFont = font(atUTF16: clamped)
+            let style = paragraphStyle(atUTF16: max(0, length - 1))
+            let baseline = CaretGeometry.extraLineBaseline(
+                previousLineMaxY: Double(lineTop),
+                ascender: Double(caretFont.ascender),
+                descender: Double(caretFont.descender),
+                leading: Double(caretFont.leading),
+                lineHeightMultiple: Double(style.lineHeightMultiple),
+                lineSpacing: Double(style.lineSpacing),
+                minimumLineHeight: Double(style.minimumLineHeight),
+                maximumLineHeight: Double(style.maximumLineHeight)
+            )
+            return LineMetrics(
+                originX: lineMinX,
+                baselineY: CGFloat(baseline),
+                lineMinX: lineMinX,
+                lineWidth: 0
+            )
         }
+        let line = lines.first { candidate in
+            let span = candidate.characterRange
+            return local >= span.location && local < span.location + max(span.length, 1)
+        } ?? lines.last
         guard let line else { return nil }
         let charIndex = max(0, local - line.characterRange.location)
         let point = line.locationForCharacter(at: min(charIndex, max(0, line.characterRange.length)))
-        let container = textContainerOrigin
-        let fragmentFrame = fragment.layoutFragmentFrame
         let lineBounds = line.typographicBounds
         return LineMetrics(
             originX: container.x + fragmentFrame.minX + lineBounds.minX + point.x,

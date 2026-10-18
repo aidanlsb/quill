@@ -51,6 +51,39 @@ final class CaretTests: XCTestCase {
         XCTAssertEqual(beam.y, heading.y)
     }
 
+    func testExtraLineBaselineIsNotTheFragmentTop() {
+        let ascender = 19.3359375
+        let descender = -4.3359375
+        let previousBottom = 138.6
+        let baseline = CaretGeometry.extraLineBaseline(
+            previousLineMaxY: previousBottom,
+            ascender: ascender,
+            descender: descender,
+            leading: 0,
+            lineHeightMultiple: 1.65
+        )
+        let caretTop = baseline - ascender
+        let lineHeight = CaretGeometry.lineFragmentHeight(
+            ascender: ascender,
+            descender: descender,
+            leading: 0,
+            lineHeightMultiple: 1.65
+        )
+        XCTAssertEqual(caretTop, previousBottom + lineHeight - (ascender - descender), accuracy: 0.001)
+        // The broken extra-line fragment reports a caret whose top is the previous line's bottom.
+        XCTAssertGreaterThan(caretTop - previousBottom, 2.5)
+        XCTAssertEqual(
+            CaretGeometry.lineFragmentHeight(
+                ascender: 30.9375,
+                descender: -6.9375,
+                leading: 0,
+                lineHeightMultiple: 1.65
+            ),
+            62.7,
+            accuracy: 0.001
+        )
+    }
+
     func testLineFragmentDoesNotFitTheEmBox() {
         let em = 20.0
         let glyph = CaretBox(x: 0, y: 30, width: 240, height: em)

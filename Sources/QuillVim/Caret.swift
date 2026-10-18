@@ -108,6 +108,54 @@ public enum CaretGeometry {
         return nil
     }
 
+    /// Height of one laid-out line. TextKit ceils the font's natural line height,
+    /// then applies the paragraph's line-height multiple. A multiple of 0 means 1.
+    public static func lineFragmentHeight(
+        ascender: Double,
+        descender: Double,
+        leading: Double,
+        lineHeightMultiple: Double,
+        lineSpacing: Double = 0,
+        minimumLineHeight: Double = 0,
+        maximumLineHeight: Double = 0
+    ) -> Double {
+        var height = (ascender - descender + leading).rounded(.up)
+        if height < 1 { height = 1 }
+        if minimumLineHeight > 0 { height = max(height, minimumLineHeight) }
+        if maximumLineHeight > 0 { height = min(height, maximumLineHeight) }
+        let multiple = lineHeightMultiple > 0 ? lineHeightMultiple : 1
+        return height * multiple + lineSpacing
+    }
+
+    /// Baseline of the empty line TextKit adds after a trailing newline.
+    /// `previousLineMaxY` is the bottom of the last real line, in the same
+    /// coordinate space as the returned baseline. The extra line fragment's own
+    /// bounds are wrong (`FB15131180`): its origin sits too high and its height
+    /// ignores the paragraph's line spacing, which parks the em box on the
+    /// fragment top. The em box hangs from the bottom of the line, same as every
+    /// other line, so the extra leading stays above the glyphs.
+    public static func extraLineBaseline(
+        previousLineMaxY: Double,
+        ascender: Double,
+        descender: Double,
+        leading: Double = 0,
+        lineHeightMultiple: Double = 1,
+        lineSpacing: Double = 0,
+        minimumLineHeight: Double = 0,
+        maximumLineHeight: Double = 0
+    ) -> Double {
+        let lineHeight = lineFragmentHeight(
+            ascender: ascender,
+            descender: descender,
+            leading: leading,
+            lineHeightMultiple: lineHeightMultiple,
+            lineSpacing: lineSpacing,
+            minimumLineHeight: minimumLineHeight,
+            maximumLineHeight: maximumLineHeight
+        )
+        return previousLineMaxY + lineHeight + descender
+    }
+
     public static func heightFitsEm(caretHeight: Double, emHeight: Double) -> Bool {
         let em = max(emHeight, 0.1)
         return caretHeight <= em * glyphHeightMultiple + 0.75

@@ -561,7 +561,7 @@ enum AppSmoke {
             failures: &failures
         )
         check(abs(glyphs.height - em) < 1.5, "\(label) glyph bounds height \(glyphs.height) expected em \(em)", failures: &failures)
-        if let baseline = segmentBaseline(tv, utf16: utf16) {
+        if let baseline = segmentBaseline(tv, utf16: utf16, font: font) {
             let top = baseline.y - font.ascender
             let bottom = baseline.y - font.descender
             check(
@@ -580,12 +580,14 @@ enum AppSmoke {
     }
 
     /// Baseline in text-view coordinates from `enumerateTextSegments`, independent of
-    /// the line-fragment math the caret view uses.
+    /// the line-fragment math the caret view uses. Past a trailing newline, the last
+    /// character's segment is the previous line; the caret belongs on the next one.
     @MainActor
-    private static func segmentBaseline(_ tv: VimTextView, utf16: Int) -> (y: CGFloat, detail: String)? {
+    private static func segmentBaseline(_ tv: VimTextView, utf16: Int, font: NSFont) -> (y: CGFloat, detail: String)? {
         guard let lm = tv.textLayoutManager else { return nil }
         lm.ensureLayout(for: lm.documentRange)
-        let length = (tv.string as NSString).length
+        let ns = tv.string as NSString
+        let length = ns.length
         let index = min(max(0, utf16), length)
         let doc = lm.documentRange.location
         let probe = index < length ? index : max(0, length - 1)
@@ -606,13 +608,32 @@ enum AppSmoke {
             return false
         }
         guard found else { return nil }
+        let origin = tv.textContainerOrigin
+        let detail = "segment \(frame) position \(position) origin \(origin)"
+        let trailingNewline = index >= length && (ns.character(at: length - 1) == 10 || ns.character(at: length - 1) == 13)
+        if trailingNewline {
+            let style = (tv.textStorage?.attribute(
+                .paragraphStyle,
+                at: length - 1,
+                effectiveRange: nil
+            ) as? NSParagraphStyle) ?? tv.defaultParagraphStyle ?? NSParagraphStyle.default
+            let baseline = CaretGeometry.extraLineBaseline(
+                previousLineMaxY: Double(frame.maxY),
+                ascender: Double(font.ascender),
+                descender: Double(font.descender),
+                leading: Double(font.leading),
+                lineHeightMultiple: Double(style.lineHeightMultiple),
+                lineSpacing: Double(style.lineSpacing),
+                minimumLineHeight: Double(style.minimumLineHeight),
+                maximumLineHeight: Double(style.maximumLineHeight)
+            )
+            return (origin.y + CGFloat(baseline), detail)
+        }
         guard let baseline = CaretGeometry.resolvedBaseline(
             segmentMinY: Double(frame.minY),
             segmentHeight: Double(max(frame.height, 0.1)),
             baselinePosition: Double(position)
         ) else { return nil }
-        let origin = tv.textContainerOrigin
-        let detail = "segment \(frame) position \(position) origin \(origin)"
         return (origin.y + CGFloat(baseline), detail)
     }
 
