@@ -930,7 +930,9 @@ enum AppSmoke {
         let deadline = Date().addingTimeInterval(seconds)
         if ready() { return true }
         while Date() < deadline {
-            RunLoop.main.run(mode: .common, before: Date().addingTimeInterval(0.02))
+            // `.default` runs the main-actor task that opens the picker.
+            // `.common` returns immediately and that task never starts.
+            RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.05))
             if ready() { return true }
         }
         return ready()
