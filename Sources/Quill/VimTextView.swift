@@ -316,6 +316,10 @@ final class VimTextView: NSTextView {
     fileprivate var appliedFocus = false
     private var mouseAnchor: Int?
     private let caretChrome = CaretChrome(frame: .zero)
+    /// TextKit's link back to the content manager is weak. Without this the
+    /// viewport storage is released at the end of `make()` and the view falls
+    /// back to a stock content storage, or crashes on the dangling edit.
+    private var ownsViewportContent: ViewportContentStorage?
     private var placingCaret = false
     private var orderingCaret = false
 
@@ -344,16 +348,20 @@ final class VimTextView: NSTextView {
         isVerticallyResizable = true
         isHorizontallyResizable = false
         autoresizingMask = [.width]
-        installViewportContent()
     }
 
-    /// Swap in a content storage that does not allocate a paragraph object per line.
-    private func installViewportContent() {
-        guard let layoutManager = textLayoutManager else { return }
-        if layoutManager.textContentManager is ViewportContentStorage { return }
-        let storage = (layoutManager.textContentManager as? NSTextContentStorage)?.textStorage ?? textStorage
-        let viewport = ViewportContentStorage()
-        viewport.adopt(storage: storage, layoutManager: layoutManager)
+    /// TextKit 2 view whose content storage does not build a paragraph per line.
+    /// Replacing the storage on a view `usingTextLayoutManager` already created
+    /// segfaults during launch, so the stack is assembled before `NSTextView` init.
+    static func make(frame: NSRect = .zero) -> VimTextView {
+        let container = NSTextContainer(size: NSSize(width: max(frame.width, 1), height: CGFloat.greatestFiniteMagnitude))
+        let layout = NSTextLayoutManager()
+        layout.textContainer = container
+        let content = ViewportContentStorage()
+        content.attach(NSTextStorage(), layoutManager: layout)
+        let view = VimTextView(frame: frame, textContainer: container)
+        view.ownsViewportContent = content
+        return view
     }
 
     func applyTheme(_ theme: QuillTheme, focus: Bool) {
@@ -1291,7 +1299,7 @@ struct EditorView: NSViewRepresentable {
         scroll.borderType = .noBorder
         scroll.drawsBackground = false
         scroll.autohidesScrollers = true
-        let tv = VimTextView(usingTextLayoutManager: true)
+        let tv = VimTextView.make()
         tv.commonInit()
         tv.engine = model.engine
         tv.layoutAdapter.textView = tv

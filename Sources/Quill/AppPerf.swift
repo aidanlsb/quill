@@ -112,6 +112,8 @@ enum AppPerf {
 
         let session = host(edited)
         let view = session.view
+        let usesViewport = view.textLayoutManager?.textContentManager is ViewportContentStorage
+        emit("viewportStorage", usesViewport ? 1 : 0)
         let sync = millis {
             view.syncFromEngine()
         }
@@ -150,7 +152,7 @@ enum AppPerf {
     private static func host(_ text: String) -> (view: VimTextView, window: NSWindow) {
         let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
         scroll.hasVerticalScroller = true
-        let tv = VimTextView(usingTextLayoutManager: true)
+        let tv = VimTextView.make()
         tv.commonInit()
         let engine = Engine(text: text)
         tv.engine = engine

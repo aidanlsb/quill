@@ -263,7 +263,7 @@ enum AppSmoke {
         let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 640, height: 400))
         scroll.hasVerticalScroller = true
         scroll.drawsBackground = false
-        let tv = VimTextView(usingTextLayoutManager: true)
+        let tv = VimTextView.make()
         tv.commonInit()
         let engine = Engine(text: "")
         tv.engine = engine
@@ -775,7 +775,7 @@ enum AppSmoke {
 
         let proseScroll = NSScrollView(frame: scroll.frame)
         proseScroll.hasVerticalScroller = false
-        let proseView = VimTextView(usingTextLayoutManager: true)
+        let proseView = VimTextView.make()
         proseView.commonInit()
         proseView.engine = Engine(text: "Hello\n")
         proseView.isDirectoryBuffer = false
@@ -825,7 +825,7 @@ enum AppSmoke {
 
         let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 800, height: 480))
         scroll.hasVerticalScroller = false
-        let tv = VimTextView(usingTextLayoutManager: true)
+        let tv = VimTextView.make()
         tv.commonInit()
         tv.engine = model.engine
         model.engine.layout = tv.layoutAdapter

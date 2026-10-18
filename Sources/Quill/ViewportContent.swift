@@ -8,20 +8,12 @@ final class ViewportContentStorage: NSTextContentStorage {
     private var lineStarts: [Int] = [0]
     private var indexedLength = 0
 
-    func adopt(storage: NSTextStorage?, layoutManager: NSTextLayoutManager?) {
-        var backing = storage
-        if let layoutManager, let previous = layoutManager.textContentManager as? NSTextContentStorage, previous !== self {
-            backing = previous.textStorage ?? backing
-            // One text storage can feed only one content storage. Drop the stock
-            // one before this instance takes the same backing store.
-            previous.textStorage = nil
-            previous.removeTextLayoutManager(layoutManager)
-        }
-        textStorage = backing
-        if let layoutManager, !textLayoutManagers.contains(where: { $0 === layoutManager }) {
-            addTextLayoutManager(layoutManager)
-        }
-        backing?.textStorageObserver = self
+    /// Wire an empty backing store before the text view exists. Tearing a live
+    /// text view's content storage out from under it crashes at launch.
+    func attach(_ storage: NSTextStorage, layoutManager: NSTextLayoutManager) {
+        textStorage = storage
+        addTextLayoutManager(layoutManager)
+        storage.textStorageObserver = self
         rebuildLineStarts()
     }
 
@@ -30,26 +22,37 @@ final class ViewportContentStorage: NSTextContentStorage {
         options: NSTextContentManager.EnumerationOptions = [],
         using block: (NSTextElement) -> Bool
     ) -> NSTextLocation? {
-        guard let storage = textStorage else {
+        guard textStorage != nil else {
             return super.enumerateTextElements(from: textLocation, options: options, using: block)
         }
         ensureIndex()
-        let length = storage.length
+        let length = textStorage?.length ?? 0
         if length == 0 || lineStarts.isEmpty {
-            let paragraph = NSTextParagraph(attributedString: NSAttributedString())
-            paragraph.textContentManager = self
-            paragraph.elementRange = documentRange
+            guard let paragraph = emptyParagraph() else { return nil }
             _ = block(paragraph)
             return documentRange.endLocation
         }
         let reverse = options.contains(.reverse)
-        let origin = locationOffset(textLocation)
-        var line = lineIndex(containing: min(max(0, origin), max(0, length - 1)))
-        if reverse { line -= 1 }
+        var line: Int
+        if reverse {
+            if textLocation == nil {
+                line = lineStarts.count - 1
+            } else {
+                let origin = locationOffset(textLocation)
+                if origin >= length {
+                    line = lineStarts.count - 1
+                } else {
+                    line = lineIndex(containing: max(0, origin)) - 1
+                }
+            }
+        } else {
+            let origin = locationOffset(textLocation)
+            line = lineIndex(containing: min(max(0, origin), length - 1))
+        }
         var edge: NSTextLocation?
         while lineStarts.indices.contains(line) {
             guard let paragraph = paragraph(at: line, length: length) else { break }
-            edge = paragraph.elementRange?.endLocation
+            edge = reverse ? paragraph.elementRange?.location : paragraph.elementRange?.endLocation
             if block(paragraph) == false { break }
             line += reverse ? -1 : 1
         }
@@ -64,9 +67,11 @@ final class ViewportContentStorage: NSTextContentStorage {
         invalidatedRange invalidatedCharRange: NSRange
     ) {
         // The superclass shifts every paragraph object past the edit. Record
-        // the line-start delta and let the next layout pass rebuild the one
-        // paragraph it displays.
-        if delta < 0 || rangeContainsNewline(newCharRange, storage: textStorage) {
+        // the line-start delta and invalidate from this line downward so the
+        // next layout pass builds only the paragraph it displays.
+        let length = textStorage.length
+        let previous = length - delta
+        if indexedLength != previous || delta < 0 || rangeContainsNewline(newCharRange, storage: textStorage) {
             rebuildLineStarts()
         } else if delta > 0 {
             let location = newCharRange.location
@@ -75,14 +80,26 @@ final class ViewportContentStorage: NSTextContentStorage {
             }
             indexedLength += delta
         }
+        guard !invalidating else { return }
         guard let layout = textLayoutManagers.first ?? primaryTextLayoutManager else { return }
-        let end = min(textStorage.length, newCharRange.location + newCharRange.length)
-        guard let start = self.location(documentRange.location, offsetBy: newCharRange.location),
-              let textRange = NSTextRange(location: start, end: location(at: end)) else { return }
+        let startOffset: Int
+        if length == 0 || lineStarts.isEmpty {
+            startOffset = 0
+        } else {
+            let probe = min(max(0, newCharRange.location), length - 1)
+            startOffset = lineStarts[lineIndex(containing: probe)]
+        }
+        let endOffset = delta == 0 ? min(length, max(startOffset, NSMaxRange(newCharRange))) : length
+        guard let start = self.location(documentRange.location, offsetBy: startOffset),
+              let textRange = NSTextRange(location: start, end: location(at: endOffset)) else { return }
+        invalidating = true
         layout.invalidateLayout(for: textRange)
+        invalidating = false
         _ = editMask
         _ = invalidatedCharRange
     }
+
+    private var invalidating = false
 
     private func ensureIndex() {
         let length = textStorage?.length ?? 0
@@ -115,8 +132,8 @@ final class ViewportContentStorage: NSTextContentStorage {
     private func rangeContainsNewline(_ range: NSRange, storage: NSTextStorage) -> Bool {
         guard range.length > 0, NSMaxRange(range) <= storage.length else { return false }
         let ns = storage.string as NSString
-        let slice = ns.substring(with: range)
-        return slice.contains("\n") || slice.contains("\r")
+        let found = ns.rangeOfCharacter(from: .newlines, options: [], range: range)
+        return found.location != NSNotFound
     }
 
     /// `location(_:offsetBy:)` is nil past the document. The end location is not optional.
@@ -142,6 +159,13 @@ final class ViewportContentStorage: NSTextContentStorage {
             }
         }
         return low
+    }
+
+    private func emptyParagraph() -> NSTextParagraph? {
+        let paragraph = NSTextParagraph(attributedString: NSAttributedString())
+        paragraph.textContentManager = self
+        paragraph.elementRange = documentRange
+        return paragraph
     }
 
     private func paragraph(at line: Int, length: Int) -> NSTextParagraph? {
