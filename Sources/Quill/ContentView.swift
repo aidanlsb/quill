@@ -6,10 +6,14 @@ import QuillWorkspace
 struct ContentView: View {
     @Bindable var model: AppModel
 
+    private var editorBackground: NSColor {
+        model.isDirectory ? model.theme.directoryBackgroundColor : model.theme.backgroundColor
+    }
+
     var body: some View {
         ZStack {
             EditorView(model: model, revision: model.revision)
-                .background(Color(model.theme.backgroundColor))
+                .background(Color(editorBackground))
             if model.picker != nil {
                 PickerPanel(model: model)
             }
@@ -71,9 +75,9 @@ struct StatusBar: View {
         }
         .font(.system(size: 11, design: .monospaced))
         .foregroundStyle(Color(model.theme.dimColor))
-        .padding(.horizontal, QuillMetrics.sideGutter)
+        .padding(.horizontal, model.isDirectory ? QuillMetrics.directoryIconLeading : QuillMetrics.sideGutter)
         .padding(.vertical, 10)
-        .background(Color(model.theme.backgroundColor))
+        .background(Color(model.isDirectory ? model.theme.directoryBackgroundColor : model.theme.backgroundColor))
     }
 }
 
