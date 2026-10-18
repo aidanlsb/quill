@@ -352,8 +352,8 @@ final class VimTextView: NSTextView {
     }
 
     /// TextKit 2 view. The content storage is swapped in `commonInit` via
-    /// `replaceTextContentManager`, after `isRichText` has settled. Nilling the
-    /// live storage, or building the stack and passing it to `init(frame:textContainer:)`,
+    /// `replace(_:)`, after `isRichText` has settled. Nilling the live storage,
+    /// or building the stack and passing it to `init(frame:textContainer:)`,
     /// both segfaulted during launch.
     static func make(frame: NSRect = .zero) -> VimTextView {
         let view = VimTextView(usingTextLayoutManager: true)
@@ -375,7 +375,7 @@ final class VimTextView: NSTextView {
         let existing = (layout.textContentManager as? NSTextContentStorage)?.textStorage?.string ?? ""
         content.prime(NSTextStorage(string: existing))
         boot("install-primed")
-        layout.replaceTextContentManager(content)
+        layout.replace(content)
         boot("install-replaced")
         if !content.textLayoutManagers.contains(where: { $0 === layout }) {
             boot("install-relink")
