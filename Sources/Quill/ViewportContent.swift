@@ -253,18 +253,6 @@ final class ViewportContentStorage: NSTextContentStorage {
         let paragraph = NSTextParagraph(attributedString: text)
         paragraph.textContentManager = self
         paragraph.elementRange = elementRange
-        if end > start {
-            let ns = storage.string as NSString
-            let last = end - 1
-            if last < ns.length {
-                let ch = ns.character(at: last)
-                if ch == 10 || ch == 13,
-                   let sepStart = self.location(elementRange.location, offsetBy: end - start - 1),
-                   let separator = NSTextRange(location: sepStart, end: elementRange.endLocation) {
-                    paragraph.paragraphSeparatorRange = separator
-                }
-            }
-        }
         return paragraph
     }
 }
