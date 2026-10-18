@@ -76,13 +76,18 @@ final class AppModel {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.theme = QuillTheme.current(
+                    fontFamily: self.config.font,
                     fontSize: self.config.fontSize,
                     columnCharacters: self.config.columnWidth
                 )
                 self.themeIdentity += 1
             }
         }
-        theme = QuillTheme.current(fontSize: config.fontSize, columnCharacters: config.columnWidth)
+        theme = QuillTheme.current(
+            fontFamily: config.font,
+            fontSize: config.fontSize,
+            columnCharacters: config.columnWidth
+        )
     }
 
     var modeName: String { engine.mode.displayName }

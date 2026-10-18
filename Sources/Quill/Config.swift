@@ -10,6 +10,8 @@ struct QuillConfig: Equatable {
     var lsp: LSPSettings
     var columnWidth: Int
     var fontSize: Double
+    /// Family name for the body. Empty, or a family that is not installed, uses the system font.
+    var font: String
     var shiftWidth: Int
 
     static let `default` = QuillConfig(
@@ -19,6 +21,7 @@ struct QuillConfig: Equatable {
         lsp: LSPSettings(servers: []),
         columnWidth: QuillMetrics.defaultColumn,
         fontSize: QuillMetrics.defaultFontSize,
+        font: "",
         shiftWidth: 2
     )
 
@@ -36,13 +39,16 @@ struct QuillConfig: Equatable {
         for url in urls where FileManager.default.fileExists(atPath: url.path) {
             do {
                 let data = try Data(contentsOf: url)
-                let decoded = try JSONDecoder().decode(Stored.self, from: data)
-                return (decoded.config, nil)
+                return (try decode(data), nil)
             } catch {
                 return (.default, "config: \(error.localizedDescription)")
             }
         }
         return (.default, nil)
+    }
+
+    static func decode(_ data: Data) throws -> QuillConfig {
+        try JSONDecoder().decode(Stored.self, from: data).config
     }
 
     private struct Stored: Decodable {
@@ -55,6 +61,8 @@ struct QuillConfig: Equatable {
             let lsp = try c.decodeIfPresent(LSPSettings.self, forKey: .lsp) ?? QuillConfig.default.lsp
             let column = try c.decodeIfPresent(Int.self, forKey: .columnWidth) ?? QuillConfig.default.columnWidth
             let fontSize = QuillMetrics.fontSize(try c.decodeIfPresent(Double.self, forKey: .fontSize))
+            let font = (try c.decodeIfPresent(String.self, forKey: .font) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             let shift = try c.decodeIfPresent(Int.self, forKey: .shiftWidth) ?? QuillConfig.default.shiftWidth
             config = QuillConfig(
                 leader: leader,
@@ -63,12 +71,13 @@ struct QuillConfig: Equatable {
                 lsp: lsp,
                 columnWidth: column,
                 fontSize: fontSize,
+                font: font,
                 shiftWidth: shift
             )
         }
 
         enum CodingKeys: String, CodingKey {
-            case leader, leaderMaps, shellCommands, lsp, columnWidth, fontSize, shiftWidth
+            case leader, leaderMaps, shellCommands, lsp, columnWidth, fontSize, font, shiftWidth
         }
     }
 

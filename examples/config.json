@@ -9,6 +9,7 @@
   },
   "columnWidth": 70,
   "fontSize": 16,
+  "font": "",
   "shiftWidth": 2,
   "lsp": {
     "servers": [

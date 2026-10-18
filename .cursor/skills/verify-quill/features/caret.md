@@ -7,7 +7,7 @@ The normal-mode cursor is one character cell of the font on that glyph. Insert m
 - `caret-body` draws a block whose width is one body glyph and whose height is the body em box, not the line fragment.
 - `caret-heading` uses the heading font's advance and em box.
 - `caret-beam` draws a one-point beam in insert mode.
-- `type-scale` uses a 16pt body, heading sizes at 1.5 / 1.3 / 1.15 / 1.05 / 1.0 / 1.0 times that body, and a 1.5 line height. The default config column is 70. Side and vertical insets stay at least 120pt, and a narrow window still keeps the column inside those gutters.
+- `type-scale` uses a 16pt system body, semibold system headings at 1.5 / 1.3 / 1.15 / 1.05 / 1.0 / 1.0 times that body, SF Mono for code, and a 1.5 line height. Config `font` names a family and falls back to the system font when it is blank or missing. The default config column is 70. Side and vertical insets stay at least 120pt, and a narrow window still keeps the column inside those gutters.
 
 ## How to get to it (user POV)
 
@@ -23,7 +23,7 @@ Preconditions:
 - No other smoke is using that same log path. Each run overwrites `artifacts/verify-quill/smoke.log`.
 
 - **Run the smoke.** Run `Scripts/verify-quill --bin "$bin"`. The process exits 0.
-- **Read the caret result.** Open `artifacts/verify-quill/smoke.log`. It contains `quill smoke passed`. It does not contain `body block`, `heading block`, `heading caret`, `insert beam`, `default body font`, `heading scale`, `line height`, or `side gutter`.
+- **Read the caret result.** Open `artifacts/verify-quill/smoke.log`. It contains `quill smoke passed`. It does not contain `body block`, `heading block`, `heading caret`, `insert beam`, `default body font`, `heading scale`, `heading weight`, `mono font`, `font fallback`, `line height`, or `side gutter`.
 - **Proof.** The log file is still at `artifacts/verify-quill/smoke.log` after the process exits.
 
 ## Gotchas

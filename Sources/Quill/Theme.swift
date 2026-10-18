@@ -26,6 +26,26 @@ enum QuillMetrics {
         guard let raw, raw >= 10, raw <= 32 else { return defaultFontSize }
         return raw
     }
+
+    /// Blank, missing, or not installed: the macOS system font. `family` is a family name, not a file.
+    @MainActor
+    static func bodyFont(family: String, size: CGFloat) -> NSFont {
+        let name = family.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !name.isEmpty,
+           let match = NSFontManager.shared.font(withFamily: name, traits: [], weight: 5, size: size) {
+            return match
+        }
+        return NSFont.systemFont(ofSize: size)
+    }
+
+    /// SF Mono when the family is installed, otherwise the system monospaced font (also SF Mono on macOS).
+    @MainActor
+    static func monoFont(ofSize size: CGFloat) -> NSFont {
+        if let match = NSFontManager.shared.font(withFamily: "SF Mono", traits: [], weight: 5, size: size) {
+            return match
+        }
+        return NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+    }
 }
 
 struct QuillTheme {
@@ -44,17 +64,17 @@ struct QuillTheme {
 
     @MainActor
     static func current(
+        fontFamily: String = "",
         fontSize: Double = QuillMetrics.defaultFontSize,
         columnCharacters: Int = QuillMetrics.defaultColumn
     ) -> QuillTheme {
         let appearance = NSApp?.effectiveAppearance ?? NSAppearance.currentDrawing()
         let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let size = CGFloat(QuillMetrics.fontSize(fontSize))
-        let body = NSFont.systemFont(ofSize: size)
-        let mono = NSFont.monospacedSystemFont(ofSize: size * QuillMetrics.monoScale, weight: .regular)
-        let headings = QuillMetrics.headingScale.enumerated().map { index, scale in
-            let weight: NSFont.Weight = index < 2 ? .semibold : .medium
-            return NSFont.systemFont(ofSize: size * scale, weight: weight)
+        let body = QuillMetrics.bodyFont(family: fontFamily, size: size)
+        let mono = QuillMetrics.monoFont(ofSize: size * QuillMetrics.monoScale)
+        let headings = QuillMetrics.headingScale.map { scale in
+            NSFont.systemFont(ofSize: size * scale, weight: .semibold)
         }
         let text = dark ? NSColor(calibratedWhite: 0.86, alpha: 1) : NSColor(calibratedWhite: 0.22, alpha: 1)
         let sample = "abcdefghijklmnopqrstuvwxyz" as NSString
@@ -161,6 +181,11 @@ enum MarkdownStyler {
     private static func apply(_ token: MarkdownToken, range: NSRange, theme: QuillTheme, storage: NSTextStorage, dimmed: Bool) {
         if dimmed {
             storage.addAttribute(.foregroundColor, value: theme.dimColor, range: range)
+            return
+        }
+        if token == .frontmatter {
+            storage.addAttribute(.font, value: theme.monoFont, range: range)
+            storage.addAttribute(.foregroundColor, value: theme.syntaxColor, range: range)
             return
         }
         switch MarkdownThemeMap.style(for: token) {

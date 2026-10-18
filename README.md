@@ -55,7 +55,7 @@ The `quill` script resolves `/Applications/Quill.app` (or a local `dist/Quill.ap
 
 ## Writing feel
 
-- System body at 16pt (config `fontSize`, 10–32) with 1.5 line height
+- Sans-serif body: the system font at 16pt (`fontSize` 10–32, `font` a family name; blank or missing uses the system font). Headings are semibold system at 1.5 / 1.3 / 1.15 / 1.05 / 1.0 / 1.0. Code and frontmatter are SF Mono. Line height is 1.5
 - Centered ~70-character column (`columnWidth`), with at least 128pt between the text and the window edge
 - Live markdown styling in the buffer (headings, emphasis, code, lists, checkboxes, `[[wikilinks]]`, dimmed syntax) without rewriting the file
 - Light and dark follow the system
@@ -147,6 +147,7 @@ Example `~/.config/quill/config.json` (also under `examples/config.json`):
   "shellCommands": { "d": "rvn daily" },
   "columnWidth": 70,
   "fontSize": 16,
+  "font": "",
   "shiftWidth": 2,
   "lsp": {
     "servers": [
