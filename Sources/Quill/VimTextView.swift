@@ -120,9 +120,10 @@ final class TextKit2Layout: TextLayout, @unchecked Sendable {
         return min(line.start, end)..<end
     }
 
-    /// The visual row containing `utf16`. TextKit lays out that fragment on
-    /// demand; this does not walk the rest of the document.
+    /// The visual row containing `utf16`. Layout is ensured only through this
+    /// offset, so `j` can step past the viewport without laying out the file.
     private func visualLine(at utf16: Int, layout lm: NSTextLayoutManager) -> VisualLine? {
+        ensureLayout(at: utf16, layout: lm)
         let doc = lm.documentRange.location
         guard let location = lm.location(doc, offsetBy: utf16),
               let fragment = lm.textLayoutFragment(for: location) else { return nil }
@@ -160,6 +161,30 @@ final class TextKit2Layout: TextLayout, @unchecked Sendable {
             ))
         }
         return rows
+    }
+
+    /// Lays out only the fragment that contains `utf16`. `textLayoutFragment(for:)`
+    /// returns the last fragment already built, so after a short note is replaced
+    /// `j` stays on that last row. `.ensuresLayout` is what extends past it;
+    /// `ensureLayout(for:)` on a one-character range does not.
+    private func ensureLayout(at utf16: Int, layout lm: NSTextLayoutManager) {
+        let doc = lm.documentRange
+        let length = lm.offset(from: doc.location, to: doc.endLocation)
+        guard length != NSNotFound, length > 0 else { return }
+        let clamped = min(max(0, utf16), length - 1)
+        guard let start = lm.location(doc.location, offsetBy: clamped) else { return }
+        var covered = false
+        lm.enumerateTextLayoutFragments(from: start, options: [.ensuresLayout]) { fragment in
+            let end = lm.offset(from: doc.location, to: fragment.rangeInElement.endLocation)
+            covered = end != NSNotFound && end > clamped
+            return false
+        }
+        if covered { return }
+        lm.enumerateTextLayoutFragments(from: doc.location, options: [.ensuresLayout]) { fragment in
+            let end = lm.offset(from: doc.location, to: fragment.rangeInElement.endLocation)
+            if end == NSNotFound { return false }
+            return end <= clamped
+        }
     }
 
     private func logicalRange(at offset: Int, in buffer: TextBuffer) -> Range<Int> {
