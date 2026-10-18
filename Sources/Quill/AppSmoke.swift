@@ -15,6 +15,7 @@ enum AppSmoke {
         started = true
         _ = model
         var failures: [String] = []
+        checkDefaultType(failures: &failures)
         checkCaretAndScroll(failures: &failures)
         checkDirectory(failures: &failures)
         if failures.isEmpty {
@@ -30,6 +31,88 @@ enum AppSmoke {
     @MainActor
     private static func check(_ condition: Bool, _ message: String, failures: inout [String]) {
         if !condition { failures.append(message) }
+    }
+
+    @MainActor
+    private static func checkDefaultType(failures: inout [String]) {
+        let theme = QuillTheme.current()
+        let body = theme.bodyFont.pointSize
+        check(abs(body - QuillMetrics.defaultFontSize) < 0.2, "default body font \(body)", failures: &failures)
+        check(
+            theme.headingFonts.count == QuillMetrics.headingScale.count,
+            "heading scale count \(theme.headingFonts.count)",
+            failures: &failures
+        )
+        for (font, scale) in zip(theme.headingFonts, QuillMetrics.headingScale) {
+            let expected = CGFloat(QuillMetrics.defaultFontSize) * scale
+            check(
+                abs(font.pointSize - expected) < 0.6,
+                "heading scale \(font.pointSize) expected \(expected)",
+                failures: &failures
+            )
+        }
+        check(abs(theme.lineHeight - 1.5) < 0.01, "line height \(theme.lineHeight)", failures: &failures)
+        check(QuillConfig.default.fontSize == 16, "default body font config \(QuillConfig.default.fontSize)", failures: &failures)
+        check(QuillConfig.default.font.isEmpty, "default body font family set", failures: &failures)
+        let system = NSFont.systemFont(ofSize: CGFloat(QuillMetrics.defaultFontSize))
+        check(
+            theme.bodyFont.familyName == system.familyName,
+            "default body font family \(theme.bodyFont.familyName ?? "")",
+            failures: &failures
+        )
+        for font in theme.headingFonts {
+            let weight = fontWeight(font)
+            check(weight >= 0.28, "heading weight \(weight)", failures: &failures)
+            check(
+                font.familyName == system.familyName,
+                "heading family \(font.familyName ?? "")",
+                failures: &failures
+            )
+        }
+        let monoFamily = theme.monoFont.familyName ?? ""
+        let systemMono = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular).familyName ?? ""
+        check(theme.monoFont.isFixedPitch, "mono font \(monoFamily)", failures: &failures)
+        check(
+            monoFamily == "SF Mono" || monoFamily == systemMono,
+            "mono font \(monoFamily)",
+            failures: &failures
+        )
+        let missing = QuillTheme.current(fontFamily: "Not A Real Font")
+        check(
+            missing.bodyFont.familyName == system.familyName,
+            "font fallback \(missing.bodyFont.familyName ?? "")",
+            failures: &failures
+        )
+        let helvetica = QuillTheme.current(fontFamily: "Helvetica")
+        check(helvetica.bodyFont.familyName == "Helvetica", "font family \(helvetica.bodyFont.familyName ?? "")", failures: &failures)
+        if let decoded = try? QuillConfig.decode(Data(#"{"font":" Helvetica "}"#.utf8)) {
+            check(decoded.font == "Helvetica", "font config \(decoded.font)", failures: &failures)
+        } else {
+            failures.append("font config decode")
+        }
+        check(QuillConfig.default.columnWidth == 70, "column default \(QuillConfig.default.columnWidth)", failures: &failures)
+        check(QuillMetrics.fontSize(nil) == 16, "default body font missing", failures: &failures)
+        check(QuillMetrics.fontSize(9) == 16, "default body font low", failures: &failures)
+        check(QuillMetrics.fontSize(33) == 16, "default body font high", failures: &failures)
+        check(QuillMetrics.fontSize(18) == 18, "font size 18", failures: &failures)
+        check(QuillMetrics.sideGutter >= 120, "side gutter \(QuillMetrics.sideGutter)", failures: &failures)
+        check(QuillMetrics.verticalInset >= 120, "vertical inset \(QuillMetrics.verticalInset)", failures: &failures)
+        let tight = QuillMetrics.columnSpan(width: 700, column: 560)
+        check(tight.inset >= QuillMetrics.sideGutter, "side gutter \(tight.inset)", failures: &failures)
+        check(
+            tight.inset * 2 + tight.column <= 700.5,
+            "side gutter overflow \(tight.inset) \(tight.column)",
+            failures: &failures
+        )
+    }
+
+    @MainActor
+    private static func fontWeight(_ font: NSFont) -> CGFloat {
+        let traits = font.fontDescriptor.object(forKey: .traits) as? [NSFontDescriptor.TraitKey: Any]
+        if let number = traits?[.weight] as? NSNumber {
+            return CGFloat(truncating: number)
+        }
+        return 0
     }
 
     @MainActor

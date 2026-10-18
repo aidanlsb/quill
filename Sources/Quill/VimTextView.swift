@@ -195,7 +195,7 @@ final class VimTextView: NSTextView {
         isRichText = false
         allowsUndo = false
         isIncrementalSearchingEnabled = false
-        textContainer?.widthTracksTextView = true
+        textContainer?.widthTracksTextView = false
         textContainer?.heightTracksTextView = false
         textContainer?.lineFragmentPadding = 0
         minSize = NSSize(width: 0, height: 0)
@@ -211,7 +211,7 @@ final class VimTextView: NSTextView {
         backgroundColor = theme.backgroundColor
         insertionPointColor = theme.textColor
         selectedTextAttributes = [
-            .backgroundColor: theme.linkColor.withAlphaComponent(0.28),
+            .backgroundColor: theme.selectionColor,
             .foregroundColor: theme.textColor,
         ]
         defaultParagraphStyle = {
@@ -228,10 +228,10 @@ final class VimTextView: NSTextView {
     func updateInsets() {
         guard let clip = enclosingScrollView?.contentView else { return }
         let width = clip.bounds.width
-        let extra = focusMode ? 72 : 40
-        let inset = max(24, (width - columnWidth) / 2)
-        textContainerInset = NSSize(width: inset, height: CGFloat(extra))
-        textContainer?.size = NSSize(width: columnWidth, height: CGFloat.greatestFiniteMagnitude)
+        let vertical = focusMode ? QuillMetrics.focusVerticalInset : QuillMetrics.verticalInset
+        let span = QuillMetrics.columnSpan(width: width, column: columnWidth)
+        textContainerInset = NSSize(width: span.inset, height: vertical)
+        textContainer?.size = NSSize(width: span.column, height: CGFloat.greatestFiniteMagnitude)
     }
 
     func syncFromEngine() {
@@ -671,6 +671,7 @@ struct EditorView: NSViewRepresentable {
         let diagnostics = model.nsDiagnosticRanges()
         let diagnosticsChanged = tv.diagnosticRanges.map(\.0) != diagnostics.map(\.0)
         if diagnosticsChanged { tv.diagnosticRanges = diagnostics }
+        WindowChrome.apply(theme: model.theme)
         if tv.appliedThemeID != model.themeIdentity || tv.appliedFocus != model.focusMode {
             tv.applyTheme(model.theme, focus: model.focusMode)
             tv.appliedThemeID = model.themeIdentity

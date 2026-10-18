@@ -7,7 +7,9 @@
   "shellCommands": {
     "d": "rvn daily"
   },
-  "columnWidth": 76,
+  "columnWidth": 70,
+  "fontSize": 16,
+  "font": "",
   "shiftWidth": 2,
   "lsp": {
     "servers": [
