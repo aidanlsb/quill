@@ -371,8 +371,10 @@ enum AppSmoke {
         )
         _ = engine.type("gg")
         tv.syncFromEngine()
+        // The first line sits below the top margin, so the origin rests just above that line.
+        let top = max(40, tv.textContainerInset.height + 8)
         check(
-            scroll.contentView.bounds.origin.y < 40,
+            scroll.contentView.bounds.origin.y < top,
             "gg left the viewport (\(motionDiag(engine: engine, tv: tv, scroll: scroll)))",
             failures: &failures
         )
