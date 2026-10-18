@@ -1,13 +1,13 @@
 ---
 name: verify-quill
-description: "Drive the Quill macOS editor and prove the caret, scrolling, and directory buffer. Use when changing the app target, TextKit layout, vim key handling, or oil-style directories. The harness is QUILL_SMOKE via Scripts/verify-quill."
+description: "Drive the Quill macOS editor and prove the caret, scrolling, directory buffer, and picker prompt. Use when changing the app target, TextKit layout, vim key handling, oil-style directories, or the Telescope-style picker. The harness is QUILL_SMOKE via Scripts/verify-quill."
 ---
 
 # Verify Quill
 
 Quill is a native macOS markdown editor (SwiftUI + AppKit + TextKit 2). The user-facing surface is the app window and the `quill` launcher. Linux `swift test` does not compile the app and is not proof that the editor works.
 
-The harness is `Scripts/verify-quill`. It builds or accepts the release binary and runs it with `QUILL_SMOKE=1`. That process drives the caret, scrolling, and a real temporary directory, then exits. It is the same check the macOS CI job runs.
+The harness is `Scripts/verify-quill`. It builds or accepts the release binary and runs it with `QUILL_SMOKE=1`. That process drives the caret, scrolling, a real temporary directory, and the file and grep pickers, then exits. It is the same check the macOS CI job runs.
 
 ## Launch
 
@@ -46,7 +46,7 @@ A five-second launch without `QUILL_SMOKE` is a separate check already in `.gith
 
 ## Drive
 
-`Scripts/verify-quill` sets `QUILL_SMOKE=1` and runs the binary in the foreground. The smoke builds the same `KeyEvent` values `VimTextView.keyDown` builds and calls `engine.handle`. It does not post OS keyboard events. It does measure the real `NSTextView` caret cell, the clip-view origin, and an `AppModel` directory opened from a temporary folder. The directory check also reads that text view's font, insets, and background, so the listing has to be monospaced and wider than the writing column.
+`Scripts/verify-quill` sets `QUILL_SMOKE=1` and runs the binary in the foreground. The smoke builds the same `KeyEvent` values `VimTextView.keyDown` builds and calls `engine.handle`. It does not post OS keyboard events. It does measure the real `NSTextView` caret cell, the clip-view origin, an `AppModel` directory opened from a temporary folder, and the picker query field after `handlePicker`. The directory check also reads that text view's font, insets, and background, so the listing has to be monospaced and wider than the writing column.
 
 One run covers every feature in `features/`. Read the feature file before treating a passing log as proof of that feature. A log that contains `FAIL` is a failure even if you only cared about one feature.
 
