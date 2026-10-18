@@ -1302,7 +1302,9 @@ enum AppSmoke {
     @MainActor
     private static func checkTableViewport(failures: inout [String]) {
         let prose = (0..<100).map { "Line \($0) plain words here.\n" }.joined()
-        let table = "| Name | Qty |\n| :--- | --: |\n| Ada | 1 |\n| Linus | 12 |\n"
+        // The edited cell has to be the widest in its column. A wider header
+        // or rule keeps the short cell's pad the same after one extra character.
+        let table = "| N | Q |\n| - | -: |\n| c | 1 |\n| d | 12 |\n"
         let text = prose + table
         let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 640, height: 280))
         scroll.hasVerticalScroller = true
@@ -1324,7 +1326,7 @@ enum AppSmoke {
         tv.syncFromEngine()
         tv.layoutSubtreeIfNeeded()
 
-        guard let header = text.range(of: "| Name |"), let storage = tv.textStorage else {
+        guard let header = text.range(of: "| N |"), let storage = tv.textStorage else {
             failures.append("table viewport missing")
             return
         }
@@ -1363,13 +1365,16 @@ enum AppSmoke {
         check(fontWeight(headerFont ?? theme.bodyFont) >= 0.28, "table viewport header", failures: &failures)
         let kern = (storage.attribute(.kern, at: shortPipe, effectiveRange: nil) as? NSNumber)?.doubleValue ?? 0
         check(kern > 0.5, "table viewport kern \(kern)", failures: &failures)
+        let beforePad = painted.rows.dropFirst(2).first?.cells.last?.leadingPad ?? -1
 
         engine.moveCursor(to: wide)
         engine.mode = .insert
         let typed = engine.handle(KeyEvent(.character("3")))
         tv.applyResult(typed)
+        let afterPad = MarkdownTables.blocks(in: engine.text).first?.rows.dropFirst(2).first?.cells.last?.leadingPad ?? -1
+        check(afterPad > beforePad, "table edit pad \(beforePad) \(afterPad)", failures: &failures)
         let kernAfter = (storage.attribute(.kern, at: shortPipe, effectiveRange: nil) as? NSNumber)?.doubleValue ?? 0
-        check(kernAfter > kern + 0.4, "table edit kern \(kern) \(kernAfter)", failures: &failures)
+        check(kernAfter > kern + 0.4, "table edit kern \(kern) \(kernAfter) pad \(beforePad) \(afterPad)", failures: &failures)
     }
 
     @MainActor

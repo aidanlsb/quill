@@ -9,7 +9,7 @@ GitHub-flavored markdown tables stay plain text, so vim motions move over the re
 - `table-align` keeps a right-aligned short cell padded toward its pipe, and sets a positive kern on that pipe when the source is ragged.
 - `table-nowrap` uses clipping line breaks. A row wider than the column stays one visual line.
 - `table-command` accepts `:TableFormat`. `formatTablesOnInsertLeave` defaults off and accepts `true`.
-- `table-viewport` leaves a table below the first screen unstyled, then paints it when that screen scrolls into view. Editing a later cell increases the kern on an earlier short cell.
+- `table-viewport` leaves a table below the first screen unstyled, then paints it when that screen scrolls into view. Lengthening the widest cell increases the kern on an earlier short cell that is already on screen.
 
 ## How to get to it (user POV)
 

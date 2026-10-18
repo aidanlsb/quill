@@ -155,6 +155,33 @@ final class TableTests: XCTestCase {
         let sliced = MarkdownTables.blocks(in: text, overlapping: utf..<(utf + 1))
         XCTAssertEqual(sliced, body)
     }
+
+    func testLengtheningTheWidestCellGrowsTheShortPad() {
+        let capped = "| Name | Qty |\n| :--- | --: |\n| Ada | 1 |\n| Linus | 12 |\n"
+        let cappedBlock = MarkdownTables.blocks(in: capped)[0]
+        let cappedAt = cappedBlock.rows[3].cells[1].text.upperBound
+        let cappedAfter = MarkdownTables.blocks(in: insert("3", at: cappedAt, into: capped))[0]
+        XCTAssertEqual(
+            cappedBlock.rows[2].cells[1].leadingPad,
+            cappedAfter.rows[2].cells[1].leadingPad
+        )
+
+        let text = "| N | Q |\n| - | -: |\n| c | 1 |\n| d | 12 |\n"
+        var tokenizer = MarkdownTokenizer(text: text)
+        let before = tokenizer.tableBlocks(overlapping: 0..<text.utf16.count)[0]
+        let pad = before.rows[2].cells[1].leadingPad
+        XCTAssertGreaterThan(pad, 0)
+        let at = before.rows[3].cells[1].text.upperBound
+        _ = tokenizer.apply(start: at, removedUTF16: 0, replacement: "3")
+        let after = tokenizer.tableBlocks(overlapping: at..<(at + 1))[0]
+        XCTAssertGreaterThan(after.rows[2].cells[1].leadingPad, pad)
+    }
+}
+
+private func insert(_ text: String, at utf16: Int, into source: String) -> String {
+    var units = Array(source.utf16)
+    units.insert(contentsOf: Array(text.utf16), at: utf16)
+    return String(decoding: units, as: UTF16.self)
 }
 
 private func apply(_ plan: TablePlan, to text: String) -> String {

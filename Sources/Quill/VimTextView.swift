@@ -958,11 +958,12 @@ final class VimTextView: NSTextView {
         return tokenizer.tableBlocks(overlapping: limit)
     }
 
-    /// Visible rows of `tables`, plus the lines already being painted.
-    /// Off-screen rows are dropped from coverage so the next scroll recomputes
-    /// their kern from the updated column widths.
+    /// Rows on screen, rows already painted, and the edited line. A cell edit
+    /// changes every column's kern, including rows the caret is not on.
+    /// Off-screen rows are dropped from coverage so the next scroll recomputes them.
     private func tablePaintRange(_ limit: Range<Int>, tables: [TableBlock]) -> Range<Int> {
         let viewport = viewportUTF16()
+        let painted = styledCoverage
         var lower = limit.lowerBound
         var upper = limit.upperBound
         for block in tables {
@@ -970,7 +971,7 @@ final class VimTextView: NSTextView {
             for row in block.rows {
                 let rowEnd = min(block.range.upperBound, row.range.upperBound + 1)
                 let span = row.range.lowerBound..<max(row.range.lowerBound + 1, rowEnd)
-                if rangesOverlap(span, viewport) || rangesOverlap(span, limit) {
+                if rangesOverlap(span, viewport) || rangesOverlap(span, limit) || rangesOverlap(span, painted) {
                     lower = min(lower, span.lowerBound)
                     upper = max(upper, span.upperBound)
                 }
