@@ -46,7 +46,7 @@ A five-second launch without `QUILL_SMOKE` is a separate check already in `.gith
 
 ## Drive
 
-`Scripts/verify-quill` sets `QUILL_SMOKE=1` and runs the binary in the foreground. The smoke builds the same `KeyEvent` values `VimTextView.keyDown` builds and calls `engine.handle`. It does not post OS keyboard events. It does measure the real `NSTextView` caret cell, the clip-view origin, an `AppModel` directory opened from a temporary folder, and the picker query field after `handlePicker`. The directory check also reads that text view's font, insets, and background, so the listing has to be monospaced and wider than the writing column.
+`Scripts/verify-quill` sets `QUILL_SMOKE=1` and runs the binary in the foreground. The smoke builds the same `KeyEvent` values `VimTextView.keyDown` builds and calls `engine.handle`. It does not post OS keyboard events. It does measure the real `NSTextView` caret cell, the clip-view origin, an `AppModel` directory opened from a temporary folder, and the picker query field after `handlePicker`. The directory check also reads that text view's font, insets, and background, so the listing has to be monospaced and wider than the writing column. The measure check resizes one window to two widths and reads the writing inset, then does the same for the directory listing.
 
 One run covers every feature in `features/`. Read the feature file before treating a passing log as proof of that feature. A log that contains `FAIL` is a failure even if you only cared about one feature.
 
@@ -58,7 +58,7 @@ Scripts/verify-quill --bin "$bin"
 
 The proof file is `artifacts/verify-quill/smoke.log` (stdout and stderr of that process). It must contain `quill smoke passed` and must not contain a line starting with `FAIL`.
 
-That log is the action and the result: each failing check names the measurement (caret size, line, cursor, viewport origin, document and clip height, directory listing). A green exit code without that line is not proof.
+That log is the action and the result: each failing check names the measurement (caret size, line, cursor, viewport origin, document and clip height, column inset, directory listing, picker query). A green exit code without that line is not proof.
 
 The smoke does not apply the directory rename to disk. The proof for rename is the confirmation sheet and a planned rename operation, as `features/directory.md` says. Do not claim a file on disk changed unless you observed that file.
 

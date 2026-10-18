@@ -38,3 +38,4 @@ Preconditions:
 - `notes.md` is near the top of the listing. A `j` that cannot pass line 1 can still reach it, so a directory pass does not prove scrolling.
 - If the temporary directory cannot be created, the log starts with `fixture:` and the later directory checks do not run.
 - Linux cannot draw this view. A green `swift test` does not prove `dir-layout`.
+- Resizing the listing to a second width is `measure.md`. The layout check here is one window size.
