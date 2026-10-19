@@ -1,4 +1,5 @@
 import AppKit
+import QuillVim
 import XCTest
 @testable import Quill
 

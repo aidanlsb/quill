@@ -1,4 +1,5 @@
 import AppKit
+import QuillVim
 import XCTest
 @testable import Quill
 
@@ -136,7 +137,7 @@ extension Probe {
             "long note height \(tv.frame.height) is not the whole file",
             failures: failures
         )
-        tv.selectAll(nil)
+        tv.selectAll(nil as Any?)
         let selected = tv.selectedRange()
         let copied = selected.length == viewLength && selected.location == 0
             ? (tv.string as NSString).substring(with: selected)

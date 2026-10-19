@@ -1,4 +1,7 @@
 import AppKit
+import QuillText
+import QuillVim
+import SwiftUI
 import XCTest
 @testable import Quill
 
@@ -333,15 +336,23 @@ enum Probe {
                 at: length - 1,
                 effectiveRange: nil
             ) as? NSParagraphStyle) ?? tv.defaultParagraphStyle ?? NSParagraphStyle.default
+            let previousMaxY = Double(frame.maxY)
+            let ascender = Double(font.ascender)
+            let descender = Double(font.descender)
+            let leading = Double(font.leading)
+            let lineHeightMultiple = Double(style.lineHeightMultiple)
+            let lineSpacing = Double(style.lineSpacing)
+            let minimumLineHeight = Double(style.minimumLineHeight)
+            let maximumLineHeight = Double(style.maximumLineHeight)
             let baseline = CaretGeometry.extraLineBaseline(
-                previousLineMaxY: Double(frame.maxY),
-                ascender: Double(font.ascender),
-                descender: Double(font.descender),
-                leading: Double(font.leading),
-                lineHeightMultiple: Double(style.lineHeightMultiple),
-                lineSpacing: Double(style.lineSpacing),
-                minimumLineHeight: Double(style.minimumLineHeight),
-                maximumLineHeight: Double(style.maximumLineHeight)
+                previousLineMaxY: previousMaxY,
+                ascender: ascender,
+                descender: descender,
+                leading: leading,
+                lineHeightMultiple: lineHeightMultiple,
+                lineSpacing: lineSpacing,
+                minimumLineHeight: minimumLineHeight,
+                maximumLineHeight: maximumLineHeight
             )
             return (origin.y + CGFloat(baseline), detail)
         }
@@ -548,6 +559,4 @@ enum Probe {
         walk(view, depth: 0)
         return lines.joined(separator: " | ")
     }
-}
-
 }

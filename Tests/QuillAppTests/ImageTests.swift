@@ -151,16 +151,6 @@ extension Probe {
         }
         return Double(DispatchTime.now().uptimeNanoseconds &- began) / 1_000_000 / 20
     }
-
-    private static func waitUntil(seconds: TimeInterval, _ ready: () -> Bool) -> Bool {
-        let deadline = Date().addingTimeInterval(seconds)
-        if ready() { return true }
-        while Date() < deadline {
-            RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.05))
-            if ready() { return true }
-        }
-        return ready()
-    }
 }
 
 final class ImageTests: QuillAppTestCase {
