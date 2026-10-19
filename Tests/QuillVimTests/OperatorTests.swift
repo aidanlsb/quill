@@ -48,7 +48,7 @@ final class OperatorTests: XCTestCase {
 
     func testYankLine() {
         let e = vim("█aaa\nbbb", keys: "yyjp")
-        XCTAssertEqual(e.text, "aaa\nbbb\naaa\n")
+        XCTAssertEqual(e.text, "aaa\nbbb\naaa")
     }
 
     func testCountOperators() {

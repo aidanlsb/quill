@@ -1,4 +1,5 @@
 /// A from-scratch vim engine: parse count, then operator, then motion or text object.
+import QuillText
 /// Motions and text objects return ranges; operators act on those ranges so they compose.
 /// Every change is recorded as a replayable command for `.` and grouped undo.
 public final class Engine {
@@ -152,6 +153,7 @@ public final class Engine {
     /// Host-initiated edit (completion, snippet). Goes through the same funnel as keys.
     @discardableResult
     public func applyHostEdit(replacing range: Range<Int>, with text: String) -> EngineResult {
+        let text = LineIndex.normalizingNewlines(text)
         strokeEdits.removeAll(keepingCapacity: true)
         let before = buffer.cursor
         let nested = groupDepth > 0
@@ -174,7 +176,9 @@ public final class Engine {
         if edits.isEmpty {
             return finishStroke(.noop, cursorBefore: before)
         }
-        let applyOrder = edits.sorted { lhs, rhs in
+        let applyOrder = edits.map {
+            TextEdit(range: $0.range, replacement: LineIndex.normalizingNewlines($0.replacement))
+        }.sorted { lhs, rhs in
             if lhs.range.lowerBound != rhs.range.lowerBound {
                 return lhs.range.lowerBound > rhs.range.lowerBound
             }
@@ -199,7 +203,7 @@ public final class Engine {
 
     /// Install a directory-line identity at the start of `line`.
     public func setDirectoryAnchor(line: Int, id: UInt64, sourcePath: String, isDirectory: Bool) {
-        guard line >= 0, line < buffer.lineCount else { return }
+        guard line >= 0, line <= buffer.lastLine else { return }
         let offset = buffer.line(line).start
         buffer.addAnchor(Anchor(
             id: AnchorID(raw: id),
@@ -795,7 +799,7 @@ public final class Engine {
         }
         if mode.isVisual {
             visualAnchor = range.lowerBound
-            buffer.cursor = buffer.clampedCursor(max(range.lowerBound, range.upperBound - 1), normalMode: true)
+            buffer.cursor = buffer.clampedCursor(buffer.graphemeStart(before: max(range.lowerBound + 1, range.upperBound)), normalMode: true)
             if style == .linewise { mode = .visualLine }
             resetParser()
             return .noop
@@ -810,7 +814,7 @@ public final class Engine {
     private func applyLinewiseOperator(_ op: OperatorKind) -> EngineResult {
         let n = effectiveCount()
         let line = buffer.lineIndex(containing: buffer.cursor)
-        let end = min(buffer.lineCount - 1, line + n - 1)
+        let end = min(buffer.lastLine, line + n - 1)
         let range = buffer.linesRange(from: line, through: end)
         return applyOperator(op, range: range, style: .linewise, target: .line)
     }
@@ -885,8 +889,20 @@ public final class Engine {
             if style == .linewise {
                 buffer.removeAnchors(in: range)
             }
-            replace(range, with: "")
-            buffer.cursor = buffer.clampedCursor(range.lowerBound, normalMode: op == .delete)
+            if style == .linewise, op == .change {
+                // `cc` empties the lines but keeps one to type on.
+                let keepsNewline = range.upperBound > range.lowerBound && buffer.character(at: range.upperBound - 1) == "\n"
+                replace(range.lowerBound..<(range.upperBound - (keepsNewline ? 1 : 0)), with: "")
+                buffer.cursor = range.lowerBound
+            } else if style == .linewise {
+                let removed = buffer.linewiseDeletion(range)
+                replace(removed, with: "")
+                let landing = buffer.clampedCursor(removed.lowerBound, normalMode: true)
+                buffer.cursor = buffer.firstNonBlank(onLine: buffer.lineIndex(containing: landing))
+            } else {
+                replace(range, with: "")
+                buffer.cursor = buffer.clampedCursor(range.lowerBound, normalMode: op == .delete)
+            }
             resetCurswant()
             if op == .change {
                 lastRepeatable = .operate(.change, count: n, target: target, inserted: nil)
@@ -912,7 +928,7 @@ public final class Engine {
 
     private func yank(_ range: Range<Int>, style: RangeStyle, deleting: Bool = false) {
         var text = buffer.substring(range)
-        if style == .linewise, !text.hasSuffix("\n"), !text.isEmpty {
+        if style == .linewise, !text.hasSuffix("\n") {
             text += "\n"
         }
         let transfer: DirectoryTransfer = deleting ? .move : .copy
@@ -1011,8 +1027,7 @@ public final class Engine {
             let line = buffer.lineIndex(containing: buffer.cursor)
             let insertAt = buffer.lineFullRange(at: line).upperBound
             replace(insertAt..<insertAt, with: "\n")
-            let targetLine = min(line + 1, buffer.lineCount - 1)
-            buffer.cursor = buffer.line(targetLine).start
+            buffer.cursor = buffer.line(line + 1).start
         case .O:
             beginTransaction()
             let insertAt = buffer.bufferLine(containing: buffer.cursor).start
@@ -1103,6 +1118,7 @@ public final class Engine {
     }
 
     private func insertText(_ text: String) -> EngineResult {
+        let text = LineIndex.normalizingNewlines(text)
         if text.isEmpty { return .noop }
         replace(buffer.cursor..<buffer.cursor, with: text)
         buffer.cursor += buffer.measure(text)
@@ -1281,12 +1297,12 @@ public final class Engine {
 
     private func joinLines(count n: Int) -> EngineResult {
         let line = buffer.lineIndex(containing: buffer.cursor)
-        let last = min(buffer.lineCount - 1, line + max(1, n - 1))
+        let last = min(buffer.lastLine, line + max(1, n - 1))
         if last == line { return beepResult() }
         beginTransaction()
         for _ in line..<last {
             let current = buffer.lineIndex(containing: buffer.cursor)
-            if current + 1 >= buffer.lineCount { break }
+            if current + 1 > buffer.lastLine { break }
             let end = buffer.lineEnd(at: current)
             let nextContent = buffer.lineContentRange(at: current + 1)
             var next = nextContent.lowerBound
@@ -1317,7 +1333,8 @@ public final class Engine {
         let source: Register
         switch pendingRegister {
         case .clipboard:
-            source = Register(text: clipboard.text, style: clipboard.text.hasSuffix("\n") ? .linewise : .characterwise)
+            let text = LineIndex.normalizingNewlines(clipboard.text)
+            source = Register(text: text, style: text.hasSuffix("\n") ? .linewise : .characterwise)
         case .unnamed:
             source = unnamed
         default:
@@ -1330,22 +1347,17 @@ public final class Engine {
         beginTransaction()
         let payload = String(repeating: source.text, count: max(1, n))
         if source.style == .linewise {
-            let line = buffer.lineIndex(containing: buffer.cursor)
-            var insertAt: Int
+            let target = buffer.line(min(buffer.lineIndex(containing: buffer.cursor), buffer.lastLine))
             var text = payload
             if !text.hasSuffix("\n") { text += "\n" }
-            if after {
-                insertAt = buffer.lineFullRange(at: line).upperBound
-                if insertAt == buffer.count, !buffer.text.hasSuffix("\n") {
-                    text = "\n" + text
-                }
-            } else {
-                insertAt = buffer.line(line).start
-            }
+            let insertAt = after ? target.end : target.start
+            // After a last line with no newline, the lines go in as `"\n" + lines`
+            // minus their final newline, so the buffer still ends without one.
+            let shift = after && !target.hasNewline ? 1 : 0
+            if shift == 1 { text = "\n" + text.dropLast() }
             replace(insertAt..<insertAt, with: text)
-            installPutAnchors(source, at: insertAt, inserted: text)
-            let dest = after ? insertAt + (text.hasPrefix("\n") && insertAt == buffer.lineFullRange(at: line).upperBound ? 1 : 0) : insertAt
-            buffer.cursor = buffer.firstNonBlank(onLine: buffer.lineIndex(containing: min(dest, max(0, buffer.count - 1))))
+            installPutAnchors(source, at: insertAt + shift)
+            buffer.cursor = buffer.firstNonBlank(onLine: buffer.lineIndex(containing: insertAt + shift))
         } else {
             var at = buffer.cursor
             if after, !buffer.isEmpty {
@@ -1354,7 +1366,7 @@ public final class Engine {
                 }
             }
             replace(at..<at, with: payload)
-            installPutAnchors(source, at: at, inserted: payload)
+            installPutAnchors(source, at: at)
             let pastPut = at + buffer.measure(payload)
             buffer.cursor = buffer.clampedCursor(pastPut > at ? buffer.graphemeStart(before: pastPut) : at, normalMode: true)
         }
@@ -1366,27 +1378,27 @@ public final class Engine {
         return EngineResult(didChangeText: true, beep: false, actions: [])
     }
 
-    private func installPutAnchors(_ source: Register, at insertAt: Int, inserted: String) {
-        let shift = inserted.hasPrefix("\n") && !source.text.hasPrefix("\n") ? 1 : 0
+    private func installPutAnchors(_ source: Register, at insertAt: Int) {
         for anchor in source.anchors {
             var installed = anchor
-            installed.offset += insertAt + shift
+            installed.offset += insertAt
             buffer.addAnchor(installed)
         }
     }
 
     private func indent(range: Range<Int>, direction: Int) {
-        let startLine = buffer.lineIndex(containing: range.lowerBound)
-        var endLine = buffer.lineIndex(containing: max(range.lowerBound, range.upperBound - (range.isEmpty ? 0 : 1)))
-        if range.upperBound > range.lowerBound,
-           buffer.bufferLine(containing: range.upperBound).start == range.upperBound,
-           endLine > startLine {
-            endLine -= 1
-        }
+        let startLine = min(buffer.lineIndex(containing: range.lowerBound), buffer.lastLine)
+        let lastUnit = range.isEmpty ? range.lowerBound : range.upperBound - 1
+        let endLine = max(startLine, min(buffer.lineIndex(containing: lastUnit), buffer.lastLine))
+        indent(lines: startLine...endLine, direction: direction)
+    }
+
+    /// Shift whole buffer lines. Like vim, `>` leaves empty lines alone.
+    private func indent(lines: ClosedRange<Int>, direction: Int) {
+        let startLine = lines.lowerBound
         let pad = String(repeating: " ", count: max(1, shiftWidth))
-        let lines = startLine...endLine
         if direction > 0 {
-            for line in lines.reversed() {
+            for line in lines.reversed() where !buffer.isBlankLine(line) {
                 let at = buffer.line(line).start
                 replace(at..<at, with: pad)
             }
@@ -1719,7 +1731,7 @@ public final class Engine {
             return substitute(parsed)
         case "" where parsed.rangeStart != nil && parsed.args.isEmpty:
             // `:N`, `:$`, `:'a`: a buffer line, wherever it wraps on screen.
-            let last = max(0, buffer.lineCount - 1)
+            let last = buffer.lastLine
             let current = buffer.lineIndex(containing: buffer.cursor)
             let target = resolveAddress(parsed.rangeEnd ?? parsed.rangeStart, current: current, last: last)
             recordJump(from: buffer.cursor)
@@ -1737,7 +1749,7 @@ public final class Engine {
             statusMessage = "Not an editor command"
             return beepResult()
         }
-        let last = max(0, buffer.lineCount - 1)
+        let last = buffer.lastLine
         let current = buffer.lineIndex(containing: buffer.cursor)
         let action: HostAction
         if parsed.rangeStart == nil && parsed.rangeEnd == nil {
@@ -1767,7 +1779,7 @@ public final class Engine {
             statusMessage = "Not an editor command"
             return beepResult()
         }
-        let last = max(0, buffer.lineCount - 1)
+        let last = buffer.lastLine
         let current = buffer.lineIndex(containing: buffer.cursor)
         let startLine: Int
         let endLine: Int
@@ -1785,7 +1797,7 @@ public final class Engine {
         for line in stride(from: upper, through: lower, by: -1) {
             let content = buffer.lineContentRange(at: line)
             let text = buffer.substring(content)
-            let updated = replaceInLine(text, pattern: parts.pattern, with: parts.replacement, global: parts.global)
+            let updated = replaceInLine(text, pattern: parts.pattern, with: LineIndex.normalizingNewlines(parts.replacement), global: parts.global)
             if updated != text {
                 replace(content, with: updated)
                 changed = true
@@ -1809,38 +1821,23 @@ public final class Engine {
                 if case .mark(let mark) = $0.kind { return mark == String(name) }
                 return false
             }) {
-                return buffer.lineIndex(containing: anchor.offset)
+                return min(buffer.lineIndex(containing: anchor.offset), last)
             }
             return current
         }
     }
 
     private func replaceInLine(_ text: String, pattern: String, with replacement: String, global: Bool) -> String {
-        let ignore = Searcher.ignoresCase(pattern)
-        let hay = Array(text.utf16)
-        let folded = Array((ignore ? text.lowercased() : text).utf16)
-        let needle = Array((ignore ? pattern.lowercased() : pattern).utf16)
-        guard !needle.isEmpty else { return text }
+        let units = Array(text.utf16)
         var out: [UInt16] = []
-        let rep = Array(replacement.utf16)
         var index = 0
-        var did = false
-        while index < hay.count {
-            let fits = index + needle.count <= hay.count
-            let equal = fits && folded[index..<(index + needle.count)].elementsEqual(needle)
-            if (!did || global) && equal {
-                out.append(contentsOf: rep)
-                index += needle.count
-                did = true
-                if !global {
-                    out.append(contentsOf: hay[index...])
-                    break
-                }
-            } else {
-                out.append(hay[index])
-                index += 1
-            }
+        for hit in Searcher.literalMatches(in: text, pattern: pattern) where hit.lowerBound >= index {
+            out.append(contentsOf: units[index..<hit.lowerBound])
+            out.append(contentsOf: replacement.utf16)
+            index = hit.upperBound
+            if !global { break }
         }
+        out.append(contentsOf: units[index...])
         return String(decoding: out, as: UTF16.self)
     }
 

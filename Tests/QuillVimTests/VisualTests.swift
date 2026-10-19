@@ -9,7 +9,7 @@ final class VisualTests: XCTestCase {
 
     func testVisualLineDelete() {
         XCTAssertVim("█aaa\nbbb\nccc", keys: "Vjd", "█ccc")
-        XCTAssertVim("aaa\n█bbb\nccc", keys: "Vjd", "aa█a\n")
+        XCTAssertVim("aaa\n█bbb\nccc", keys: "Vjd", "█aaa")
     }
 
     func testVisualYank() {
