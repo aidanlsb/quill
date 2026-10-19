@@ -106,7 +106,7 @@ extension AppModel {
             showsInMenu: true
         ) { [weak self] in
             guard let self else { return }
-            self.closeRequests += 1
+            self.recordCloseRequest()
             NSApplication.shared.keyWindow?.close()
         }
         register(

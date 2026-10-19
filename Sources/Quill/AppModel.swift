@@ -81,6 +81,10 @@ final class AppModel {
     /// How many times `file.close` ran. Tests observe `:wq` when no key window exists.
     private(set) var closeRequests = 0
 
+    func recordCloseRequest() {
+        closeRequests += 1
+    }
+
     init() {
         let home = FileManager.default.homeDirectoryForCurrentUser
         rootURL = home
