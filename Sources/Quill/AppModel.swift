@@ -585,7 +585,6 @@ final class AppModel {
             message = "No language server"
             return
         }
-        let text = engine.text
         let range: LSPRange
         if let selection = engine.visualSelection {
             range = LSPRange(

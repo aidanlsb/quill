@@ -579,7 +579,7 @@ enum AppSmoke {
                     "narrow column drew \(rows.count) rows for \(motionDocument.count) lines",
                     failures: &failures
                 )
-                writeStderr(probeLineFragmentIndexing(tv) + "\n")
+                fputs(probeLineFragmentIndexing(tv) + "\n", stderr)
             } else {
                 check(
                     rows.count == motionDocument.count,
