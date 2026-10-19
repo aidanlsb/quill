@@ -347,9 +347,7 @@ enum AppSmoke {
         check(abs(head.height - headEm) < 1.5, "heading block height \(head.height) expected em \(headEm)", failures: &failures)
         check(head.height > block.height + 2, "heading caret \(head.height) should be taller than body \(block.height)", failures: &failures)
 
-        let endCaret = assertCaretGlyph(tv: tv, index: ns.length, font: body, label: "end", failures: &failures)
-        check(abs(endCaret.height - bodyEm) < 1.5, "end caret height \(endCaret.height) expected em \(bodyEm)", failures: &failures)
-
+        // The empty line after a final newline only holds an insert-mode caret.
         engine.mode = .insert
         let beam = assertCaretGlyph(tv: tv, index: headingAt, font: heading, label: "insert", failures: &failures)
         let beamWidth = CaretGeometry.beamPointWidth(backingScale: Double(window.backingScaleFactor))
@@ -1012,6 +1010,8 @@ enum AppSmoke {
     ) -> NSRect {
         let length = (tv.string as NSString).length
         let utf16 = min(max(0, index), length)
+        tv.engine.moveCursor(to: utf16)
+        check(tv.engine.cursor == utf16, "\(label) engine clamped the caret from \(utf16) to \(tv.engine.cursor)", failures: &failures)
         tv.setSelectedRange(NSRange(location: utf16, length: 0))
         tv.layoutSubtreeIfNeeded()
         let caret = tv.renderedCaretRect()
