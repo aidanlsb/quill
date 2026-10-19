@@ -20,7 +20,7 @@ final class SaveRaceTests: XCTestCase {
         XCTAssertEqual(model.engine.text, "hello! more\n")
 
         await gate.release()
-        await waitUntil("save did not finish") { text(at: url) == "hello!\n" }
+        await waitUntil("save did not finish") { self.text(at: url) == "hello!\n" }
         await Task.yield()
         XCTAssertEqual(model.engine.text, "hello! more\n")
         XCTAssertTrue(model.engine.isModified)
@@ -72,7 +72,7 @@ final class SaveRaceTests: XCTestCase {
         model.handleEngineResult(model.engine.type(":wq<CR>"))
         insert(" more", in: model)
         await gate.release()
-        await waitUntil("save did not finish") { text(at: url) == "hello!\n" }
+        await waitUntil("save did not finish") { self.text(at: url) == "hello!\n" }
         await Task.yield()
 
         XCTAssertEqual(model.closeRequests, 0)
@@ -118,7 +118,7 @@ final class SaveRaceTests: XCTestCase {
         await open(second, contents: "other\n", in: model)
         await gate.release()
         await waitUntil("the in-flight save did not reach disk") {
-            text(at: first) == "hello!\n"
+            self.text(at: first) == "hello!\n"
         }
         await Task.yield()
 
