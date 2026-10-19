@@ -29,7 +29,8 @@ final class AppModel {
     /// Editor mode and cursor to restore when the command palette closes.
     var paletteMode: Mode?
     var paletteCursor: Int?
-    let commands = CommandRegistry()
+    /// QuillWorkspace has its own `CommandRegistry`; the palette uses QuillSearch's.
+    let commands = QuillSearch.CommandRegistry()
     var pendingOps: [FSOperation] = []
     var showConfirm = false
     var confirmWarning = ""

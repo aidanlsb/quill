@@ -29,9 +29,9 @@ extension AppModel {
             id: "search.commands",
             name: "Command Palette…",
             category: "Search",
-            menuCategory: "File",
             bindings: [chord("k", command: true)],
-            showsInMenu: true
+            showsInMenu: true,
+            menuCategory: "File"
         ) { [weak self] in
             self?.presentCommandPalette()
         }
@@ -227,6 +227,14 @@ extension AppModel {
                 self?.runShell(command)
             }
         }
+    }
+
+    func menuEntries(category: String) -> [CommandEntry] {
+        commands.menuEntries(category: category)
+    }
+
+    func isCommandEnabled(id: String) -> Bool {
+        commands.isEnabled(id: id)
     }
 
     @discardableResult

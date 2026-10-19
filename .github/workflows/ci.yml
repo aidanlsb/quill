@@ -77,6 +77,8 @@ jobs:
         run: swift test -Xswiftc -strict-concurrency=complete
       - name: Build the app
         run: swift build -c release --product Quill -Xswiftc -strict-concurrency=complete
+      - name: Bundle the app and check the icon
+        run: Scripts/bundle-app.sh
       - name: Launch the app
         run: |
           bin="$(swift build -c release --product Quill -Xswiftc -strict-concurrency=complete --show-bin-path)/Quill"

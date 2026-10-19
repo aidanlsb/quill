@@ -32,23 +32,23 @@ struct QuillApp: App {
         .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .newItem) {
-                ForEach(model.commands.menuEntries(category: "File")) { entry in
+                ForEach(model.menuEntries(category: "File")) { entry in
                     menuButton(entry)
                 }
             }
             CommandGroup(after: .toolbar) {
-                ForEach(model.commands.menuEntries(category: "Search")) { entry in
+                ForEach(model.menuEntries(category: "Search")) { entry in
                     menuButton(entry)
                 }
-                ForEach(model.commands.menuEntries(category: "Navigate")) { entry in
+                ForEach(model.menuEntries(category: "Navigate")) { entry in
                     menuButton(entry)
                 }
             }
             CommandGroup(after: .sidebar) {
-                ForEach(model.commands.menuEntries(category: "View")) { entry in
+                ForEach(model.menuEntries(category: "View")) { entry in
                     menuButton(entry)
                 }
-                ForEach(model.commands.menuEntries(category: "Edit")) { entry in
+                ForEach(model.menuEntries(category: "Edit")) { entry in
                     menuButton(entry)
                 }
             }
@@ -57,7 +57,7 @@ struct QuillApp: App {
 
     @ViewBuilder
     private func menuButton(_ entry: CommandEntry) -> some View {
-        let enabled = model.commands.isEnabled(id: entry.id)
+        let enabled = model.isCommandEnabled(id: entry.id)
         if let chord = menuChord(for: entry) {
             Button(entry.name) { model.runCommand(entry.id) }
                 .keyboardShortcut(KeyEquivalent(chord.key), modifiers: chord.modifiers)
