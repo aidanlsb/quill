@@ -32,12 +32,13 @@ Xcode 16.4 (Swift 6.1) does not compile the app. CI uses Xcode 26.3 (Swift 6.2) 
 swift build -c release --product Quill -Xswiftc -strict-concurrency=complete
 ./Scripts/bundle-app.sh          # → dist/Quill.app
 ./Scripts/install.sh             # copies the app to /Applications and `quill` to /usr/local/bin
-Scripts/verify-quill            # QUILL_SMOKE: caret, scrolling, directory buffer
+swift test --filter QuillAppTests -Xswiftc -strict-concurrency=complete
+Scripts/verify-quill            # QuillAppTests, then the QUILL_SMOKE launch check
 ```
 
 Or open `Package.swift` in Xcode and run the **Quill** target. The app is not sandboxed, so it can open any folder and spawn configured language servers.
 
-`Scripts/verify-quill` is the launch smoke. A green Linux test run is not a substitute. The recipe lives in `.cursor/skills/verify-quill/`.
+`QuillAppTests` (macOS) drives the editor through `keyDown`. `Scripts/verify-quill` runs those tests, then a short launch smoke (`quill smoke passed`). A green Linux test run is not a substitute. The recipe lives in `.cursor/skills/verify-quill/`.
 
 ## CLI
 
@@ -194,7 +195,9 @@ Wired: `initialize`, `initialized`, `textDocument/didOpen|didChange|didSave|didC
 
 **Verified on Linux (`swift test`):** QuillVim (motions, operators, text objects, visual, `.` / undo, ex, leader, `-`, `gr`, `<leader>ca`), QuillLSP JSON-RPC framing and a mock-server lifecycle (initialize, document sync, completion, definition, references, code action, executeCommand, applyEdit, hover, diagnostics, missing-server), launch-argument and shell-hook parsing, QuillFS diffs (create/rename/delete/move), QuillSearch fuzzy + grep + picker insert/normal, QuillTOML (the config subset: tables, strings, numbers, bools, arrays, inline tables, arrays of tables).
 
-**Unverified:** compiling or running the macOS app (no macOS toolchain here). TextKit 2 display-line `j`/`k`, the confirmation sheet, Trash deletes, and a live language server should be checked in Xcode.
+**Verified on macOS (`QuillAppTests` plus the launch smoke):** caret shape, scrolling, the writing column, directory buffers, table styling, inline image previews, the file picker, the command palette, and that a launched window can take a keystroke. Linux `swift test` does not run these.
+
+**Unverified:** Trash deletes and a live language server. Check those in Xcode.
 
 ## Recommended next steps
 

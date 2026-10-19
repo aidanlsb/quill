@@ -7,6 +7,7 @@ cd "$root"
 
 mode="drive"
 bin=""
+bin_given=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     doctor)
@@ -15,6 +16,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --bin)
       bin="${2:-}"
+      bin_given=1
       if [[ -z "$bin" ]]; then
         echo "verify-quill: --bin needs a path" >&2
         exit 2
@@ -97,6 +99,23 @@ for n, frame in enumerate(thread.get("frames", [])[:40]):
     print("%2d %-24s %s +%s" % (n, image, frame.get("symbol", "?"), frame.get("symbolLocation", "?")))
 PY
 }
+
+# Behavior checks live in QuillAppTests. Skip them when the caller already
+# ran `swift test` and handed us the release binary.
+if [[ "$bin_given" -eq 1 && "${QUILL_SKIP_APP_TESTS:-}" == "1" ]]; then
+  echo "verify-quill: skipping QuillAppTests"
+else
+  app_log="$root/artifacts/verify-quill/app-tests.log"
+  : > "$app_log"
+  echo "verify-quill: swift test --filter QuillAppTests"
+  if ! swift test --filter QuillAppTests -Xswiftc -strict-concurrency=complete >"$app_log" 2>&1; then
+    echo "verify-quill: QuillAppTests failed. Log: $app_log" >&2
+    cat "$app_log" >&2 || true
+    exit 1
+  fi
+  echo "verify-quill: QuillAppTests passed"
+  echo "verify-quill: evidence $app_log"
+fi
 
 QUILL_SMOKE=1 "$bin" >"$log" 2>&1 &
 pid=$!

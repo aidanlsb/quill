@@ -25,15 +25,15 @@
 Preconditions:
 
 - Doctor printed the release binary.
-- The smoke creates its own temporary directory. Do not point it at a folder you care about.
+- `DirectoryTests` creates its own temporary directory. Do not point it at a folder you care about.
 
-- **Run the smoke.** Run `Scripts/verify-quill --bin "$bin"`. Exit code is 0.
-- **Read the directory result.** `artifacts/verify-quill/smoke.log` contains `quill smoke passed`. It does not contain `did not open a directory`, `did not arm Enter`, `listing missing`, `Enter did not`, `minus did not`, `rename left`, `did not ask`, `instead of a rename`, `directory font`, `directory inset`, `directory column`, `directory background`, `directory header`, `directory accent`, `directory dim`, `was not marked`, or `prose inset`.
-- **Proof.** The log shows the confirmation was requested and a rename was planned. It does not show the temporary file's new name on disk. The layout proof is the text view's font and insets while the listing is showing, not a screenshot. The smoke deletes that temporary directory when it finishes. The log file remains.
+- **Run the tests.** `DirectoryTests` opens a `TempDirectory`, checks the listing chrome, Enter, parent, and the rename confirmation. `Scripts/verify-quill --bin "$bin"` runs it, then the launch smoke.
+- **Read the directory result.** `artifacts/verify-quill/app-tests.log` shows `DirectoryTests` passing. `artifacts/verify-quill/smoke.log` contains `quill smoke passed`. The test log does not contain `did not open a directory`, `did not arm Enter`, `listing missing`, `Enter did not`, `minus did not`, `rename left`, `did not ask`, `instead of a rename`, `directory font`, `directory inset`, `directory column`, `directory background`, `directory header`, `directory accent`, `directory dim`, `was not marked`, or `prose inset`.
+- **Proof.** The log shows the confirmation was requested and a rename was planned. It does not show the temporary file's new name on disk. The layout proof is the text view's font and insets while the listing is showing, not a screenshot. `TempDirectory` deletes that directory when the test returns. `app-tests.log` remains.
 
 ## Gotchas
 
-- The smoke does not click the confirmation button. A passing log is not proof that the file was renamed on disk.
+- `DirectoryTests` does not click the confirmation button. A passing test is not proof that the file was renamed on disk.
 - Icons, the path header, the line highlight, and the pending labels are drawn around the listing. They are not characters in the buffer. A check that the buffer text gained an icon has drifted.
 - `notes.md` is near the top of the listing. A `j` that cannot pass line 1 can still reach it, so a directory pass does not prove scrolling.
 - If the temporary directory cannot be created, the log starts with `fixture:` and the later directory checks do not run.

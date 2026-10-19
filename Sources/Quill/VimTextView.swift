@@ -198,7 +198,29 @@ final class VimTextView: NSTextView {
         commonInit()
     }
 
-    func commonInit() {
+    /// The only way to create an editor view bound to an engine.
+    /// `EditorView`, `AppPerf`, and tests use it.
+    static func host(
+        engine: Engine,
+        frame: NSRect = NSRect(x: 0, y: 0, width: 800, height: 600)
+    ) -> (scroll: NSScrollView, view: VimTextView) {
+        let scroll = NSScrollView(frame: frame)
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = false
+        scroll.borderType = .noBorder
+        scroll.drawsBackground = false
+        scroll.autohidesScrollers = true
+        let tv = VimTextView.make(frame: frame)
+        tv.commonInit()
+        tv.minSize = NSSize(width: 0, height: 0)
+        tv.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        tv.engine = engine
+        engine.layout = tv.layoutAdapter
+        scroll.documentView = tv
+        return (scroll, tv)
+    }
+
+    private func commonInit() {
         layoutAdapter.textView = self
         imagePreviews.attach(self)
         usesFontPanel = false
@@ -221,8 +243,8 @@ final class VimTextView: NSTextView {
         autoresizingMask = [.width]
     }
 
-    /// TextKit 2 view. The stock content storage holds the whole note.
-    static func make(frame: NSRect = .zero) -> VimTextView {
+    /// TextKit 2 view. Callers use `host(engine:frame:)`.
+    private static func make(frame: NSRect = .zero) -> VimTextView {
         let view = VimTextView(usingTextLayoutManager: true)
         if frame != .zero {
             view.frame = frame
@@ -1545,21 +1567,10 @@ struct EditorView: NSViewRepresentable {
     var revision: Int
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scroll = NSScrollView()
-        scroll.hasVerticalScroller = true
-        scroll.hasHorizontalScroller = false
-        scroll.borderType = .noBorder
-        scroll.drawsBackground = false
-        scroll.autohidesScrollers = true
-        let tv = VimTextView.make()
-        tv.commonInit()
-        tv.engine = model.engine
-        tv.layoutAdapter.textView = tv
-        model.engine.layout = tv.layoutAdapter
+        let hosted = VimTextView.host(engine: model.engine)
+        let scroll = hosted.scroll
+        let tv = hosted.view
         tv.vimDelegate = context.coordinator
-        tv.minSize = NSSize(width: 0, height: 0)
-        tv.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        scroll.documentView = tv
         context.coordinator.textView = tv
         context.coordinator.model = model
         tv.columnWidth = model.theme.columnWidth

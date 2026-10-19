@@ -25,7 +25,7 @@ Preconditions:
 - Doctor printed the release binary you are about to run.
 - No other perf run is using `artifacts/verify-quill/perf.log`.
 
-- **Run the harness.** `Scripts/verify-quill --bin "$bin"` runs the smoke, then `QUILL_PERF=1`.
+- **Run the harness.** `Scripts/verify-quill --bin "$bin"` runs QuillAppTests (unless `QUILL_SKIP_APP_TESTS=1`), the launch smoke, then `QUILL_PERF=1`.
 - **Read the numbers.** `artifacts/verify-quill/perf.log` contains `quill perf done` and one `quill perf <name>=<ms>` line for each name in Sub-features. The script prints those lines.
 - **Proof.** The log is still at `artifacts/verify-quill/perf.log` after the process exits. Compare `styleEditMs` with `styleFullMs`, and `scrollMs` with `layoutFullMs`. The edit and the motion should be the small ones.
 

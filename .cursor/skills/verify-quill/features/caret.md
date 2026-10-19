@@ -25,8 +25,8 @@ Preconditions:
 - Doctor printed the release binary you are about to run.
 - No other smoke is using that same log path. Each run overwrites `artifacts/verify-quill/smoke.log`.
 
-- **Run the smoke.** Run `Scripts/verify-quill --bin "$bin"`. The process exits 0.
-- **Read the caret result.** Open `artifacts/verify-quill/smoke.log`. It contains `quill smoke passed`. It does not contain `body block`, `heading block`, `heading caret`, `empty caret`, `end caret`, `insert beam`, `insert blink`, `normal blink`, `1.3x`, `glyph bounds`, `system caret`, `baseline`, `default body font`, `heading scale`, `heading weight`, `mono font`, `font fallback`, `line height`, or `side gutter`.
+- **Run the tests.** `CaretTests` and `ThemeTests` in `QuillAppTests` cover the caret cell and the type scale. `Scripts/verify-quill --bin "$bin"` runs them, then the launch smoke.
+- **Read the result.** `artifacts/verify-quill/app-tests.log` shows those classes passing. `artifacts/verify-quill/smoke.log` contains `quill smoke passed`. The test log does not contain `body block`, `heading block`, `heading caret`, `empty caret`, `end caret`, `insert beam`, `insert blink`, `normal blink`, `1.3x`, `glyph bounds`, `system caret`, `baseline`, `default body font`, `heading scale`, `heading weight`, `mono font`, `font fallback`, `line height`, or `side gutter`.
 - **Proof.** The log file is still at `artifacts/verify-quill/smoke.log` after the process exits.
 
 ## Gotchas

@@ -143,6 +143,28 @@ def scan_shell_tree() -> list[str]:
     return errors
 
 
+WIRING_FILE = "Sources/Quill/VimTextView.swift"
+MAKE_CALL = re.compile(r"VimTextView\.make\(")
+COMMON_INIT_CALL = re.compile(r"\.commonInit\(\)")
+
+
+def scan_wiring(text: str, path: str) -> list[str]:
+    if path == WIRING_FILE:
+        return []
+    errors: list[str] = []
+    for index, line in enumerate(text.splitlines()):
+        code = code_only(line)
+        if not MAKE_CALL.search(code) and not COMMON_INIT_CALL.search(code):
+            continue
+        errors.append(
+            f"{path}:{index + 1}: wire editor views only through "
+            f"VimTextView.host(engine:frame:). "
+            f"VimTextView.make( and .commonInit() belong in {WIRING_FILE}. "
+            f"Offending line: {line.strip()}"
+        )
+    return errors
+
+
 def scan_tree() -> list[str]:
     errors: list[str] = []
     for folder in ("Sources", "Tests"):
@@ -151,6 +173,7 @@ def scan_tree() -> list[str]:
             relative = str(path.relative_to(ROOT))
             errors.extend(scan_swift(text, relative))
             errors.extend(scan_nsapp(text, relative))
+            errors.extend(scan_wiring(text, relative))
     return errors
 
 
@@ -205,6 +228,18 @@ def self_test() -> int:
     safe_bash = 'open ${wait_flag[@]+"${wait_flag[@]}"} -a Quill "$@"\n'
     if scan_bash(safe_bash, "Scripts/quill"):
         print("self-test: the guarded array expansion was rejected", file=sys.stderr)
+        failed = True
+    bypass = "let tv = VimTextView.make()\ntv.commonInit()\n"
+    if len(scan_wiring(bypass, "Sources/Quill/AppSmoke.swift")) < 2:
+        print("self-test: VimTextView.make() from AppSmoke.swift was accepted", file=sys.stderr)
+        failed = True
+    else:
+        print("self-test: rejected VimTextView.make() outside VimTextView.swift")
+    factory = "let hosted = VimTextView.host(engine: engine)\n"
+    if scan_wiring(factory, "Sources/Quill/AppSmoke.swift") or scan_wiring(
+        "let tv = VimTextView.make(frame: frame)\n", WIRING_FILE
+    ):
+        print("self-test: VimTextView.host(engine:) or make inside VimTextView.swift was rejected", file=sys.stderr)
         failed = True
     repo = scan_tree() + scan_shell_tree()
     workflow = workflow_passes_complete_checking()
