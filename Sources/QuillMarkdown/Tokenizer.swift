@@ -832,7 +832,7 @@ enum Scanner {
                     continue
                 }
             }
-            if ch == "[", let next = line.index(index, offsetBy: 2, limitedBy: line.endIndex), line[line.index(after: index)] != "\n" {
+            if ch == "[", let next = line.index(index, offsetBy: 2, limitedBy: line.endIndex), next < line.endIndex, line[line.index(after: index)] != "\n" {
                 let mark = line[line.index(after: index)]
                 if line[next] == "]", mark == " " || mark == "x" || mark == "X" {
                     spans.append(TokenSpan(range: (lineStart + utf16)..<(lineStart + utf16 + 3), token: .taskBox))
