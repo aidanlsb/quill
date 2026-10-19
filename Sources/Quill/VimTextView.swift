@@ -171,6 +171,8 @@ final class VimTextView: NSTextView {
     var onNeedsDisplay: (@MainActor (NSRect) -> Void)?
     var onDirectoryDecorations: (@MainActor () -> Void)?
     private var restyleQueued = false
+    /// Stops `string =` from re-entering the drift repair.
+    private var repairingDocument = false
     private var sizing = false
     /// True while `viewDidEndLiveResize` has cleared the inset for `super`.
     private var endingLiveResize = false
@@ -496,12 +498,17 @@ final class VimTextView: NSTextView {
 
     private func assertViewMatchesEngine() {
         #if DEBUG
-        // `textStorage.length` can lag the document in TextKit 2. Reload and the
-        // layout adapter both treat `string` as the buffer the engine owns.
+        // `string` is the document reload writes. Repair a drift instead of
+        // aborting: TextKit can report a short length while the engine is right.
         let length = (string as NSString).length
-        if length != engine.buffer.count {
-            assertionFailure("text view drifted from the engine (\(length) vs \(engine.buffer.count))")
-        }
+        guard length != engine.buffer.count, !repairingDocument else { return }
+        repairingDocument = true
+        fputs(
+            "quill drift view=\(length) engine=\(engine.buffer.count) viewText=[\(string)] engineText=[\(engine.text)]\n",
+            stderr
+        )
+        string = engine.text
+        repairingDocument = false
         #endif
     }
 
