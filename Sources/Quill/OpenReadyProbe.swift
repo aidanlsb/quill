@@ -9,12 +9,16 @@ enum OpenReadyProbe {
     private static var armed = false
     private static var finished = false
     private static var expectedText: String?
+    private static var watchingUntitled = false
 
     static func armIfRequested() {
         guard !armed else { return }
         guard ProcessInfo.processInfo.environment["QUILL_OPEN_PROBE"] == "1" else { return }
         armed = true
         expectedText = loadExpectedText()
+        if expectedText?.isEmpty != false {
+            watchUntitledEditor()
+        }
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 20_000_000_000)
             guard !finished else { return }
@@ -26,7 +30,10 @@ enum OpenReadyProbe {
     /// heading font applied and the caret placement that lays that view out.
     static func consider(_ textView: VimTextView) {
         guard armed, !finished else { return }
-        guard let expected = expectedText, !expected.isEmpty else { return }
+        guard let expected = expectedText, !expected.isEmpty else {
+            acceptUntitledEditor()
+            return
+        }
         guard let scroll = textView.enclosingScrollView, scroll.window?.isVisible == true else { return }
         // The launch path detaches the storage observer while it inserts the string.
         // Ready is the later layout, after that observer is back.
@@ -45,6 +52,32 @@ enum OpenReadyProbe {
         fputs("quill open ready\n", stdout)
         fflush(stdout)
         proveEdit(textView, original: expected)
+    }
+
+    /// No launch file. The untitled editor is a visible window whose text view is empty.
+    private static func watchUntitledEditor() {
+        guard !watchingUntitled else { return }
+        watchingUntitled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50)) { @MainActor in
+            watchingUntitled = false
+            guard !finished else { return }
+            acceptUntitledEditor()
+            guard !finished else { return }
+            watchUntitledEditor()
+        }
+    }
+
+    private static func acceptUntitledEditor() {
+        guard !finished else { return }
+        guard expectedText == nil || expectedText?.isEmpty == true else { return }
+        for window in NSApplication.shared.windows where window.isVisible {
+            guard let textView = findTextView(in: window.contentView) else { continue }
+            guard textView.string.isEmpty, textView.engine.text.isEmpty else { continue }
+            finished = true
+            fputs("quill untitled editor ok\n", stdout)
+            fflush(stdout)
+            exit(0)
+        }
     }
 
     private static func loadExpectedText() -> String? {
