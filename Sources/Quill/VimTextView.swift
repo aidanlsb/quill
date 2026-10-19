@@ -211,14 +211,17 @@ final class VimTextView: NSTextView {
         scroll.drawsBackground = false
         scroll.autohidesScrollers = true
         let tv = VimTextView.make()
-        // setFrameSize measures the buffer. Bind the engine before the first frame.
+        // setFrameSize measures the buffer. Bind the engine first, and give the
+        // text container the clip width before any caller copies the text in.
+        // A zero-width container traps TextKit on a long line.
         tv.engine = engine
         engine.layout = tv.layoutAdapter
         tv.commonInit()
         tv.minSize = NSSize(width: 0, height: 0)
         tv.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        tv.frame = frame
         scroll.documentView = tv
+        tv.frame = frame
+        tv.updateInsets()
         return (scroll, tv)
     }
 
@@ -448,10 +451,13 @@ final class VimTextView: NSTextView {
             return
         }
         if hasMarkedText() || event.characters?.isEmpty != false {
+            // A synthetic event with no window crashes NSTextView's key binding.
+            if event.window == nil { return }
             super.keyDown(with: event)
             return
         }
         guard let key = KeyEvent(nsEvent: event) else {
+            if event.window == nil { return }
             super.keyDown(with: event)
             return
         }

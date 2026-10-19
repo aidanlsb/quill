@@ -14,6 +14,9 @@ extension Probe {
         let frame = NSRect(x: 0, y: 0, width: 960, height: height)
         let hosted = VimTextView.host(engine: engine, frame: frame)
         let scroll = hosted.scroll
+        // The column check measures the clip. A vertical scroller changes it.
+        scroll.hasVerticalScroller = false
+        scroll.autoresizingMask = [.width, .height]
         let tv = hosted.view
         tv.isDirectoryBuffer = false
         tv.columnWidth = measure
@@ -23,9 +26,10 @@ extension Probe {
             backing: .buffered,
             defer: false
         )
+        window.isReleasedWhenClosed = false
         window.contentView = scroll
-        window.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
         window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(tv)
         defer {
             window.orderOut(nil)
             window.close()
