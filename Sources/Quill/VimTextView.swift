@@ -898,8 +898,15 @@ final class VimTextView: NSTextView {
         let height = clip.height > 2 ? clip.height : 600
         let originY = textContainerOrigin.y
         let top = clip.height > 2 ? clip.minY : 0
-        let first = max(0, Int(floor((top - originY) / row)) - 4)
-        let last = min(count, max(first + 1, Int(ceil((top + height - originY) / row)) + 8))
+        let firstSpan = (top - originY) / row
+        let lastSpan = (top + height - originY) / row
+        // Clearing a long note leaves the clip on a line the buffer no longer
+        // has. An inverted range traps, and a non-finite span cannot become Int.
+        guard firstSpan.isFinite, lastSpan.isFinite,
+              abs(firstSpan) < 1_000_000_000, abs(lastSpan) < 1_000_000_000
+        else { return 0..<1 }
+        let first = min(count - 1, max(0, Int(floor(firstSpan)) - 4))
+        let last = min(count, max(first + 1, Int(ceil(lastSpan)) + 8))
         return first..<last
     }
 

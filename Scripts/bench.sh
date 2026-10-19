@@ -109,7 +109,8 @@ run_app() {
   mkdir -p "$(dirname "$dest")"
   : > "$log"
   if [[ "$phase" == "suite" ]]; then
-    QUILL_BENCH=1 \
+    SWIFT_BACKTRACE=enable \
+      QUILL_BENCH=1 \
       QUILL_BENCH_PHASE=suite \
       QUILL_BENCH_OUT="$dest" \
       QUILL_BENCH_FIXTURES="$fixtures" \

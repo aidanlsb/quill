@@ -181,7 +181,9 @@ enum AppBench {
         }
         add("scrollMs", scrolls)
         noteMemory()
+        QuillTrace.write("quill bench phase=release\n")
         releaseEditor()
+        QuillTrace.write("quill bench phase=directory\n")
 
         let model = AppModel()
         model.engine.leaderKey = " "
@@ -208,6 +210,7 @@ enum AppBench {
         }
         add("directoryMs", directories)
 
+        QuillTrace.write("quill bench phase=picker\n")
         model.open(url: repo)
         if !model.isDirectory {
             fail("repo root did not open as a directory: \(model.message)")
@@ -370,6 +373,14 @@ enum AppBench {
     }
 
     private static func releaseEditor() {
+        // Land the clip on the first line before swapping in an empty buffer.
+        // viewportLineBounds clamps too, but the scroll position is what made
+        // the range start past the new line count.
+        if let scroll = editorScroll {
+            let clip = scroll.contentView
+            clip.setBoundsOrigin(.zero)
+            scroll.reflectScrolledClipView(clip)
+        }
         editorView?.engine.load(text: "")
         editorView?.syncFromEngine()
         editorWindow?.orderOut(nil)
