@@ -15,13 +15,16 @@ final class SaveRaceTests: XCTestCase {
         XCTAssertEqual(model.engine.text, "hello!\n")
 
         let gate = pauseWrites(of: model)
+        model.message = ""
         model.save()
         insert(" more", in: model)
         XCTAssertEqual(model.engine.text, "hello! more\n")
 
         await gate.release()
-        await waitUntil("save did not finish") { self.text(at: url) == "hello!\n" }
-        await Task.yield()
+        // The bytes hit disk before the main-actor turn assigns `modified`.
+        await waitUntil("save did not finish") {
+            self.text(at: url) == "hello!\n" && model.message == "Saved"
+        }
         XCTAssertEqual(model.engine.text, "hello! more\n")
         XCTAssertTrue(model.engine.isModified)
         XCTAssertTrue(model.modified)
@@ -69,11 +72,13 @@ final class SaveRaceTests: XCTestCase {
         insert("!", in: model)
         let gate = pauseWrites(of: model)
 
+        model.message = ""
         model.handleEngineResult(model.engine.type(":wq<CR>"))
         insert(" more", in: model)
         await gate.release()
-        await waitUntil("save did not finish") { self.text(at: url) == "hello!\n" }
-        await Task.yield()
+        await waitUntil("save did not finish") {
+            self.text(at: url) == "hello!\n" && model.message == "Saved"
+        }
 
         XCTAssertEqual(model.closeRequests, 0)
         XCTAssertTrue(model.engine.isModified)
