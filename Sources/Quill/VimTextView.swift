@@ -318,12 +318,21 @@ final class VimTextView: NSTextView {
         textContainer?.size = NSSize(width: span.column, height: CGFloat.greatestFiniteMagnitude)
     }
 
-    func syncFromEngine() {
+    /// `layout` false writes the engine string without placing the caret. The first caret
+    /// placement lays the buffer out, so a launch file styles the heading before that.
+    func syncFromEngine(layout: Bool = true) {
         let text = engine.text
         if string != text {
-            string = text
+            if !layout, let storage = textStorage {
+                storage.beginEditing()
+                storage.replaceCharacters(in: NSRange(location: 0, length: storage.length), with: text)
+                storage.endEditing()
+            } else {
+                string = text
+            }
             tokenizer = MarkdownTokenizer(text: text)
         }
+        guard layout else { return }
         setSelectedRange(NSRange(location: clampUTF16(engine.cursor), length: 0))
         if let sel = engine.visualSelection, engine.mode.isVisual {
             let loc = clampUTF16(sel.lowerBound)

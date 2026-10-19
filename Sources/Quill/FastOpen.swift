@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 import QuillVim
 
 /// File arguments never get a SwiftUI window: AppKit treats the path as a document
@@ -24,6 +25,14 @@ enum FastOpen {
     }
 
     static func main(launchURL: URL? = nil, applicationReady: Bool = false) {
+        // Registered, not stored. State restoration and window tabbing both run
+        // while the first window is ordered front.
+        UserDefaults.standard.register(defaults: [
+            "ApplePersistenceIgnoreState": true,
+            "NSQuitAlwaysKeepsWindows": false,
+            "NSAutomaticWindowAnimationsEnabled": false,
+        ])
+        NSWindow.allowsAutomaticWindowTabbing = false
         let app = NSApplication.shared
         app.setActivationPolicy(.regular)
         let editor = prepare()
@@ -57,6 +66,7 @@ final class FastEditor: NSObject, VimTextViewDelegate {
     let delegate: AppDelegate
     let textView: VimTextView
     let window: NSWindow
+    private var scroll: NSScrollView?
 
     init(model: AppModel, delegate: AppDelegate) {
         self.model = model
@@ -101,27 +111,44 @@ final class FastEditor: NSObject, VimTextViewDelegate {
         window.hasShadow = false
         window.isMovableByWindowBackground = true
         window.delegate = delegate
-        window.contentView = scroll
+        window.animationBehavior = .none
+        self.scroll = scroll
     }
 
     func reveal() {
         window.title = model.title
+        // Show the text view on its own. A scroll view's first display builds the
+        // scroller, and the heading font does not need that.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        window.contentView = textView
         window.orderFront(nil)
+        CATransaction.commit()
 
         textView.columnWidth = model.theme.columnWidth
         textView.isDirectoryBuffer = model.isDirectory
         textView.applyTheme(model.theme, focus: model.focusMode)
         textView.appliedThemeID = model.themeIdentity
         textView.appliedFocus = model.focusMode
-        textView.syncFromEngine()
+        textView.disableAutomaticSubstitutions()
+        // The storage observer lays the buffer out on the first edit. Detach it
+        // until the heading font is applied, then put the caret back.
+        let observer = textView.textStorage?.textStorageObserver
+        textView.textStorage?.textStorageObserver = nil
+        textView.syncFromEngine(layout: false)
         textView.restyleNow()
+        textView.textStorage?.textStorageObserver = observer
+        if let scroll {
+            scroll.documentView = textView
+            window.contentView = scroll
+        }
+        textView.syncFromEngine()
 
         if let scroll = textView.enclosingScrollView {
             scroll.hasVerticalScroller = true
             scroll.autohidesScrollers = true
         }
         window.setContentSize(NSSize(width: 960, height: 760))
-        textView.disableAutomaticSubstitutions()
         window.center()
         window.hasShadow = true
         WindowChrome.apply(model.theme, to: window)
