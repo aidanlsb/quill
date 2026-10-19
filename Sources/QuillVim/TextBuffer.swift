@@ -11,7 +11,10 @@ public struct TextBuffer: Equatable {
     public private(set) var lines: LineIndex
     public private(set) var anchors: [Anchor]
 
+    /// `\r\n` and lone `\r` in `text` become `\n`: a buffer never holds `\r`, so
+    /// `\n` is the only line break and every line count agrees with `LineIndex`.
     public init(text: String = "", cursor: Int = 0) {
+        let text = LineIndex.normalizingNewlines(text)
         self.rope = Rope(text)
         self.cursor = max(0, cursor)
         self.curswant = .fresh
@@ -24,7 +27,10 @@ public struct TextBuffer: Equatable {
     /// UTF-16 length. O(1).
     public var count: Int { rope.utf16Count }
     public var isEmpty: Bool { rope.isEmpty }
+    /// Lines as LSP counts them, including the empty one after a final newline.
     public var lineCount: Int { lines.lineCount }
+    /// The last line as vim counts them. See `LineIndex.lastLine`.
+    public var lastLine: Int { lines.lastLine }
 
     public subscript(offset: Int) -> Character {
         character(at: offset)
@@ -49,6 +55,14 @@ public struct TextBuffer: Equatable {
     public func graphemeStart(before offset: Int) -> Int {
         if offset <= 0 { return 0 }
         return graphemeSpan(containing: offset - 1).lowerBound
+    }
+
+    /// Start of the grapheme after the one containing `offset`, or `count`.
+    /// Loops that walk text step with this and `graphemeStart(before:)`, never
+    /// with `± 1`, so they cannot stop inside an emoji or a combining sequence.
+    public func nextGrapheme(after offset: Int) -> Int {
+        guard offset < count else { return count }
+        return graphemeSpan(containing: max(0, offset)).upperBound
     }
 
     /// Advance `count` graphemes from `offset`, never past `limit`.
@@ -76,6 +90,7 @@ public struct TextBuffer: Equatable {
         let lower = min(max(0, range.lowerBound), count)
         let upper = min(max(lower, range.upperBound), count)
         let span = lower..<upper
+        assert(!new.utf16.contains(13), "normalize line breaks before they reach the buffer")
         rope.replace(span, with: new)
         lines.replace(span, with: new)
         adjustAnchors(replacing: span, withUTF16: new.utf16.count)
@@ -154,6 +169,16 @@ public struct TextBuffer: Equatable {
         return lineFullRange(at: a).lowerBound..<lineFullRange(at: b).upperBound
     }
 
+    /// What deleting whole lines removes. When the last of them has no newline,
+    /// the newline before the first goes too, so `dd` on a final line without
+    /// one leaves no empty line behind (`"a\nb"` becomes `"a"`).
+    public func linewiseDeletion(_ range: Range<Int>) -> Range<Int> {
+        guard range.upperBound >= count, range.lowerBound > 0 else { return range }
+        let last = lines.bufferLine(containing: max(range.lowerBound, range.upperBound - 1))
+        if last.hasNewline { return range }
+        return (range.lowerBound - 1)..<range.upperBound
+    }
+
     /// Line and UTF-16 column, the coordinates LSP uses.
     public func position(of offset: Int) -> TextPosition {
         lines.position(of: offset)
@@ -185,21 +210,6 @@ public struct TextBuffer: Equatable {
         return graphemes[min(max(0, column), graphemes.count - 1)].span.lowerBound
     }
 
-    /// Last caret offset in `range`. A trailing newline is not a place to sit.
-    public func lastCursor(in range: Range<Int>) -> Int {
-        if range.isEmpty { return range.lowerBound }
-        let start = max(0, range.lowerBound)
-        var end = min(range.upperBound, count)
-        if end > start {
-            let ch = character(at: end - 1)
-            if ch == "\n" || ch == "\r" {
-                end -= 1
-            }
-        }
-        if end <= start { return start }
-        return graphemeStart(before: end)
-    }
-
     public func firstNonBlank(onLine line: Int) -> Int {
         let range = lineContentRange(at: line)
         var i = range.lowerBound
@@ -224,22 +234,26 @@ public struct TextBuffer: Equatable {
         return graphemeStart(before: range.upperBound)
     }
 
-    /// Normal-mode cursor sits on a character, never on a trailing newline of a non-empty line,
-    /// and never past the last character.
+    /// Every caret lands on a grapheme boundary. A normal-mode caret also sits on a
+    /// character of a line up to `lastLine`: never on the newline of a non-empty
+    /// line, and never after a final newline. Insert mode may stand at the end of
+    /// any line, including after a final newline.
     public func clampedCursor(_ raw: Int, normalMode: Bool) -> Int {
         if count == 0 { return 0 }
-        var c = min(max(0, raw), count)
-        if normalMode {
-            if c >= count { c = graphemeStart(before: count) }
-            if c < count, character(at: c) == "\n" {
-                if lines.bufferLine(containing: c).start < c {
-                    c = graphemeStart(before: c)
-                }
-            }
-        } else {
-            c = min(c, count)
+        let c = min(max(0, raw), count)
+        if !normalMode {
+            return c == count ? c : graphemeSpan(containing: c).lowerBound
         }
-        return c
+        let line = lines.line(min(lines.line(containing: c), lines.lastLine))
+        if line.isEmpty { return line.start }
+        if c >= line.contentEnd { return graphemeStart(before: line.contentEnd) }
+        return graphemeSpan(containing: c).lowerBound
+    }
+
+    /// 0-based grapheme column of `offset` on its line, the column `file:line:col` uses.
+    public func graphemeColumn(of offset: Int) -> Int {
+        let line = bufferLine(containing: offset)
+        return graphemes(in: line.start..<min(max(offset, line.start), line.contentEnd)).count
     }
 
     public mutating func clampCursor(normalMode: Bool) {

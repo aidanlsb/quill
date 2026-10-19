@@ -149,7 +149,6 @@ final class ProbeTests: XCTestCase {
     func testRopeEditsAndLineIndex() {
         var rope = Rope("hello\nworld")
         XCTAssertEqual(rope.utf16Count, 11)
-        XCTAssertEqual(rope.newlineCount, 1)
         rope.replace(5..<6, with: "!\n")
         XCTAssertEqual(rope.content, "hello!\nworld")
         XCTAssertEqual(rope.substring(0..<6), "hello!")

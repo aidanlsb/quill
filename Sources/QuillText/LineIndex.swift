@@ -65,7 +65,41 @@ public struct LineIndex: Equatable, Sendable {
 
     public static let newline: UInt16 = 10
 
+    /// Lines as LSP counts them: text after the last `\n`, even when empty, is a line.
     public var lineCount: Int { starts.count }
+
+    public var endsWithNewline: Bool {
+        starts.count > 1 && starts[starts.count - 1] == utf16Count
+    }
+
+    /// The last line as vim counts them (`line('$') - 1`). A final `\n` ends the
+    /// line before it rather than starting another, so `"a\nb\n"` has lines 0 and 1.
+    /// `G`, `:$`, `%`, counts, and normal-mode carets stop here.
+    public var lastLine: Int {
+        endsWithNewline ? starts.count - 2 : starts.count - 1
+    }
+
+    /// `\r\n` and a lone `\r` become `\n`, the only line break the index knows.
+    /// Text from files, the clipboard, and language servers passes through this.
+    public static func normalizingNewlines(_ text: String) -> String {
+        guard text.utf16.contains(13) else { return text }
+        var out = String.UnicodeScalarView()
+        var previousWasCR = false
+        for scalar in text.unicodeScalars {
+            if scalar == "\r" {
+                out.append("\n")
+                previousWasCR = true
+                continue
+            }
+            if scalar == "\n", previousWasCR {
+                previousWasCR = false
+                continue
+            }
+            previousWasCR = false
+            out.append(scalar)
+        }
+        return String(out)
+    }
 
     /// Line holding `offset`. Offsets are clamped to `0...utf16Count`; the
     /// document end belongs to the last line.

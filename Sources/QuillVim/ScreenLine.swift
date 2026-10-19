@@ -104,9 +104,7 @@ public struct ScreenModel {
 
     /// The last buffer line a caret can reach.
     public var lastReachableLine: Int {
-        let last = buffer.lineCount - 1
-        if !insert, last > 0, buffer.line(last).isEmpty { return last - 1 }
-        return last
+        insert ? buffer.lineCount - 1 : buffer.lastLine
     }
 
     /// Rows of buffer line `index`. Always at least one; together they cover
