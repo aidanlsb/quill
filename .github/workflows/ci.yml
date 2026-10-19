@@ -116,18 +116,29 @@ jobs:
           Scripts/verify-quill --bin "$bin"
           test -s artifacts/verify-quill/smoke.log
           grep -F -q "quill smoke passed" artifacts/verify-quill/smoke.log
+      # Push to a feature branch and the pull_request event both need the gate.
+      # A push-only macos check would otherwise go green without measuring.
       - name: Perf regression gate
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           bin="$(swift build -c release --product Quill -Xswiftc -strict-concurrency=complete --show-bin-path)/Quill"
-          Scripts/bench.sh ci --bin "$bin" --base-ref "${{ github.base_ref }}" --pr "${{ github.event.pull_request.number }}"
+          base="${{ github.base_ref }}"
+          if [[ -z "$base" ]]; then
+            base=main
+          fi
+          pr="${{ github.event.pull_request.number }}"
+          if [[ -n "$pr" ]]; then
+            Scripts/bench.sh ci --bin "$bin" --base-ref "$base" --pr "$pr"
+          else
+            Scripts/bench.sh ci --bin "$bin" --base-ref "$base"
+          fi
       - name: Upload perf results
-        if: always() && github.event_name == 'pull_request'
+        if: always() && (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main'))
         uses: actions/upload-artifact@v4
         with:
-          name: perf-bench
+          name: perf-bench-${{ github.event_name }}
           if-no-files-found: ignore
           path: |
             artifacts/bench/pr.json

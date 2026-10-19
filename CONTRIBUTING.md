@@ -41,7 +41,7 @@ Each process discards warmups, then reports median, p95, and p99. The shell runs
 
 ### What fails the job
 
-On a pull request the job builds this commit and the base branch tip on the same runner and compares them. Hardware differences cancel out. `Baselines/perf-macos.json` is the recorded absolute reference for local runs and for history. The job does not fail on that file, because a different machine will not match it.
+On a pull request, and on a push to any branch other than `main`, the job builds this commit and the base branch tip on the same runner and compares them. A push to `main` does not run the gate against itself. Hardware differences cancel out. `Baselines/perf-macos.json` is the recorded absolute reference for local runs and for history. The job does not fail on that file, because a different machine will not match it.
 
 A stat fails when both of these are true:
 

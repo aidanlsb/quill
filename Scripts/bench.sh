@@ -289,6 +289,9 @@ cmd_ci() {
   run_many "$base_bin" "$root/artifacts/bench/fixtures" "$base_runs"
   python3 "$root/Scripts/bench_compare.py" aggregate --dir "$base_runs" --out "$root/artifacts/bench/base.json"
 
+  if [[ -z "$pr" && -n "${GH_TOKEN:-}" ]]; then
+    pr="$(gh pr view --json number -q .number 2>/dev/null || true)"
+  fi
   local status=0
   set +e
   python3 "$root/Scripts/bench_compare.py" compare \
