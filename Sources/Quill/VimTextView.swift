@@ -1144,18 +1144,22 @@ final class VimTextView: NSTextView {
     /// TextKit lays the new width out, so on a large rewrap it can leave the caret
     /// off screen. A fragment's y depends on every fragment above it, and after a
     /// width change only the viewport is laid out again, so lay out through the
-    /// caret before measuring. This runs once per resize, not per live-resize frame.
+    /// caret before measuring. Scrolling paints the lines that come on screen,
+    /// and dropping a table's padding there rewraps it, so measure again after.
+    /// This runs once per resize, not per live-resize frame.
     private func revealCaretIfHidden() {
         guard let clip = enclosingScrollView?.contentView, engine != nil, let lm = textLayoutManager else { return }
         let doc = lm.documentRange.location
-        let index = caretUTF16()
-        lm.enumerateTextLayoutFragments(from: doc, options: [.ensuresLayout]) { fragment in
-            let end = lm.offset(from: doc, to: fragment.rangeInElement.endLocation)
-            return end != NSNotFound && end <= index
+        for _ in 0..<3 {
+            let index = caretUTF16()
+            lm.enumerateTextLayoutFragments(from: doc, options: [.ensuresLayout]) { fragment in
+                let end = lm.offset(from: doc, to: fragment.rangeInElement.endLocation)
+                return end != NSNotFound && end <= index
+            }
+            guard let caret = caretRect(forcingLayout: true),
+                  !clip.bounds.insetBy(dx: -0.5, dy: -0.5).contains(caret) else { return }
+            revealCaret()
         }
-        guard let caret = caretRect(forcingLayout: true) else { return }
-        guard !clip.bounds.insetBy(dx: -0.5, dy: -0.5).contains(caret) else { return }
-        revealCaret()
     }
 
     func halfPageLines() -> Int {
