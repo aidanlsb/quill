@@ -26,6 +26,11 @@ final class AppModel {
     var picker: PickerEngine?
     var pickerKind: PickerKind?
     var pickerTick = 0
+    /// Editor mode and cursor to restore when the command palette closes.
+    var paletteMode: Mode?
+    var paletteCursor: Int?
+    /// QuillWorkspace has its own `CommandRegistry`; the palette uses QuillSearch's.
+    let commands = QuillSearch.CommandRegistry()
     var pendingOps: [FSOperation] = []
     var showConfirm = false
     var confirmWarning = ""
@@ -35,7 +40,7 @@ final class AppModel {
     /// Bumped when the buffer changes outside `keyDown`, so the text view syncs.
     var revision = 0
 
-    enum PickerKind { case files, grep, references, codeAction }
+    enum PickerKind { case files, grep, references, codeAction, commands }
     enum PendingNavigation {
         case open(URL)
         case newFile
@@ -84,6 +89,7 @@ final class AppModel {
             }
         }
         theme = makeTheme(themeChoice)
+        installCommands()
     }
 
     func setTheme(_ choice: ThemeChoice) {
@@ -268,48 +274,31 @@ final class AppModel {
 
     func perform(_ action: HostAction) {
         switch action {
-        case .write:
-            save()
-        case .quit:
-            NSApplication.shared.keyWindow?.close()
         case .writeQuit:
-            save()
-            if !engine.isModified { NSApplication.shared.keyWindow?.close() }
-        case .goToDefinition:
-            goToDefinition()
-        case .openParentDirectory:
-            openParent()
-        case .openUnderCursor:
-            openCurrentEntry()
-        case .findFiles:
-            presentFilePicker()
-        case .liveGrep:
-            presentGrepPicker()
-        case .findReferences:
-            findReferences()
-        case .codeAction:
-            presentCodeActions()
-        case .shell(let command):
-            runShell(command)
-        case .setTheme(let choice):
-            setTheme(choice)
-        case .toggleTheme:
-            toggleTheme()
+            runCommand("file.save")
+            if !engine.isModified { runCommand("file.close") }
         case .formatTables(let startLine, let endLine, let quiet):
             formatTables(startLine: startLine, endLine: endLine, quiet: quiet)
+        case .shell(let command):
+            if let id = shellCommandID(command), runCommand(id) { return }
+            runShell(command)
         case .command(let name):
             if name == "split" || name == "vsplit" {
                 message = "Split the window from the view layer once a second EditorWindow is attached"
             } else if name.hasPrefix("edit:") {
                 let path = String(name.dropFirst("edit:".count))
                 open(url: URL(fileURLWithPath: path))
-            } else {
+            } else if !runCommand(name) {
                 message = "No mapping for \(name)"
+            }
+        default:
+            if let id = CommandRoutes.id(for: action) {
+                runCommand(id)
             }
         }
     }
 
-    private func formatTables(startLine: Int?, endLine: Int?, quiet: Bool) {
+    func formatTables(startLine: Int?, endLine: Int?, quiet: Bool) {
         guard !isDirectory else { return }
         let scope: TableScope
         if let startLine, let endLine {
@@ -497,14 +486,28 @@ final class AppModel {
 
     func handlePicker(_ key: PickerKey) {
         guard let picker else { return }
+        if pickerKind == .commands, key == .escape {
+            dismissCommandPalette(restore: true)
+            return
+        }
         switch picker.handle(key) {
         case .none:
             pickerTick += 1
-            loadPreviewForSelection()
+            if pickerKind != .commands { loadPreviewForSelection() }
         case .close:
-            self.picker = nil
-            pickerKind = nil
+            if pickerKind == .commands {
+                dismissCommandPalette(restore: true)
+            } else {
+                self.picker = nil
+                pickerKind = nil
+            }
         case .confirm:
+            if pickerKind == .commands {
+                let id = picker.selected?.payload
+                dismissCommandPalette(restore: true)
+                if let id, !runCommand(id) { message = "Unavailable" }
+                return
+            }
             let kind = pickerKind
             let item = picker.selected
             self.picker = nil
@@ -999,7 +1002,7 @@ final class AppModel {
         if foreign { message = "Edit applies to another file" }
     }
 
-    private func runShell(_ command: String) {
+    func runShell(_ command: String) {
         let root = rootURL
         Task {
             let result = await Task.detached(priority: .userInitiated) {
