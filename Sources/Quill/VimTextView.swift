@@ -172,7 +172,8 @@ final class VimTextView: NSTextView {
     /// Mono cells that fit the column when a table was last painted. Whether a
     /// table is aligned or shown as typed depends on it, so a change repaints.
     private var paintedTableFit: Int?
-    /// Set when the column width changes; `layout()` then makes sure the caret is visible.
+    /// Set when the column width changes; the next `layout()` outside a live
+    /// resize makes sure the caret is visible.
     private var revealAfterRewrap = false
     /// Read by `EditorView` in this file. `private` would hide them from that type.
     fileprivate var appliedThemeID = -1
@@ -457,7 +458,7 @@ final class VimTextView: NSTextView {
     override func layout() {
         super.layout()
         silenceSystemCarets()
-        if revealAfterRewrap, !sizing {
+        if revealAfterRewrap, !sizing, !inLiveResize {
             revealAfterRewrap = false
             revealCaretIfHidden()
         }
@@ -562,6 +563,7 @@ final class VimTextView: NSTextView {
             pinVerticalOrigin(anchor)
             resizeAnchorY = nil
         }
+        if revealAfterRewrap { needsLayout = true }
     }
 
     override func viewDidMoveToSuperview() {
@@ -1140,10 +1142,18 @@ final class VimTextView: NSTextView {
 
     /// Rewrapping moves the caret's row. The resize anchor measures it before
     /// TextKit lays the new width out, so on a large rewrap it can leave the caret
-    /// off screen. After layout the caret rect is current.
+    /// off screen. A fragment's y depends on every fragment above it, and after a
+    /// width change only the viewport is laid out again, so lay out through the
+    /// caret before measuring. This runs once per resize, not per live-resize frame.
     private func revealCaretIfHidden() {
-        guard let clip = enclosingScrollView?.contentView, engine != nil,
-              let caret = caretRect(forcingLayout: true) else { return }
+        guard let clip = enclosingScrollView?.contentView, engine != nil, let lm = textLayoutManager else { return }
+        let doc = lm.documentRange.location
+        let index = caretUTF16()
+        lm.enumerateTextLayoutFragments(from: doc, options: [.ensuresLayout]) { fragment in
+            let end = lm.offset(from: doc, to: fragment.rangeInElement.endLocation)
+            return end != NSNotFound && end <= index
+        }
+        guard let caret = caretRect(forcingLayout: true) else { return }
         guard !clip.bounds.insetBy(dx: -0.5, dy: -0.5).contains(caret) else { return }
         revealCaret()
     }
