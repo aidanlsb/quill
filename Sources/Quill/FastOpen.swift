@@ -13,13 +13,19 @@ import QuillVim
 enum FastOpen {
     private static var session: FastEditor?
 
+    /// True once a fast-open editor exists. `presentMainWindowIfNeeded` must not add a second window.
+    static var ownsWindow: Bool { session != nil }
+
+    static func adopt(_ editor: FastEditor) {
+        session = editor
+    }
+
     /// Text view and borderless window, with no file yet. Built before the GetURL event is dispatched.
     static func prepare() -> FastEditor {
         let delegate = AppDelegate()
         let model = AppModel()
         delegate.attach(model)
         let editor = FastEditor(model: model, delegate: delegate)
-        session = editor
         editor.installShell()
         return editor
     }
@@ -67,6 +73,8 @@ final class FastEditor: NSObject, VimTextViewDelegate {
     let textView: VimTextView
     let window: NSWindow
     private var scroll: NSScrollView?
+    /// Stays false until the heading font is on screen, so the launch file does not lay out twice.
+    private var revealed = false
 
     init(model: AppModel, delegate: AppDelegate) {
         self.model = model
@@ -79,6 +87,7 @@ final class FastEditor: NSObject, VimTextViewDelegate {
             defer: true
         )
         super.init()
+        FastOpen.adopt(self)
         model.onEditorState = { [weak self] in
             self?.syncHost()
         }
@@ -136,6 +145,7 @@ final class FastEditor: NSObject, VimTextViewDelegate {
         textView.textStorage?.textStorageObserver = nil
         textView.syncFromEngine(layout: false)
         textView.restyleNow()
+        revealed = true
         textView.textStorage?.textStorageObserver = observer
         textView.prepareForDisplay()
         if let scroll {
@@ -159,6 +169,8 @@ final class FastEditor: NSObject, VimTextViewDelegate {
     /// `:e`, `-`, and directory Enter replace the engine buffer with `didChangeText == false`,
     /// so `applyResult` leaves the old string on screen. Theme and focus land the same way.
     func syncHost() {
+        // The launch open notifies here before the window is styled. `reveal` fills the view.
+        guard revealed else { return }
         textView.columnWidth = model.theme.columnWidth
         textView.isDirectoryBuffer = model.isDirectory
         window.title = model.title

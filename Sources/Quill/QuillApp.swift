@@ -366,6 +366,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// `ContentView` so launch-argument open still runs from `onAppear`.
     private func presentMainWindowIfNeeded() {
         guard let model else { return }
+        // FastOpen already presented the note. A SwiftUI window here would be a second editor.
+        if FastOpen.ownsWindow { return }
         if !NSApplication.shared.windows.isEmpty { return }
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 960, height: 760),

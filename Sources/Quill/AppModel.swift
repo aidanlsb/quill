@@ -684,6 +684,9 @@ final class AppModel {
         applyPendingJump(for: url)
         revision += 1
         refreshStatus()
+        // `:e` and openFile replace the buffer with `didChangeText == false`.
+        // SwiftUI watches `revision`; FastOpen has no representable, so it refreshes here.
+        onEditorState?()
     }
 
     private func performNew() {
@@ -696,6 +699,7 @@ final class AppModel {
         sync = DocumentSync()
         revision += 1
         refreshStatus()
+        onEditorState?()
     }
 
     private func loadDirectory(_ url: URL) {
@@ -720,6 +724,7 @@ final class AppModel {
             applyPendingJump(for: url)
             revision += 1
             refreshStatus()
+            onEditorState?()
         } catch {
             message = error.localizedDescription
         }
