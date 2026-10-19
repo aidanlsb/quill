@@ -157,6 +157,39 @@ enum AppPerf {
         typical.window.orderOut(nil)
 
         try? FileManager.default.removeItem(at: root)
+
+        let imageDoc = (0..<100).map { index in
+            "Paragraph \(index) stands in for a sentence about the note.\n![fig \(index)](figures/\(index).png)\n"
+        }.joined()
+        let indexed = millis {
+            _ = MarkdownImages.find(in: imageDoc)
+        }
+        emit("imageIndexMs", indexed)
+        let images = host(imageDoc)
+        images.view.setImageContext(enabled: true, filePath: "/tmp/quill-image-bench.md")
+        images.view.syncFromEngine()
+        let refreshed = millis {
+            images.view.flushImagePreviews()
+        }
+        emit("imageRefreshMs", refreshed)
+        images.view.engine.mode = .insert
+        let imageTyping = millis {
+            for _ in 0..<20 {
+                let result = images.view.engine.handle(KeyEvent(.character("a")))
+                images.view.applyResult(result)
+            }
+        }
+        emit("imageKeystrokeMs", imageTyping / 20.0)
+        images.view.engine.mode = .normal
+        let imageMotion = millis {
+            for _ in 0..<40 {
+                let result = images.view.engine.handle(KeyEvent(.character("j")))
+                images.view.applyResult(result)
+            }
+        }
+        emit("imageMotionMs", imageMotion / 40.0)
+        images.window.orderOut(nil)
+
         QuillTrace.write("quill perf done\n")
     }
 

@@ -13,6 +13,15 @@ import QuillVim
 final class TextKit2Layout: ScreenLayout, @unchecked Sendable {
     weak var textView: NSTextView?
 
+    nonisolated func gapRows(after line: BufferLine, in buffer: TextBuffer) -> Int {
+        // Preview height lives on the view. `line` already names the buffer row.
+        _ = buffer
+        return MainActor.assumeIsolated {
+            guard let tv = textView as? VimTextView else { return 0 }
+            return tv.imageGapRows(on: line.index)
+        }
+    }
+
     nonisolated func rowRanges(of line: BufferLine, in buffer: TextBuffer) -> [Range<Int>]? {
         // quill-concurrency: TextBuffer is not Sendable; the engine calls this synchronously on the main thread.
         nonisolated(unsafe) let buffer = buffer
@@ -182,6 +191,7 @@ final class VimTextView: NSTextView {
     private let caretChrome = CaretChrome(frame: .zero)
     private var placingCaret = false
     private var orderingCaret = false
+    let imagePreviews = ImagePreviewController()
 
     override func awakeFromNib() {
         super.awakeFromNib()
@@ -190,6 +200,7 @@ final class VimTextView: NSTextView {
 
     func commonInit() {
         layoutAdapter.textView = self
+        imagePreviews.attach(self)
         usesFontPanel = false
         usesFindPanel = false
         isAutomaticQuoteSubstitutionEnabled = false
@@ -254,6 +265,7 @@ final class VimTextView: NSTextView {
         }
         updateInsets()
         queueRestyle()
+        imagePreviews.applyTheme()
         placeCaret()
     }
 
@@ -326,6 +338,7 @@ final class VimTextView: NSTextView {
             let through = viewportLastLine()
             tokenizer = MarkdownTokenizer(text: text, scanThroughLine: through)
             styledCoverage = 0..<0
+            imagePreviews.noteDocumentReplaced()
             QuillPerfSplit.add("syncTokenMs", since: tokenBegan)
         }
         setSelectedRange(NSRange(location: clampUTF16(engine.cursor), length: 0))
@@ -394,6 +407,13 @@ final class VimTextView: NSTextView {
         noteContentSizeChanged()
         revealCaret()
         QuillPerfSplit.add("keyCaretMs", since: caretBegan)
+        if result.didChangeText {
+            if result.edits.isEmpty {
+                imagePreviews.noteDocumentReplaced()
+            } else {
+                imagePreviews.noteEdits(result.edits)
+            }
+        }
         if isDirectoryBuffer { needsDisplay = true }
         vimDelegate?.vimTextView(self, didHandle: result)
     }
@@ -463,6 +483,7 @@ final class VimTextView: NSTextView {
             revealCaretIfHidden()
         }
         placeCaret(forcingLayout: false)
+        imagePreviews.reposition()
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -752,6 +773,7 @@ final class VimTextView: NSTextView {
         if let styleLimit, !styleLimit.isEmpty {
             noteStyled(styleLimit)
         }
+        imagePreviews.restoreSpacing(in: styleLimit)
         noteContentSizeChanged()
     }
 
@@ -1105,7 +1127,7 @@ final class VimTextView: NSTextView {
         let line = engine.buffer.lineIndex(containing: clampUTF16(engine.cursor))
         let estimated = NSRect(
             x: 0,
-            y: textContainerOrigin.y + CGFloat(line) * row,
+            y: textContainerOrigin.y + CGFloat(line) * row + imagePreviews.heightBefore(line: line),
             width: 1,
             height: row
         )
@@ -1186,12 +1208,28 @@ final class VimTextView: NSTextView {
         // already laid out (`usageBounds` reads, it does not lay out) can only
         // raise the estimate. Without it the frame ends above a wrapped caret.
         let rows = max(1, engine.buffer.lineCount)
-        var content = CGFloat(rows) * rowHeight() + inset
+        var content = CGFloat(rows) * rowHeight() + inset + imagePreviews.reservedHeight
         if let used = textLayoutManager?.usageBoundsForTextContainer, used.height > 0 {
             content = max(content, used.maxY + inset)
         }
         let ghosts = isDirectoryBuffer ? directoryGhostHeight : 0
         return max(clip, ceil(content)) + ghosts
+    }
+
+    func bodyRowHeight() -> CGFloat {
+        rowHeight()
+    }
+
+    func imageGapRows(on line: Int) -> Int {
+        imagePreviews.gapRows(on: line, rowHeight: rowHeight())
+    }
+
+    func setImageContext(enabled: Bool, filePath: String?) {
+        imagePreviews.setContext(enabled: enabled, filePath: filePath)
+    }
+
+    func flushImagePreviews() {
+        imagePreviews.flush()
     }
 
     private func font(atUTF16 index: Int) -> NSFont {
@@ -1430,6 +1468,7 @@ final class VimTextView: NSTextView {
         // Vertical scrolling used to return above. A table below the fold stays
         // unstyled until this pass paints the lines that just came on screen.
         restyleVisibleIfNeeded()
+        imagePreviews.scheduleRefresh()
     }
 
     private func visibleWidth(proposed: CGFloat) -> CGFloat {
@@ -1524,6 +1563,7 @@ struct EditorView: NSViewRepresentable {
         context.coordinator.textView = tv
         context.coordinator.model = model
         tv.columnWidth = model.theme.columnWidth
+        tv.setImageContext(enabled: model.showImages, filePath: model.isDirectory ? nil : model.fileURL?.path)
         tv.isDirectoryBuffer = model.isDirectory
         tv.directoryURL = model.isDirectory ? model.fileURL : nil
         tv.directoryEntries = model.isDirectory ? (model.directorySnapshot?.entries ?? []) : []
@@ -1538,6 +1578,7 @@ struct EditorView: NSViewRepresentable {
         tv.engine = model.engine
         _ = revision
         tv.columnWidth = model.theme.columnWidth
+        tv.setImageContext(enabled: model.showImages, filePath: model.isDirectory ? nil : model.fileURL?.path)
         let entries = model.isDirectory ? (model.directorySnapshot?.entries ?? []) : []
         let url = model.isDirectory ? model.fileURL : nil
         let directoryChanged = tv.isDirectoryBuffer != model.isDirectory
