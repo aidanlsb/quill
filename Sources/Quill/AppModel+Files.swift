@@ -177,10 +177,14 @@ extension AppModel {
             save()
             return
         }
+        let ending: LineEnding
+        if case .file(_, let current, _) = document.kind { ending = current } else { ending = .lf }
+        let data = TextCodec.encode(document.engine.text, ending: ending)
         let generation = document.generation
+        let write = document.diskWrite
         Task {
             do {
-                try await self.document.writeCopy(to: url)
+                try await write(data, url)
                 guard self.document.generation == generation else { return }
                 self.message = "Saved"
             } catch {
@@ -208,29 +212,32 @@ extension AppModel {
             )
             return
         }
-        let generation = document.generation
-        Task {
-            do {
-                switch try await self.document.save() {
-                case .saved(let text):
-                    self.lspDidSave(text, generation: generation)
-                    self.message = "Saved"
-                    guard !self.document.engine.isModified else { return }
-                    if case .unsaved = self.prompt {
-                        self.discardAndContinue()
-                    } else {
-                        completion?()
+        switch document.prepareSave() {
+        case .noFile:
+            saveAs()
+        case .conflict:
+            message = "File changed on disk. Save again to overwrite."
+        case .ready(let request):
+            let generation = request.generation
+            Task {
+                do {
+                    switch try await self.document.finishSave(request) {
+                    case .saved(let text):
+                        self.lspDidSave(text, generation: generation)
+                        self.message = "Saved"
+                        guard !self.document.engine.isModified else { return }
+                        if case .unsaved = self.prompt {
+                            self.discardAndContinue()
+                        } else {
+                            completion?()
+                        }
+                    case .conflict, .noFile, .superseded:
+                        break
                     }
-                case .conflict:
-                    self.message = "File changed on disk. Save again to overwrite."
-                case .superseded:
-                    break
-                case .noFile:
-                    self.saveAs()
+                } catch {
+                    guard self.document.generation == generation, self.document.url == request.url else { return }
+                    self.message = error.localizedDescription
                 }
-            } catch {
-                guard self.document.generation == generation else { return }
-                self.message = error.localizedDescription
             }
         }
     }
@@ -298,6 +305,12 @@ extension AppModel {
     }
 
     func beginOpen(_ url: URL) {
+        do {
+            if try document.openSynchronously(url) { return }
+        } catch {
+            message = error.localizedDescription
+            return
+        }
         Task {
             do {
                 _ = try await self.document.open(url)

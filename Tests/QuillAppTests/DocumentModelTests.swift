@@ -106,6 +106,7 @@ final class DocumentModelTests: XCTestCase {
         await waitUntil("preview did not start") { gate.started }
         XCTAssertNotNil(model.picker)
         model.handlePicker(.escape)
+        model.handlePicker(.escape)
         XCTAssertNil(model.picker)
         gate.go = true
         for _ in 0..<30 { await Task.yield() }

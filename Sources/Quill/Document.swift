@@ -126,20 +126,27 @@ final class Document {
         return rootURL.appendingPathComponent(text)
     }
 
-    /// `false` when a newer open or reload won the race.
-    func open(_ url: URL) async throws -> Bool {
+    /// Directories and missing files install before this returns.
+    /// An existing file returns `false`; the caller reads it.
+    func openSynchronously(_ url: URL) throws -> Bool {
         var isDir: ObjCBool = false
         let exists = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
         if exists, isDir.boolValue {
             if let error = loadDirectory(url) { throw Failure.message(error) }
             return true
         }
-        let ticket = bumpTicket()
         if !exists {
-            guard ticket == openTicket else { return false }
+            _ = bumpTicket()
             installFile(try TextCodec.decode(Data()), url: url)
             return true
         }
+        return false
+    }
+
+    /// `false` when a newer open or reload won the race.
+    func open(_ url: URL) async throws -> Bool {
+        if try openSynchronously(url) { return true }
+        let ticket = bumpTicket()
         let data: Data
         do {
             data = try await readFile(url)
@@ -184,7 +191,23 @@ final class Document {
         rootURL = url.deletingLastPathComponent()
     }
 
-    func save(force: Bool = false) async throws -> SaveOutcome {
+    /// Snapshot taken before `save()` returns, so keystrokes after `:w` stay out of the write.
+    struct PendingSave: Sendable {
+        let stamp: Int
+        let generation: Int
+        let url: URL
+        let text: String
+        let data: Data
+        let write: @Sendable (Data, URL) async throws -> Void
+    }
+
+    enum PreparedSave {
+        case ready(PendingSave)
+        case conflict
+        case noFile
+    }
+
+    func prepareSave(force: Bool = false) -> PreparedSave {
         guard case .file(let url, let ending, let loadedAt) = kind else { return .noFile }
         if let loadedAt, let current = modificationDate(url),
            ExternalChange.conflicts(loaded: loadedAt, current: current),
@@ -192,26 +215,26 @@ final class Document {
             confirmOverwrite = true
             return .conflict
         }
-        let stamp = engine.changeStamp
-        let gen = generation
-        let savedURL = url
-        let text = engine.text
-        let data = TextCodec.encode(text, ending: ending)
-        let write = diskWrite
-        try await write(data, savedURL)
-        guard generation == gen, self.url == savedURL else { return .superseded }
-        engine.markSaved(stamp: stamp)
-        modified = engine.isModified
-        kind = .file(url: url, ending: ending, loadedAt: modificationDate(savedURL))
-        confirmOverwrite = false
-        return .saved(text: text)
+        return .ready(PendingSave(
+            stamp: engine.changeStamp,
+            generation: generation,
+            url: url,
+            text: engine.text,
+            data: TextCodec.encode(engine.text, ending: ending),
+            write: diskWrite
+        ))
     }
 
-    func writeCopy(to url: URL) async throws {
-        let ending: LineEnding
-        if case .file(_, let current, _) = kind { ending = current } else { ending = .lf }
-        let data = TextCodec.encode(engine.text, ending: ending)
-        try await diskWrite(data, url)
+    func finishSave(_ request: PendingSave) async throws -> SaveOutcome {
+        try await request.write(request.data, request.url)
+        guard generation == request.generation, url == request.url else { return .superseded }
+        engine.markSaved(stamp: request.stamp)
+        modified = engine.isModified
+        if case .file(_, let ending, _) = kind {
+            kind = .file(url: request.url, ending: ending, loadedAt: modificationDate(request.url))
+        }
+        confirmOverwrite = false
+        return .saved(text: request.text)
     }
 
     @discardableResult
