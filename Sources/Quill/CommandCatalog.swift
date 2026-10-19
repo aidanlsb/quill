@@ -287,21 +287,23 @@ extension AppModel {
     }
 
     func presentCommandPalette() {
-        if paletteMode == nil {
-            paletteMode = engine.mode
-            paletteCursor = engine.cursor
+        let restore: (Mode, Int)?
+        if case .picker(let opened) = prompt, opened.kind == .commands {
+            restore = opened.restore
+        } else {
+            restore = (engine.mode, engine.cursor)
         }
+        let token = beginPromptWork()
         let picker = PickerEngine()
         picker.onQueryChange = { [weak self] query in
             self?.reloadCommandPalette(query)
         }
-        pickerKind = .commands
-        self.picker = picker
+        prompt = .picker(PickerSession(id: token, kind: .commands, picker: picker, restore: restore))
         reloadCommandPalette(picker.query)
     }
 
     func reloadCommandPalette(_ query: String) {
-        guard pickerKind == .commands, let picker else { return }
+        guard case .picker(let opened) = prompt, opened.kind == .commands else { return }
         let items = commands.ranked(matching: query).map { entry in
             PickerItem(
                 title: entry.name,
@@ -310,21 +312,21 @@ extension AppModel {
                 dimmed: !commands.isEnabled(id: entry.id)
             )
         }
-        picker.replaceItems(items, resetSelection: true)
-        pickerTick += 1
+        opened.picker.replaceItems(items, resetSelection: true)
     }
 
     func dismissCommandPalette(restore: Bool) {
-        picker = nil
-        pickerKind = nil
-        let mode = paletteMode
-        let cursor = paletteCursor
-        paletteMode = nil
-        paletteCursor = nil
-        guard restore, let mode, let cursor else { return }
-        engine.mode = mode
-        if engine.cursor != cursor {
-            engine.moveCursor(to: cursor)
+        let restoreState: (Mode, Int)?
+        if case .picker(let opened) = prompt, opened.kind == .commands {
+            restoreState = opened.restore
+        } else {
+            restoreState = nil
+        }
+        clearPrompt()
+        guard restore, let restoreState else { return }
+        engine.mode = restoreState.0
+        if engine.cursor != restoreState.1 {
+            engine.moveCursor(to: restoreState.1)
         }
         status = engine.mode.displayName
     }

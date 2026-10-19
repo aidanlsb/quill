@@ -96,11 +96,12 @@ struct QuillTheme {
         fontFamily: String = "",
         fontSize: Double = QuillMetrics.defaultFontSize,
         columnCharacters: Int = QuillMetrics.defaultColumn,
-        scheme: ThemeChoice = .system
+        scheme: ThemeChoice = .system,
+        systemIsDark: Bool? = nil
     ) -> QuillTheme {
         let appearance = NSApp?.effectiveAppearance ?? NSAppearance.currentDrawing()
-        let systemDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let dark = scheme.isDark(systemIsDark: systemDark)
+        let detected = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let dark = scheme.isDark(systemIsDark: systemIsDark ?? detected)
         let size = CGFloat(QuillMetrics.fontSize(fontSize))
         let body = QuillMetrics.bodyFont(family: fontFamily, size: size)
         let mono = QuillMetrics.monoFont(ofSize: size * QuillMetrics.monoScale)

@@ -168,6 +168,8 @@ final class VimTextView: NSTextView {
     var directoryStyleCache: DirectoryStyle?
     /// Tests watch reloads, row invalidation, and directory painting. Nil in the app.
     var onReload: (@MainActor () -> Void)?
+    /// Last `Document.refreshID` applied to this view. A background window reloads when it moves.
+    var seenRefresh = -1
     var onNeedsDisplay: (@MainActor (NSRect) -> Void)?
     var onDirectoryDecorations: (@MainActor () -> Void)?
     private var restyleQueued = false
@@ -468,7 +470,20 @@ final class VimTextView: NSTextView {
         assertViewMatchesEngine()
     }
 
+    func useThisLayout() {
+        engine.layout = layoutAdapter
+    }
+
+    /// A background window reloads when the shared buffer changes. The key window already patched itself.
+    func syncFromEngine(isEditor: Bool, refresh: Int) {
+        if seenRefresh == refresh { return }
+        seenRefresh = refresh
+        if isEditor { return }
+        reload()
+    }
+
     override func keyDown(with event: NSEvent) {
+        useThisLayout()
         if event.modifierFlags.contains(.command) {
             super.keyDown(with: event)
             return
@@ -510,6 +525,7 @@ final class VimTextView: NSTextView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        useThisLayout()
         super.mouseDown(with: event)
         let offset = clampUTF16(selectedRange().location)
         mouseAnchor = offset
@@ -1757,21 +1773,23 @@ func syncWindowChrome(
 struct EditorView: NSViewRepresentable {
     var model: AppModel
     var diagnostics: [(NSRange, Int)]
+    var refresh: Int
 
     func makeNSView(context: Context) -> NSScrollView {
         let hosted = VimTextView.host(engine: model.engine)
         let scroll = hosted.scroll
         let tv = hosted.view
-        model.editor = tv
+        if model.editor == nil { model.editor = tv }
         tv.vimDelegate = context.coordinator
         context.coordinator.textView = tv
         context.coordinator.model = model
         tv.columnWidth = model.theme.columnWidth
-        tv.setImageContext(enabled: model.showImages, filePath: model.isDirectory ? nil : model.fileURL?.path)
-        tv.isDirectoryBuffer = model.isDirectory
-        tv.directoryURL = model.isDirectory ? model.fileURL : nil
-        tv.directoryEntries = model.isDirectory ? (model.directorySnapshot?.entries ?? []) : []
+        tv.setImageContext(enabled: model.showImages, filePath: model.document.isDirectory ? nil : model.document.url?.path)
+        tv.isDirectoryBuffer = model.document.isDirectory
+        tv.directoryURL = model.document.isDirectory ? model.document.url : nil
+        tv.directoryEntries = model.document.isDirectory ? (model.document.snapshot?.entries ?? []) : []
         tv.applyTheme(model.theme, focus: model.focusMode)
+        tv.seenRefresh = refresh
         tv.reload()
         return scroll
     }
@@ -1779,15 +1797,17 @@ struct EditorView: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let tv = scroll.documentView as? VimTextView else { return }
         tv.engine = model.engine
-        model.editor = tv
+        if model.editor == nil || tv.window?.isKeyWindow == true {
+            model.editor = tv
+        }
         tv.columnWidth = model.theme.columnWidth
-        tv.setImageContext(enabled: model.showImages, filePath: model.isDirectory ? nil : model.fileURL?.path)
-        let entries = model.isDirectory ? (model.directorySnapshot?.entries ?? []) : []
-        let url = model.isDirectory ? model.fileURL : nil
-        let directoryChanged = tv.isDirectoryBuffer != model.isDirectory
+        tv.setImageContext(enabled: model.showImages, filePath: model.document.isDirectory ? nil : model.document.url?.path)
+        let entries = model.document.isDirectory ? (model.document.snapshot?.entries ?? []) : []
+        let url = model.document.isDirectory ? model.document.url : nil
+        let directoryChanged = tv.isDirectoryBuffer != model.document.isDirectory
             || tv.directoryURL != url
             || tv.directoryEntries != entries
-        tv.isDirectoryBuffer = model.isDirectory
+        tv.isDirectoryBuffer = model.document.isDirectory
         tv.directoryURL = url
         tv.directoryEntries = entries
         if directoryChanged { tv.invalidateDirectoryStyle() }
@@ -1797,7 +1817,7 @@ struct EditorView: NSViewRepresentable {
             tv.diagnosticRanges = diagnostics
             tv.queueRestyle()
         }
-        if model.isDirectory {
+        if model.document.isDirectory {
             scroll.drawsBackground = true
             scroll.backgroundColor = model.theme.directoryBackgroundColor
             tv.window?.backgroundColor = model.theme.directoryBackgroundColor
@@ -1813,14 +1833,20 @@ struct EditorView: NSViewRepresentable {
         ) {
             tv.updateInsets()
         }
-        let sheetUp = model.showConfirm || model.showUnsaved
-        if model.picker == nil, !sheetUp, tv.window?.firstResponder !== tv {
+        let sheetUp: Bool
+        switch model.prompt {
+        case .confirmFilesystem, .unsaved: sheetUp = true
+        case .none, .picker: sheetUp = false
+        }
+        let pickerUp = model.picker != nil
+        if !pickerUp, !sheetUp, tv.window?.firstResponder !== tv {
             tv.window?.makeFirstResponder(tv)
         }
-        if context.coordinator.hadPicker && model.picker == nil {
+        if context.coordinator.hadPicker && !pickerUp {
             tv.window?.makeFirstResponder(tv)
         }
-        context.coordinator.hadPicker = model.picker != nil
+        context.coordinator.hadPicker = pickerUp
+        tv.syncFromEngine(isEditor: model.editor === tv, refresh: refresh)
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }

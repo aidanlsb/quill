@@ -73,8 +73,15 @@ public actor LanguageServerManager {
         }
     }
 
+    private struct URIHandlers: Sendable {
+        var diagnostics: @Sendable ([Diagnostic]) -> Void
+        var applyEdit: @Sendable (WorkspaceEdit) -> Void
+    }
+
     private var clients: [ConnectionKey: LSPClient] = [:]
     private var openURIs: [ConnectionKey: Set<String>] = [:]
+    private var handlers: [String: URIHandlers] = [:]
+    private var routed: Set<ObjectIdentifier> = []
 
     public init() {}
 
@@ -110,5 +117,39 @@ public actor LanguageServerManager {
 
     public func isOpen(key: ConnectionKey, uri: String) -> Bool {
         openURIs[key]?.contains(uri) ?? false
+    }
+
+    /// One callback per client. Diagnostics and edits are delivered by document URI.
+    public func installRouterIfNeeded(on client: LSPClient) {
+        let id = ObjectIdentifier(client)
+        guard routed.insert(id).inserted else { return }
+        client.onDiagnostics = { @Sendable [weak self] uri, diags in
+            Task { await self?.deliverDiagnostics(uri: uri, diagnostics: diags) }
+        }
+        client.onApplyEdit = { @Sendable [weak self] edit in
+            Task { await self?.deliverApplyEdit(edit) }
+        }
+    }
+
+    public func setHandlers(
+        uri: String,
+        diagnostics: @escaping @Sendable ([Diagnostic]) -> Void,
+        applyEdit: @escaping @Sendable (WorkspaceEdit) -> Void
+    ) {
+        handlers[uri] = URIHandlers(diagnostics: diagnostics, applyEdit: applyEdit)
+    }
+
+    public func removeHandlers(uri: String) {
+        handlers.removeValue(forKey: uri)
+    }
+
+    public func deliverDiagnostics(uri: String, diagnostics: [Diagnostic]) {
+        handlers[uri]?.diagnostics(diagnostics)
+    }
+
+    public func deliverApplyEdit(_ edit: WorkspaceEdit) {
+        for handler in handlers.values {
+            handler.applyEdit(edit)
+        }
     }
 }

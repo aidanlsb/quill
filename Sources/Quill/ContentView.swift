@@ -7,12 +7,12 @@ struct ContentView: View {
     @Bindable var model: AppModel
 
     private var editorBackground: NSColor {
-        model.isDirectory ? model.theme.directoryBackgroundColor : model.theme.backgroundColor
+        model.document.isDirectory ? model.theme.directoryBackgroundColor : model.theme.backgroundColor
     }
 
     var body: some View {
         ZStack {
-            EditorView(model: model, diagnostics: model.diagnosticRanges)
+            EditorView(model: model, diagnostics: model.diagnosticRanges, refresh: model.document.refreshID)
                 .background(Color(editorBackground))
             if model.picker != nil {
                 PickerPanel(model: model)
@@ -39,15 +39,25 @@ struct ContentView: View {
                 StatusBar(model: model)
             }
         }
-        .sheet(isPresented: $model.showConfirm) {
+        .sheet(isPresented: Binding(
+            get: { if case .confirmFilesystem = model.prompt { true } else { false } },
+            set: { presented in
+                if !presented, case .confirmFilesystem = model.prompt { model.dismissConfirm() }
+            }
+        )) {
             ConfirmSheet(
                 ops: model.pendingOps,
                 warning: model.confirmWarning,
                 onConfirm: model.applyPendingOps,
-                onCancel: { model.showConfirm = false }
+                onCancel: model.dismissConfirm
             )
         }
-        .sheet(isPresented: $model.showUnsaved) {
+        .sheet(isPresented: Binding(
+            get: { if case .unsaved = model.prompt { true } else { false } },
+            set: { presented in
+                if !presented, case .unsaved = model.prompt { model.cancelNavigation() }
+            }
+        )) {
             UnsavedSheet(
                 message: model.message,
                 onSave: model.saveAndContinue,
@@ -63,9 +73,9 @@ struct StatusBar: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Text(model.engine.mode.displayName)
-            Text(model.title)
-            if model.modified {
+            Text(model.document.engine.mode.displayName)
+            Text(model.document.title)
+            if model.document.modified {
                 Text("•")
             }
             if !model.message.isEmpty {
@@ -76,9 +86,9 @@ struct StatusBar: View {
         }
         .font(.system(size: 11, design: .monospaced))
         .foregroundStyle(Color(model.theme.dimColor))
-        .padding(.horizontal, model.isDirectory ? QuillMetrics.directoryIconLeading : QuillMetrics.sideGutter)
+        .padding(.horizontal, model.document.isDirectory ? QuillMetrics.directoryIconLeading : QuillMetrics.sideGutter)
         .padding(.vertical, 10)
-        .background(Color(model.isDirectory ? model.theme.directoryBackgroundColor : model.theme.backgroundColor))
+        .background(Color(model.document.isDirectory ? model.theme.directoryBackgroundColor : model.theme.backgroundColor))
     }
 }
 
@@ -121,7 +131,9 @@ struct UnsavedSheet: View {
             HStack {
                 Spacer()
                 Button("Cancel", action: onCancel)
+                    .keyboardShortcut(.cancelAction)
                 Button("Don't Save", action: onDiscard)
+                    .keyboardShortcut("d", modifiers: .command)
                 Button("Save", action: onSave)
                     .keyboardShortcut(.defaultAction)
             }
