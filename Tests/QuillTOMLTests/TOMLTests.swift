@@ -77,7 +77,7 @@ final class TOMLTests: XCTestCase {
         XCTAssertEqual(value["columnWidth"], .int(70))
         XCTAssertEqual(value["fontSize"], .int(16))
         XCTAssertEqual(value["font"], .string(""))
-        XCTAssertEqual(value["leaderMaps"]?["sf"], .string("findFiles"))
+        XCTAssertEqual(value["leaderMaps"]?["sf"], .string("search.files"))
         XCTAssertEqual(value["shellCommands"]?["d"], .string("rvn daily"))
         guard case .array(let servers) = value["lsp"]?["servers"] else {
             return XCTFail("example servers missing")

@@ -15,10 +15,10 @@ struct QuillConfig: Equatable {
     var font: String
     var theme: ThemeChoice
     var shiftWidth: Int
-    /// Pad the GFM table under the cursor when leaving insert mode. `:TableFormat` always works.
-    var formatTablesOnInsertLeave: Bool
     /// Draw `![alt](path)` as a preview under the source line. The markdown stays plain text.
     var images: Bool
+    /// Set when a removed key was present. The config still loads.
+    var loadNotice: String?
 
     static let `default` = QuillConfig(
         leader: " ",
@@ -30,8 +30,8 @@ struct QuillConfig: Equatable {
         font: "",
         theme: .system,
         shiftWidth: 2,
-        formatTablesOnInsertLeave: false,
-        images: true
+        images: true,
+        loadNotice: nil
     )
 
     static func load() -> QuillConfig {
@@ -121,7 +121,7 @@ struct QuillConfig: Equatable {
         let font = (try string(table["font"]) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let theme = try themeChoice(table["theme"]) ?? QuillConfig.default.theme
         let shift = try int(table["shiftWidth"]) ?? QuillConfig.default.shiftWidth
-        let formatTables = try bool(table["formatTablesOnInsertLeave"]) ?? QuillConfig.default.formatTablesOnInsertLeave
+        let notice = try ignoredFormatTables(table["formatTablesOnInsertLeave"])
         let images = try bool(table["images"]) ?? QuillConfig.default.images
         return QuillConfig(
             leader: leader,
@@ -133,9 +133,16 @@ struct QuillConfig: Equatable {
             font: font,
             theme: theme,
             shiftWidth: shift,
-            formatTablesOnInsertLeave: formatTables,
-            images: images
+            images: images,
+            loadNotice: notice
         )
+    }
+
+    /// The option used to rewrite a table on Esc. `:TableFormat` is the command.
+    private static func ignoredFormatTables(_ value: TOMLValue?) throws -> String? {
+        guard let value else { return nil }
+        _ = try bool(value)
+        return "formatTablesOnInsertLeave is ignored; use :TableFormat"
     }
 
     private static func lspSettings(_ value: TOMLValue?) throws -> LSPSettings {
@@ -230,7 +237,6 @@ struct QuillConfig: Equatable {
             "font": .string(font),
             "theme": .string(theme.rawValue),
             "shiftWidth": .int(shiftWidth),
-            "formatTablesOnInsertLeave": .bool(formatTablesOnInsertLeave),
             "images": .bool(images),
         ]
         if fontSize.rounded() == fontSize {
@@ -267,8 +273,13 @@ struct QuillConfig: Equatable {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let theme = ThemeChoice.parse(try c.decodeIfPresent(String.self, forKey: .theme) ?? "") ?? .system
             let shift = try c.decodeIfPresent(Int.self, forKey: .shiftWidth) ?? QuillConfig.default.shiftWidth
-            let formatTables = try c.decodeIfPresent(Bool.self, forKey: .formatTablesOnInsertLeave)
-                ?? QuillConfig.default.formatTablesOnInsertLeave
+            let notice: String?
+            if c.contains(.formatTablesOnInsertLeave) {
+                _ = try c.decode(Bool.self, forKey: .formatTablesOnInsertLeave)
+                notice = "formatTablesOnInsertLeave is ignored; use :TableFormat"
+            } else {
+                notice = nil
+            }
             let images = try c.decodeIfPresent(Bool.self, forKey: .images) ?? QuillConfig.default.images
             config = QuillConfig(
                 leader: leader,
@@ -280,8 +291,8 @@ struct QuillConfig: Equatable {
                 font: font,
                 theme: theme,
                 shiftWidth: shift,
-                formatTablesOnInsertLeave: formatTables,
-                images: images
+                images: images,
+                loadNotice: notice
             )
         }
 
@@ -291,32 +302,39 @@ struct QuillConfig: Equatable {
         }
     }
 
-    func apply(to engine: Engine) {
+    @MainActor
+    func apply(to model: AppModel) {
         if let ch = leader.first {
-            engine.leaderKey = ch
+            model.engine.leaderKey = ch
         }
-        engine.shiftWidth = shiftWidth
-        engine.formatTablesOnInsertLeave = formatTablesOnInsertLeave
-        // Overlay config onto the engine defaults so `ca` survives a config that only lists sf/sg.
-        var maps = engine.leaderBindings
-        for (seq, name) in leaderMaps {
-            maps[seq] = Self.action(named: name)
+        model.engine.shiftWidth = shiftWidth
+        var notes: [String] = []
+        for (seq, name) in leaderMaps.sorted(by: { $0.key < $1.key }) {
+            let id = Self.commandID(named: name)
+            if !model.commands.rebind(id: id, leader: seq) {
+                notes.append("leaderMaps.\(seq): no command \(name)")
+            }
         }
-        for (seq, command) in shellCommands where !seq.isEmpty && !command.isEmpty {
-            maps[seq] = .shell(command)
+        if !notes.isEmpty {
+            let line = notes.joined(separator: "\n")
+            model.message = model.message.isEmpty ? line : model.message + "\n" + line
         }
-        engine.leaderBindings = maps
+        if let loadNotice, !model.message.contains(loadNotice) {
+            model.message = model.message.isEmpty ? loadNotice : model.message + "\n" + loadNotice
+        }
+        model.rebuildKeymap()
     }
 
-    private static func action(named name: String) -> HostAction {
+    /// Legacy leader-map values. Anything else is already a command id.
+    static func commandID(named name: String) -> String {
         switch name {
-        case "findFiles": return .findFiles
-        case "liveGrep": return .liveGrep
-        case "codeAction": return .codeAction
-        case "findReferences": return .findReferences
-        case "goToDefinition": return .goToDefinition
-        case "toggleTheme": return .toggleTheme
-        default: return .command(name)
+        case "findFiles": "search.files"
+        case "liveGrep": "search.grep"
+        case "codeAction": "navigate.codeAction"
+        case "findReferences": "navigate.references"
+        case "goToDefinition": "navigate.definition"
+        case "toggleTheme": "view.toggleTheme"
+        default: name
         }
     }
 }

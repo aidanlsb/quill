@@ -39,7 +39,7 @@ let package = Package(
         ),
         .target(
             name: "QuillSearch",
-            dependencies: ["QuillText"],
+            dependencies: ["QuillText", "QuillVim"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .target(
@@ -78,7 +78,7 @@ let package = Package(
         ),
         .testTarget(
             name: "QuillSearchTests",
-            dependencies: ["QuillSearch"],
+            dependencies: ["QuillSearch", "QuillVim"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(

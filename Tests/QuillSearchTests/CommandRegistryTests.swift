@@ -1,4 +1,5 @@
 import XCTest
+import QuillVim
 @testable import QuillSearch
 
 final class CommandRegistryTests: XCTestCase {
@@ -109,7 +110,7 @@ final class CommandRegistryTests: XCTestCase {
         MainActor.assumeIsolated {
             let registry = CommandRegistry()
             var ran: [String] = []
-            registry.register(id: "file.save", name: "Save", category: "File", showsInMenu: true) {
+            registry.register(id: "file.save", name: "Save", category: "File", showsInMenu: true) { _ in
                 ran.append("save")
             }
             registry.register(
@@ -117,7 +118,7 @@ final class CommandRegistryTests: XCTestCase {
                 name: "Format Table",
                 category: "Edit",
                 enabled: { false }
-            ) {
+            ) { _ in
                 ran.append("format")
             }
             XCTAssertTrue(registry.isEnabled(id: "file.save"))
@@ -136,9 +137,9 @@ final class CommandRegistryTests: XCTestCase {
     func testReregisterReplacesInPlace() {
         MainActor.assumeIsolated {
             let registry = CommandRegistry()
-            registry.register(id: "file.save", name: "Save", category: "File") {}
-            registry.register(id: "file.open", name: "Open", category: "File") {}
-            registry.register(id: "file.save", name: "Save File", category: "File", showsInMenu: true) {}
+            registry.register(id: "file.save", name: "Save", category: "File") { _ in }
+            registry.register(id: "file.open", name: "Open", category: "File") { _ in }
+            registry.register(id: "file.save", name: "Save File", category: "File", showsInMenu: true) { _ in }
             XCTAssertEqual(registry.entries.map(\.id), ["file.save", "file.open"])
             XCTAssertEqual(registry.entries[0].name, "Save File")
             XCTAssertTrue(registry.entries[0].showsInMenu)
@@ -148,11 +149,137 @@ final class CommandRegistryTests: XCTestCase {
     func testRecordUseIgnoresUnknownIDs() {
         MainActor.assumeIsolated {
             let registry = CommandRegistry()
-            registry.register(id: "a", name: "Alpha", category: "File") {}
-            registry.register(id: "b", name: "Beta", category: "File") {}
+            registry.register(id: "a", name: "Alpha", category: "File") { _ in }
+            registry.register(id: "b", name: "Beta", category: "File") { _ in }
             registry.recordUse(id: "missing")
             registry.recordUse(id: "b")
             XCTAssertEqual(registry.ranked(matching: "").map(\.id), ["b", "a"])
+        }
+    }
+
+    func testExLookupIsExactThenUniquePrefix() {
+        MainActor.assumeIsolated {
+            let registry = CommandRegistry()
+            registry.register(
+                id: "file.save",
+                name: "Save",
+                category: "File",
+                bindings: [.init(.ex("w")), .init(.ex("write"))]
+            ) { _ in }
+            registry.register(
+                id: "file.close",
+                name: "Close",
+                category: "File",
+                bindings: [.init(.ex("q")), .init(.ex("quit")), .init(.ex("wq"))]
+            ) { _ in }
+            XCTAssertEqual(registry.command(forEx: "w"), "file.save")
+            XCTAssertEqual(registry.command(forEx: "write"), "file.save")
+            XCTAssertEqual(registry.command(forEx: "wri"), "file.save")
+            XCTAssertEqual(registry.command(forEx: "q"), "file.close")
+            XCTAssertEqual(registry.command(forEx: "wq"), "file.close")
+            XCTAssertEqual(registry.command(forEx: "wr"), "file.save")
+            XCTAssertNil(registry.command(forEx: ""))
+            XCTAssertNil(registry.command(forEx: "xyz"))
+            registry.register(id: "view.theme", name: "Theme", category: "View", bindings: [.init(.ex("theme"))]) { _ in }
+            registry.register(id: "edit.table", name: "Table", category: "Edit", bindings: [.init(.ex("table"))]) { _ in }
+            XCTAssertNil(registry.command(forEx: "t"))
+            XCTAssertEqual(registry.command(forEx: "th"), "view.theme")
+        }
+    }
+
+    func testRunPassesArguments() {
+        MainActor.assumeIsolated {
+            let registry = CommandRegistry()
+            var got = CommandArgs.none
+            registry.register(id: "file.save", name: "Save", category: "File") { got = $0 }
+            XCTAssertTrue(registry.run(id: "file.save", args: CommandArgs(text: "notes.md", lines: 1...3, bang: true)))
+            XCTAssertEqual(got, CommandArgs(text: "notes.md", lines: 1...3, bang: true))
+        }
+    }
+
+    func testKeymapUsesKeysLeaderAndTheWhenFilter() {
+        MainActor.assumeIsolated {
+            let registry = CommandRegistry()
+            registry.register(
+                id: "navigate.definition",
+                name: "Go to Definition",
+                category: "Navigate",
+                bindings: [.init(.keys("gd")), .init(.chord(key: "d", command: true, shift: false, option: false, control: false))]
+            ) { _ in }
+            registry.register(
+                id: "search.files",
+                name: "Find Files",
+                category: "Search",
+                bindings: [.init(.leader("sf"))]
+            ) { _ in }
+            registry.register(
+                id: "file.openEntry",
+                name: "Open Entry",
+                category: "File",
+                bindings: [.init(.keys("<CR>"))]
+            ) { _ in }
+            let files = registry.keymap(leader: " ") { $0 != "file.openEntry" }
+            XCTAssertEqual(files.lookup("gd"), .command("navigate.definition"))
+            XCTAssertEqual(files.lookup("g"), .prefix)
+            XCTAssertEqual(files.lookup(" sf"), .command("search.files"))
+            XCTAssertEqual(files.lookup(" "), .prefix)
+            XCTAssertEqual(files.lookup("<CR>"), .none)
+            let directory = registry.keymap(leader: " ") { _ in true }
+            XCTAssertEqual(directory.lookup("<CR>"), .command("file.openEntry"))
+            XCTAssertEqual(directory.lookup("d"), .none)
+        }
+    }
+
+    func testDisabledCommandIsLeftOutOfTheKeymap() {
+        MainActor.assumeIsolated {
+            let registry = CommandRegistry()
+            registry.register(
+                id: "file.openEntry",
+                name: "Open Entry",
+                category: "File",
+                bindings: [.init(.keys("<CR>"))],
+                enabled: { false }
+            ) { _ in }
+            XCTAssertEqual(registry.keymap(leader: " ") { _ in true }.lookup("<CR>"), .none)
+        }
+    }
+
+    func testCollisionLastWinsAndReservedKeysAreDropped() {
+        MainActor.assumeIsolated {
+            let registry = CommandRegistry()
+            var notes: [String] = []
+            registry.onBindingCollision = { notes.append($0) }
+            registry.register(id: "file.save", name: "Save", category: "File", bindings: [.init(.ex("w"))]) { _ in }
+            registry.register(id: "other.save", name: "Other", category: "File", bindings: [.init(.ex("w"))]) { _ in }
+            registry.register(id: "bad.motion", name: "Bad", category: "Edit", bindings: [.init(.keys("j")), .init(.keys("-"))]) { _ in }
+            XCTAssertEqual(registry.command(forEx: "w"), "other.save")
+            XCTAssertTrue(notes.contains { $0.contains("ex w") })
+            XCTAssertTrue(notes.contains { $0.contains("keys j") })
+            XCTAssertEqual(registry.keymap(leader: " ") { _ in true }.lookup("j"), .none)
+            XCTAssertEqual(registry.keymap(leader: " ") { _ in true }.lookup("-"), .command("bad.motion"))
+            XCTAssertFalse(registry.entries.first { $0.id == "bad.motion" }?.bindings.contains(.init(.keys("j"))) ?? true)
+        }
+    }
+
+    func testRebindStealsALeaderSequence() {
+        MainActor.assumeIsolated {
+            let registry = CommandRegistry()
+            registry.register(id: "search.grep", name: "Live Grep", category: "Search", bindings: [.init(.leader("sg"))]) { _ in }
+            registry.register(id: "search.files", name: "Find Files", category: "Search", bindings: [.init(.leader("sf"))]) { _ in }
+            XCTAssertFalse(registry.rebind(id: "missing", leader: "xx"))
+            XCTAssertTrue(registry.rebind(id: "search.grep", leader: "xx"))
+            XCTAssertTrue(registry.rebind(id: "search.grep", leader: "sf"))
+            let grep = registry.entries.first { $0.id == "search.grep" }
+            XCTAssertEqual(
+                grep?.bindings.map(\.label),
+                ["<leader>sg", "<leader>xx", "<leader>sf"]
+            )
+            let files = registry.entries.first { $0.id == "search.files" }
+            XCTAssertEqual(files?.bindings, [])
+            let map = registry.keymap(leader: " ") { _ in true }
+            XCTAssertEqual(map.lookup(" sf"), .command("search.grep"))
+            XCTAssertEqual(map.lookup(" xx"), .command("search.grep"))
+            XCTAssertEqual(map.lookup(" sg"), .command("search.grep"))
         }
     }
 }

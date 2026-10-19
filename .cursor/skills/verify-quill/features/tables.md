@@ -9,7 +9,7 @@ GitHub-flavored markdown tables stay plain text, so vim motions move over the re
 - `table-align` keeps a right-aligned short cell padded toward its pipe, and sets a positive kern on that pipe when the source is ragged.
 - `table-wrap` wraps a row wider than the column onto more screen rows. Its ink stays inside the column.
 - `table-fit` pads a table only when its padded width fits the column. A wider table drops the padding and wraps as typed, because padding is extra advance on a single character, which a line cannot break inside. Resizing the window repaints the tables on screen with the new decision.
-- `table-command` accepts `:TableFormat`. `formatTablesOnInsertLeave` defaults off and accepts `true`.
+- `table-command` accepts `:TableFormat`. A config that still sets `formatTablesOnInsertLeave` loads and says the key is ignored.
 - `table-viewport` leaves a table below the first screen unstyled, then paints it when that screen scrolls into view. Lengthening the widest cell increases the kern on an earlier short cell that is already on screen.
 
 ## How to get to it (user POV)
@@ -18,8 +18,7 @@ GitHub-flavored markdown tables stay plain text, so vim motions move over the re
 - The header is heavier than the body. Pipes and dashes are quieter than the cell text. Rows sit on a faint band.
 - Move with `h` and `l`. The cursor lands on the characters you typed, including the pipes.
 - Narrow the window until a wide table no longer fits. Its pipes stop lining up and its rows wrap. The window never scrolls sideways, and `$`, `l`, `j`, and `k` keep the cursor on screen. Widen the window and the table lines up again.
-- On a ragged table, type `:TableFormat` and press Enter. The pipes line up and the alignment row keeps its colons.
-- Set `formatTablesOnInsertLeave = true` in `config.toml` when leaving insert mode should pad the table under the cursor.
+- On a ragged table, type `:TableFormat` and press Enter. The pipes line up and the alignment row keeps its colons. A range (`:%TableFormat`) pads every table in that range. Leaving insert mode does not rewrite the table.
 
 ## Driving it with verify-quill
 

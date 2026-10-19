@@ -1,6 +1,5 @@
 import Foundation
 import QuillTOML
-import QuillVim
 
 /// Last runtime appearance, kept beside the config so a toggle survives the next launch
 /// without rewriting `config.toml`.

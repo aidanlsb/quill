@@ -92,9 +92,13 @@ extension Probe {
             failures.append("table row ink reaches \(overflow) past the 80pt column")
         }
 
-        check(QuillConfig.default.formatTablesOnInsertLeave == false, "table format config", failures: failures)
+        check(QuillConfig.default.loadNotice == nil, "table format config", failures: failures)
         if let decoded = try? QuillConfig.decode(Data("formatTablesOnInsertLeave = true\n".utf8)) {
-            check(decoded.formatTablesOnInsertLeave, "table format config on", failures: failures)
+            check(
+                decoded.loadNotice == "formatTablesOnInsertLeave is ignored; use :TableFormat",
+                "table format config on",
+                failures: failures
+            )
         } else {
             failures.append("table format config on")
         }

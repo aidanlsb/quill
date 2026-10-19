@@ -91,7 +91,6 @@ final class AppModel {
         let loaded = QuillConfig.loadReporting()
         config = loaded.config
         if let error = loaded.error { message = error }
-        config.apply(to: engine)
         showImages = config.images
         themeChoice = ThemeChoice.resolved(
             config: config.theme,
@@ -105,6 +104,7 @@ final class AppModel {
         }
         theme = makeTheme(themeChoice)
         installCommands()
+        config.apply(to: self)
     }
 
     func setTheme(_ choice: ThemeChoice) {
@@ -290,27 +290,112 @@ final class AppModel {
 
     func perform(_ action: HostAction) {
         switch action {
-        case .writeQuit:
-            save { self.runCommand("file.close") }
-        case .formatTables(let startLine, let endLine, let quiet):
-            formatTables(startLine: startLine, endLine: endLine, quiet: quiet)
-        case .shell(let command):
-            if let id = shellCommandID(command), runCommand(id) { return }
-            runShell(command)
-        case .command(let name):
-            if name == "split" || name == "vsplit" {
-                message = "Split the window from the view layer once a second EditorWindow is attached"
-            } else if name.hasPrefix("edit:") {
-                let path = String(name.dropFirst("edit:".count))
-                open(url: URL(fileURLWithPath: path))
-            } else if !runCommand(name) {
-                message = "No mapping for \(name)"
+        case .command(let id):
+            if !runCommand(id) { message = "No command \(id)" }
+        case .ex(let call):
+            guard let id = commands.command(forEx: call.name) else {
+                message = "Not an editor command: \(call.name)"
+                NSSound.beep()
+                return
             }
-        default:
-            if let id = CommandRoutes.id(for: action) {
-                runCommand(id)
+            commands.run(
+                id: id,
+                args: CommandArgs(text: call.args, lines: call.lines, bang: call.bang)
+            )
+        }
+    }
+
+    func close(bang: Bool) {
+        if !bang && engine.isModified {
+            message = "No write since last change"
+            NSSound.beep()
+            return
+        }
+        if bang {
+            engine.markSaved()
+            modified = false
+        }
+        recordCloseRequest()
+        NSApplication.shared.keyWindow?.close()
+    }
+
+    func edit(_ args: CommandArgs) {
+        if !args.text.isEmpty {
+            if engine.isModified && !args.bang {
+                message = "No write since last change"
+                NSSound.beep()
+                return
+            }
+            open(url: resolvePath(args.text))
+            return
+        }
+        guard let url = fileURL else {
+            message = "No file"
+            NSSound.beep()
+            return
+        }
+        if engine.isModified && !args.bang {
+            message = "No write since last change"
+            NSSound.beep()
+            return
+        }
+        if isDirectory {
+            loadDirectory(url)
+            message = "Reloaded"
+            return
+        }
+        Task {
+            let result = await Task.detached { () -> Result<TextCodec.Decoded, Error> in
+                do {
+                    let data = try Data(contentsOf: url)
+                    return .success(try TextCodec.decode(data))
+                } catch {
+                    return .failure(error)
+                }
+            }.value
+            guard self.fileURL == url else { return }
+            switch result {
+            case .failure(let error):
+                self.message = error.localizedDescription
+            case .success(let decoded):
+                self.installFile(decoded, url: url)
+                self.message = "Reloaded"
             }
         }
+    }
+
+    func save(toPath path: String) {
+        let url = resolvePath(path)
+        if fileURL == nil {
+            fileURL = url
+            rootURL = url.deletingLastPathComponent()
+            title = url.lastPathComponent
+            isDirectory = false
+            ending = .lf
+            writeFile()
+            return
+        }
+        if fileURL?.standardizedFileURL.path == url.standardizedFileURL.path {
+            writeFile()
+            return
+        }
+        let data = TextCodec.encode(engine.text, ending: ending)
+        let write = diskWrite
+        Task {
+            do {
+                try await write(data, url)
+                self.message = "Saved"
+            } catch {
+                self.message = error.localizedDescription
+            }
+        }
+    }
+
+    private func resolvePath(_ text: String) -> URL {
+        if text.hasPrefix("/") {
+            return URL(fileURLWithPath: text)
+        }
+        return rootURL.appendingPathComponent(text)
     }
 
     func formatTables(startLine: Int?, endLine: Int?, quiet: Bool) {
@@ -723,8 +808,8 @@ final class AppModel {
         fileURL = url
         rootURL = url.deletingLastPathComponent()
         isDirectory = false
-        engine.openOnEnter = false
         directorySnapshot = nil
+        rebuildKeymap()
         title = url.lastPathComponent
         modified = false
         loadedAt = modificationDate(url)
@@ -741,7 +826,7 @@ final class AppModel {
         engine.load(text: "")
         fileURL = nil
         isDirectory = false
-        engine.openOnEnter = false
+        rebuildKeymap()
         title = "Untitled"
         modified = false
         sync = DocumentSync()
@@ -762,8 +847,8 @@ final class AppModel {
                     isDirectory: entry.isDirectory
                 )
             }
-            engine.openOnEnter = true
             isDirectory = true
+            rebuildKeymap()
             fileURL = url
             rootURL = url
             title = url.lastPathComponent + "/"

@@ -31,72 +31,27 @@ public enum Mode: Equatable, Sendable {
     }
 }
 
-/// `system` follows the macOS appearance. A runtime toggle leaves `system` for an explicit side.
-public enum ThemeChoice: String, Equatable, Sendable {
-    case system
-    case light
-    case dark
+/// An ex command the engine does not implement. `lines` is the resolved
+/// address range (0-based, inclusive). Nil means the user typed no range.
+public struct ExCall: Equatable, Sendable {
+    public var name: String
+    public var args: String
+    public var lines: ClosedRange<Int>?
+    public var bang: Bool
 
-    public static func parse(_ text: String) -> ThemeChoice? {
-        switch text.trimASCIISpaces().lowercased() {
-        case "system": return .system
-        case "light": return .light
-        case "dark": return .dark
-        default: return nil
-        }
-    }
-
-    /// A remembered runtime choice wins. Config applies when nothing has been chosen yet.
-    public static func resolved(config: ThemeChoice, remembered: ThemeChoice?) -> ThemeChoice {
-        remembered ?? config
-    }
-
-    public func toggled(systemIsDark: Bool) -> ThemeChoice {
-        switch self {
-        case .light: return .dark
-        case .dark: return .light
-        case .system: return systemIsDark ? .light : .dark
-        }
-    }
-
-    public func isDark(systemIsDark: Bool) -> Bool {
-        switch self {
-        case .dark: return true
-        case .light: return false
-        case .system: return systemIsDark
-        }
+    public init(name: String, args: String = "", lines: ClosedRange<Int>? = nil, bang: Bool = false) {
+        self.name = name
+        self.args = args
+        self.lines = lines
+        self.bang = bang
     }
 }
 
 public enum HostAction: Equatable, Sendable {
-    case write
-    case quit
-    case writeQuit
-    /// Jump to the definition of the symbol or `[[wikilink]]` under the cursor.
-    /// The host resolves this via LSP if a server is configured, otherwise
-    /// by matching wikilink text to filenames in the open folder.
-    case goToDefinition
-    /// Open the parent directory as an editable listing buffer (`-` in oil.nvim).
-    case openParentDirectory
-    /// Open the entry on the current line (file or subdirectory).
-    case openUnderCursor
-    case findFiles
-    case liveGrep
-    /// `textDocument/references` for the symbol under the cursor (`gr`).
-    case findReferences
-    /// `textDocument/codeAction` for the cursor or selection (`<leader>ca`).
-    case codeAction
-    /// Run a configured shell command in the workspace root.
-    case shell(String)
-    /// Extensible leader mapping that the host looks up by name.
+    /// Registry id, from a keymap hit.
     case command(String)
-    /// `:theme light|dark|system`.
-    case setTheme(ThemeChoice)
-    /// `:theme` with no argument, and `<leader>tt`.
-    case toggleTheme
-    /// `:TableFormat`. Nil line bounds mean the table under the cursor.
-    /// Inclusive 0-based lines when set. `quiet` skips the status when no table matches.
-    case formatTables(startLine: Int?, endLine: Int?, quiet: Bool)
+    /// Any ex command the engine does not own (`:s` and `:set` stay in the engine).
+    case ex(ExCall)
 }
 
 public struct EngineResult: Equatable, Sendable {

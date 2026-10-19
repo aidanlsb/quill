@@ -40,22 +40,20 @@ final class MotionTests: XCTestCase {
         _ = engine.type("3<C-d>")
         XCTAssertEqual(engine.scrollLineCount, 3)
         XCTAssertEqual(engine.buffer.lineIndex(containing: engine.cursor), 3)
-        engine.openOnEnter = true
-        _ = engine.type("<C-d>")
-        XCTAssertTrue(engine.openOnEnter)
     }
 
     func testDirectoryRenameKeepsAnchorAndEnter() {
         let engine = Engine(text: "notes.md\nsub/\n")
         engine.setDirectoryAnchor(line: 0, id: 7, sourcePath: "/tmp/notes.md", isDirectory: false)
         engine.setDirectoryAnchor(line: 1, id: 8, sourcePath: "/tmp/sub", isDirectory: true)
-        engine.openOnEnter = true
-        XCTAssertEqual(engine.type("<CR>").actions, [.openUnderCursor])
+        engine.keymap.bind("<CR>", command: "file.openEntry")
+        engine.keymap.bind("-", command: "file.parent")
+        XCTAssertEqual(engine.type("<CR>").actions, [.command("file.openEntry")])
         engine.type("0c$renamed.md<Esc>")
         XCTAssertEqual(engine.lineTextUnderCursor(), "renamed.md")
         XCTAssertEqual(engine.buffer.anchors.first?.id.raw, 7)
-        XCTAssertTrue(engine.openOnEnter)
-        XCTAssertEqual(engine.type("-").actions, [.openParentDirectory])
+        XCTAssertEqual(engine.keymap.lookup("<CR>"), .command("file.openEntry"))
+        XCTAssertEqual(engine.type("-").actions, [.command("file.parent")])
     }
 
     func testGGAndG() {
