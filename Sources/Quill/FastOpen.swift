@@ -12,23 +12,42 @@ import QuillVim
 enum FastOpen {
     private static var session: FastEditor?
 
-    static func main(launchURL: URL? = nil) {
-        let app = NSApplication.shared
-        app.setActivationPolicy(.regular)
+    /// Text view and borderless window, with no file yet. Built before the GetURL event is dispatched.
+    static func prepare() -> FastEditor {
         let delegate = AppDelegate()
         let model = AppModel()
         delegate.attach(model)
-        app.delegate = delegate
-        OpenReadyProbe.armIfRequested()
-        if let launchURL {
-            model.open(url: launchURL)
-        }
-        model.consumeLaunchArguments(Array(CommandLine.arguments.dropFirst()))
         let editor = FastEditor(model: model, delegate: delegate)
         session = editor
-        editor.present()
+        editor.installShell()
+        return editor
+    }
+
+    static func main(launchURL: URL? = nil, applicationReady: Bool = false) {
+        let app = NSApplication.shared
+        app.setActivationPolicy(.regular)
+        let editor = prepare()
+        show(editor, launchURL: launchURL, applicationReady: applicationReady)
+    }
+
+    static func show(_ editor: FastEditor, launchURL: URL? = nil, applicationReady: Bool = false) {
+        let app = NSApplication.shared
+        app.delegate = editor.delegate
+        if applicationReady {
+            // finishLaunching already ran, so willFinish will not install this handler.
+            editor.delegate.installURLHandler()
+        }
+        OpenReadyProbe.armIfRequested()
+        if let launchURL {
+            editor.model.open(url: launchURL)
+        }
+        editor.model.consumeLaunchArguments(Array(CommandLine.arguments.dropFirst()))
+        editor.reveal()
         app.activate()
-        app.run()
+        // A quill:// event is delivered inside the run loop. Starting it again nests forever.
+        if !applicationReady {
+            app.run()
+        }
     }
 }
 
@@ -56,13 +75,17 @@ final class FastEditor: NSObject, VimTextViewDelegate {
     }
 
     func present() {
+        installShell()
+        reveal()
+    }
+
+    func installShell() {
         let scroll = NSScrollView()
-        scroll.hasVerticalScroller = true
+        scroll.hasVerticalScroller = false
         scroll.hasHorizontalScroller = false
         scroll.borderType = .noBorder
         scroll.drawsBackground = false
-        scroll.autohidesScrollers = true
-        textView.commonInit()
+        textView.prepareForDisplay()
         textView.engine = model.engine
         textView.layoutAdapter.textView = textView
         model.engine.layout = textView.layoutAdapter
@@ -79,7 +102,10 @@ final class FastEditor: NSObject, VimTextViewDelegate {
         window.isMovableByWindowBackground = true
         window.delegate = delegate
         window.contentView = scroll
-        window.setContentSize(NSSize(width: 960, height: 760))
+    }
+
+    func reveal() {
+        window.title = model.title
         window.orderFront(nil)
 
         textView.columnWidth = model.theme.columnWidth
@@ -90,6 +116,12 @@ final class FastEditor: NSObject, VimTextViewDelegate {
         textView.syncFromEngine()
         textView.restyleNow()
 
+        if let scroll = textView.enclosingScrollView {
+            scroll.hasVerticalScroller = true
+            scroll.autohidesScrollers = true
+        }
+        window.setContentSize(NSSize(width: 960, height: 760))
+        textView.disableAutomaticSubstitutions()
         window.center()
         window.hasShadow = true
         WindowChrome.apply(model.theme, to: window)

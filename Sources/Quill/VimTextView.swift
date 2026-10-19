@@ -259,13 +259,16 @@ final class VimTextView: NSTextView {
     }
 
     func commonInit() {
+        prepareForDisplay()
+        disableAutomaticSubstitutions()
+    }
+
+    /// Text container and editing flags. Substitution flags talk to the spell checker,
+    /// so the launch path turns those off after the first heading is on screen.
+    func prepareForDisplay() {
         layoutAdapter.textView = self
         usesFontPanel = false
         usesFindPanel = false
-        isAutomaticQuoteSubstitutionEnabled = false
-        isAutomaticDashSubstitutionEnabled = false
-        isAutomaticTextReplacementEnabled = false
-        isAutomaticSpellingCorrectionEnabled = false
         isRichText = false
         allowsUndo = false
         isIncrementalSearchingEnabled = false
@@ -277,6 +280,13 @@ final class VimTextView: NSTextView {
         isVerticallyResizable = true
         isHorizontallyResizable = false
         autoresizingMask = [.width]
+    }
+
+    func disableAutomaticSubstitutions() {
+        isAutomaticQuoteSubstitutionEnabled = false
+        isAutomaticDashSubstitutionEnabled = false
+        isAutomaticTextReplacementEnabled = false
+        isAutomaticSpellingCorrectionEnabled = false
     }
 
     func applyTheme(_ theme: QuillTheme, focus: Bool) {

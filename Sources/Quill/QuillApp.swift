@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import SwiftUI
 import UniformTypeIdentifiers
 import QuillWorkspace
@@ -7,27 +8,216 @@ import QuillWorkspace
 enum QuillMain {
     static func main() {
         let arguments = Array(CommandLine.arguments.dropFirst())
-        if LaunchRequest.parse(arguments).isEmpty {
-            // `open -a` delivers quill:// as the current Apple event, with an empty argv.
-            if let url = EarlyOpenURL.current() {
-                FastOpen.main(launchURL: url)
-            } else {
-                QuillApp.main()
-            }
-        } else {
+        if !LaunchRequest.parse(arguments).isEmpty {
             FastOpen.main()
+            return
+        }
+        // Smoke stays on the SwiftUI editor. A quill:// launch from `open -a` has an empty
+        // argv; the GetURL event is not delivered until the run loop is already up.
+        if ProcessInfo.processInfo.environment["QUILL_SMOKE"] == "1" {
+            QuillApp.main()
+            return
+        }
+        if let url = LaunchOpenURL.find() {
+            EarlyOpenURL.remember(url)
+            FastOpen.main(launchURL: url)
+            return
+        }
+        LaunchRouter.start()
+    }
+}
+
+/// `open -a Quill quill://…` does not put the URL on this process's argv. It is still
+/// an argument of that `open` process, which is alive while it waits for us. Reading it
+/// there avoids the wait until Launch Services delivers the GetURL event.
+enum LaunchOpenURL {
+    static func find() -> URL? {
+        let bundle = Bundle.main
+        let bundlePath = bundle.bundlePath
+        guard bundlePath.hasSuffix(".app") else { return nil }
+        let bundleName = bundle.object(forInfoDictionaryKey: "CFBundleName") as? String ?? ""
+        let bundleIdentifier = bundle.bundleIdentifier ?? ""
+        let needed = proc_listallpids(nil, 0)
+        guard needed > 0 else { return nil }
+        var pids = [pid_t](repeating: 0, count: Int(needed) + 64)
+        let count = Int(proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size)))
+        guard count > 0 else { return nil }
+        var byPath: (pid: pid_t, url: URL)?
+        var byName: (pid: pid_t, url: URL)?
+        for pid in pids.prefix(count) where pid > 0 {
+            guard path(of: pid).hasSuffix("/open") else { continue }
+            guard let match = self.match(
+                in: arguments(of: pid),
+                bundlePath: bundlePath,
+                bundleName: bundleName,
+                bundleIdentifier: bundleIdentifier
+            ) else { continue }
+            if match.byPath {
+                if byPath == nil || pid > byPath!.pid { byPath = (pid, match.url) }
+            } else if byName == nil || pid > byName!.pid {
+                byName = (pid, match.url)
+            }
+        }
+        return (byPath ?? byName)?.url
+    }
+
+    /// The last `quill://` argument, when this command line targets the bundle.
+    static func match(
+        in arguments: [String],
+        bundlePath: String,
+        bundleName: String,
+        bundleIdentifier: String
+    ) -> (url: URL, byPath: Bool)? {
+        let bundle = canonical(bundlePath)
+        let names = Set([bundleName, bundleIdentifier, (bundle as NSString).lastPathComponent].filter { !$0.isEmpty })
+        var byPath = false
+        var byName = false
+        var found: URL?
+        for arg in arguments {
+            if names.contains(arg) { byName = true }
+            let resolved = canonical(arg)
+            if resolved == bundle || resolved.hasPrefix(bundle + "/") { byPath = true }
+            if let url = URL(string: arg), LaunchRequest.target(from: url) != nil {
+                found = url
+            }
+        }
+        guard let found, byPath || byName else { return nil }
+        return (found, byPath)
+    }
+
+    private static func canonical(_ path: String) -> String {
+        URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+    }
+
+    private static func path(of pid: pid_t) -> String {
+        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        let length = proc_pidpath(pid, &buffer, UInt32(buffer.count))
+        guard length > 0 else { return "" }
+        let bytes = buffer.prefix(Int(length)).map { UInt8(bitPattern: $0) }
+        return String(decoding: bytes, as: UTF8.self)
+    }
+
+    private static func arguments(of pid: pid_t) -> [String] {
+        var mib = [CTL_KERN, KERN_PROCARGS2, pid]
+        var size = 0
+        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > 0 else { return [] }
+        var buffer = [UInt8](repeating: 0, count: size)
+        guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0, size >= MemoryLayout<Int32>.size else { return [] }
+        let argc = buffer.withUnsafeBytes { raw in
+            raw.load(fromByteOffset: 0, as: Int32.self)
+        }
+        var index = MemoryLayout<Int32>.size
+        while index < buffer.count, buffer[index] != 0 { index += 1 }
+        while index < buffer.count, buffer[index] == 0 { index += 1 }
+        let limit = min(max(0, Int(argc)), 64)
+        var args: [String] = []
+        var start = index
+        while index < buffer.count, args.count < limit {
+            if buffer[index] == 0 {
+                if index > start {
+                    args.append(String(decoding: buffer[start..<index], as: UTF8.self))
+                }
+                start = index + 1
+            }
+            index += 1
+        }
+        return args
+    }
+}
+
+/// Empty argv. A quill:// launch event is presented directly; otherwise SwiftUI starts.
+@MainActor
+final class LaunchRouter: NSObject, NSApplicationDelegate {
+    private static var session: LaunchRouter?
+    private var launchURL: URL?
+    private var yielded = false
+
+    static func start() {
+        let app = NSApplication.shared
+        app.setActivationPolicy(.regular)
+        let router = LaunchRouter()
+        session = router
+        app.delegate = router
+        router.install()
+        app.run()
+        // Reached only when no quill:// event arrived. The URL path presents from the handler.
+        QuillApp.main()
+    }
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        install()
+    }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // A quill:// event is delivered just before this. If it did not arrive, leave the run loop.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.launchURL == nil else { return }
+            self.yield()
+        }
+    }
+
+    private func yield() {
+        guard !yielded else { return }
+        yielded = true
+        let app = NSApplication.shared
+        app.stop(nil)
+        if let event = NSEvent.otherEvent(
+            with: .applicationDefined,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: 0,
+            context: nil,
+            subtype: 0,
+            data1: 0,
+            data2: 0
+        ) {
+            app.postEvent(event, atStart: false)
+        }
+    }
+
+    private func install() {
+        NSAppleEventManager.shared().setEventHandler(
+            self,
+            andSelector: #selector(handleGetURL(_:reply:)),
+            forEventClass: AEEventClass(kInternetEventClass),
+            andEventID: AEEventID(kAEGetURL)
+        )
+    }
+
+    @objc nonisolated func handleGetURL(_ event: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
+        guard let raw = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
+              let url = URL(string: raw) else { return }
+        // quill-concurrency: The Apple event arrives on the main thread; assumeIsolated hops without capturing self.
+        nonisolated(unsafe) let router = self
+        MainActor.assumeIsolated {
+            guard LaunchRequest.target(from: url) != nil else { return }
+            EarlyOpenURL.remember(url)
+            router.launchURL = url
+            FastOpen.main(launchURL: url, applicationReady: true)
         }
     }
 }
 
 enum EarlyOpenURL {
+    // quill-concurrency: The launch URL is written on the main thread during the
+    // GetURL handler and read on that same thread by the open probe.
+    nonisolated(unsafe) private static var cached: URL?
+
+    static func remember(_ url: URL) {
+        guard cached == nil, LaunchRequest.target(from: url) != nil else { return }
+        cached = url
+    }
+
     static func current() -> URL? {
+        if let cached { return cached }
         guard let event = NSAppleEventManager.shared().currentAppleEvent else { return nil }
         guard event.eventClass == AEEventClass(kInternetEventClass),
               event.eventID == AEEventID(kAEGetURL),
               let raw = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
               let url = URL(string: raw),
               LaunchRequest.target(from: url) != nil else { return nil }
+        cached = url
         return url
     }
 }
@@ -110,6 +300,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
         // A bare exec is not a bundled app. AppKit leaves it prohibited, and then no window appears.
         NSApplication.shared.setActivationPolicy(.regular)
+        installURLHandler()
+    }
+
+    func installURLHandler() {
         NSAppleEventManager.shared().setEventHandler(
             self,
             andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)),
@@ -138,6 +332,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func accept(_ url: URL) {
+        EarlyOpenURL.remember(url)
         if let model {
             model.open(url: url)
         } else {
