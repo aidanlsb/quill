@@ -4,7 +4,7 @@
 
 ## Sub-features
 
-- `dir-open` lists `notes.md` and `sub/` and arms Enter.
+- `dir-open` lists `notes.md` and `sub/` and binds Enter. In a file, Enter moves down.
 - `dir-layout` sets the listing in the compact mono face, in a column wider than the centered prose measure, on a distinct background. Directories are tinted, dotfiles are dimmed, and the header abbreviates home to `~`.
 - `dir-enter` opens `notes.md` and shows its body in the text view.
 - `dir-parent` returns to the listing with `-`.

@@ -168,7 +168,11 @@ extension Probe {
         let model = AppModel()
         model.open(url: root)
         check(model.isDirectory, "quill . did not open a directory buffer (\(model.message))", failures: failures)
-        check(model.engine.openOnEnter, "directory buffer did not arm Enter", failures: failures)
+        check(
+            model.engine.keymap.lookup("<CR>") == .command("file.openEntry"),
+            "directory buffer did not arm Enter",
+            failures: failures
+        )
         check(model.engine.text.contains("notes.md"), "listing missing notes.md: \(model.engine.text)", failures: failures)
         check(model.engine.text.contains("sub/"), "listing missing sub/: \(model.engine.text)", failures: failures)
 
@@ -204,7 +208,11 @@ extension Probe {
             if step.beep { break }
         }
         let opened = tv.press("<CR>") { model.handleEngineResult($0) }
-        check(opened.actions.contains(.openUnderCursor), "Enter did not open the entry: \(opened.actions)", failures: failures)
+        check(
+            opened.actions.contains(.command("file.openEntry")),
+            "Enter did not open the entry: \(opened.actions)",
+            failures: failures
+        )
         let deadline = Date().addingTimeInterval(3)
         while model.isDirectory, Date() < deadline {
             RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.05))
@@ -214,7 +222,7 @@ extension Probe {
         check(tv.string.contains("hello notes"), "text view stayed on the directory after Enter", failures: failures)
 
         let parent = tv.press("-") { model.handleEngineResult($0) }
-        check(parent.actions == [.openParentDirectory], "minus actions \(parent.actions)", failures: failures)
+        check(parent.actions == [.command("file.parent")], "minus actions \(parent.actions)", failures: failures)
         check(model.isDirectory, "minus did not return to the directory (\(model.message))", failures: failures)
         check(model.engine.text.contains("notes.md"), "parent listing lost notes.md", failures: failures)
 

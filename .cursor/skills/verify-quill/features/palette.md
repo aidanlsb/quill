@@ -34,5 +34,6 @@ Preconditions:
 ## Gotchas
 
 - The smoke calls `presentCommandPalette` and `handlePicker`. It does not post OS keyboard events, so it does not press ⌘K itself. The menu item and the ⌘K shortcut share the command the smoke runs.
+- Each row's shortcut is that command's bindings, joined from the same table that runs the key, the leader sequence, and the ex name. Focus Mode is only `⌃⌘F`. A command with a chord and a leader shows both.
 - Escape in the command palette closes it. The file and grep pickers still use the first Escape to enter picker normal mode.
 - Linux `swift test` covers registry ranking and the enabled predicate. It does not draw the palette. This host cannot run the smoke if it is not macOS.

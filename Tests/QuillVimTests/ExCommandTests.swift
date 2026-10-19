@@ -2,108 +2,163 @@ import XCTest
 @testable import QuillVim
 
 final class ExCommandTests: XCTestCase {
-    func testWrite() {
+    func testWriteAndQuitAreExCalls() {
         let e = vim("█hello", keys: "i!<Esc>")
         XCTAssertTrue(e.isModified)
-        let result = e.type(":w<CR>")
-        XCTAssertEqual(result.actions, [.write])
+        let write = e.type(":w<CR>")
+        XCTAssertEqual(write.actions, [.ex(ExCall(name: "w"))])
+        XCTAssertFalse(write.beep)
+        XCTAssertEqual(e.type(":w foo<CR>").actions, [.ex(ExCall(name: "w", args: "foo"))])
+        XCTAssertEqual(e.type(":write<CR>").actions, [.ex(ExCall(name: "write"))])
+        // The dirty check lives in the host. The engine only reports the call.
+        let quit = e.type(":q<CR>")
+        XCTAssertEqual(quit.actions, [.ex(ExCall(name: "q"))])
+        XCTAssertFalse(quit.beep)
+        XCTAssertEqual(e.type(":q!<CR>").actions, [.ex(ExCall(name: "q", bang: true))])
+        XCTAssertEqual(e.type(":wq<CR>").actions, [.ex(ExCall(name: "wq"))])
+        XCTAssertEqual(e.type(":x<CR>").actions, [.ex(ExCall(name: "x"))])
         e.markSaved()
         XCTAssertFalse(e.isModified)
     }
 
-    func testQuitDirtyBeeps() {
-        let e = vim("█hello", keys: "i!<Esc>")
-        let result = e.type(":q<CR>")
-        XCTAssertTrue(result.beep)
-        XCTAssertTrue(result.actions.isEmpty)
-        XCTAssertEqual(e.statusMessage, "No write since last change")
+    func testEditThemeAndSplitsAreExCalls() {
+        let e = Engine(text: "hello")
+        XCTAssertEqual(e.type(":e<CR>").actions, [.ex(ExCall(name: "e"))])
+        XCTAssertEqual(e.type(":edit notes.md<CR>").actions, [.ex(ExCall(name: "edit", args: "notes.md"))])
+        XCTAssertEqual(e.type(":e!<CR>").actions, [.ex(ExCall(name: "e", bang: true))])
+        XCTAssertEqual(e.type(":theme dark<CR>").actions, [.ex(ExCall(name: "theme", args: "dark"))])
+        XCTAssertEqual(e.type(":theme<CR>").actions, [.ex(ExCall(name: "theme"))])
+        XCTAssertEqual(e.type(":theme blue<CR>").actions, [.ex(ExCall(name: "theme", args: "blue"))])
+        XCTAssertEqual(e.type(":sp<CR>").actions, [.ex(ExCall(name: "sp"))])
+        XCTAssertEqual(e.type(":vs<CR>").actions, [.ex(ExCall(name: "vs"))])
+        let unknown = e.type(":foo<CR>")
+        XCTAssertEqual(unknown.actions, [.ex(ExCall(name: "foo"))])
+        XCTAssertFalse(unknown.beep)
     }
 
-    func testQuitClean() {
-        let result = Engine(text: "hello").type(":q<CR>")
-        XCTAssertEqual(result.actions, [.quit])
-    }
-
-    func testWriteQuit() {
-        let r = Engine(text: "hello").type(":wq<CR>")
-        XCTAssertEqual(r.actions, [.writeQuit])
-    }
-
-    func testTableFormatCommand() {
+    func testTableFormatResolvesLines() {
         let text = "| a | bb |\n| - | -- |\n| c | d |\n"
         let engine = Engine(text: text)
         let result = engine.type(":TableFormat<CR>")
         XCTAssertFalse(result.beep)
-        XCTAssertEqual(result.actions, [.formatTables(startLine: nil, endLine: nil, quiet: false)])
-        let all = engine.type(":%tableformat<CR>")
+        XCTAssertEqual(result.actions, [.ex(ExCall(name: "TableFormat"))])
+        let all = engine.type(":%TableFormat<CR>")
+        XCTAssertEqual(engine.buffer.lastLine, 2)
         XCTAssertEqual(
             all.actions,
-            [.formatTables(startLine: 0, endLine: 2, quiet: false)]
+            [.ex(ExCall(name: "TableFormat", lines: 0...2))]
         )
-        let bad = engine.type(":TableFormat extra<CR>")
-        XCTAssertTrue(bad.beep)
-        XCTAssertTrue(bad.actions.isEmpty)
+        let extra = engine.type(":TableFormat extra<CR>")
+        XCTAssertEqual(extra.actions, [.ex(ExCall(name: "TableFormat", args: "extra"))])
+        let lines = Engine(text: "0\n1\n2\n3\n4\n5")
+        XCTAssertEqual(
+            lines.type(":3,5TableFormat<CR>").actions,
+            [.ex(ExCall(name: "TableFormat", lines: 2...4))]
+        )
     }
 
-    func testTableFormatOnInsertLeave() {
+    func testInsertLeaveDoesNotAskTheHostToFormat() {
         let engine = Engine(text: "| a | b |\n| - | - |\n")
-        let idle = engine.type("ix<Esc>")
-        XCTAssertTrue(idle.actions.isEmpty)
-        engine.formatTablesOnInsertLeave = true
-        let result = engine.type("iy<Esc>")
-        XCTAssertEqual(result.actions, [.formatTables(startLine: nil, endLine: nil, quiet: true)])
+        let result = engine.type("ix<Esc>")
+        XCTAssertTrue(result.actions.isEmpty)
     }
 
-    func testUnknownEx() {
-        let r = Engine(text: "hello").type(":foo<CR>")
-        XCTAssertTrue(r.beep)
-        XCTAssertEqual(Engine(text: "hello").type(":foo<CR>").beep, true)
+    func testUnboundHostKeysDoNotDispatch() {
+        let engine = Engine(text: "hello\nworld")
+        let definition = engine.type("gd")
+        XCTAssertTrue(definition.actions.isEmpty)
+        XCTAssertTrue(definition.beep)
+        XCTAssertTrue(Engine(text: "hello").type("gr").actions.isEmpty)
+        XCTAssertTrue(Engine(text: "hello").type("-").actions.isEmpty)
+        XCTAssertTrue(Engine(text: "hello").type("-").beep)
+        let down = Engine(text: "hello\nworld")
+        XCTAssertTrue(down.type("<CR>").actions.isEmpty)
+        XCTAssertEqual(down.buffer.lineIndex(containing: down.cursor), 1)
+        XCTAssertTrue(Engine(text: "hello").type(" sf").actions.isEmpty)
     }
 
-    func testGoToDefinition() {
-        let r = Engine(text: "hello").type("gd")
-        XCTAssertEqual(r.actions, [.goToDefinition])
+    func testBoundHostKeysDispatch() {
+        let engine = Engine(text: "hello\nworld")
+        engine.keymap.bind("gd", command: "navigate.definition")
+        engine.keymap.bind("gr", command: "navigate.references")
+        engine.keymap.bind("-", command: "file.parent")
+        engine.keymap.bind("<CR>", command: "file.openEntry")
+        engine.keymap.bind(" sf", command: "search.files")
+        XCTAssertEqual(engine.type("gd").actions, [.command("navigate.definition")])
+        XCTAssertEqual(engine.type("gr").actions, [.command("navigate.references")])
+        XCTAssertEqual(engine.type("-").actions, [.command("file.parent")])
+        XCTAssertEqual(engine.type("<CR>").actions, [.command("file.openEntry")])
+        let shift = Engine(text: "  hello")
+        shift.keymap.bind("<CR>", command: "file.openEntry")
+        _ = shift.type("<<")
+        XCTAssertEqual(shift.text, "hello")
+        XCTAssertEqual(Engine(text: "hello").type(" sf").actions, [])
+        let mapped = Engine(text: "hello")
+        mapped.keymap.bind(" sf", command: "search.files")
+        XCTAssertEqual(mapped.type(" sf").actions, [.command("search.files")])
     }
 
-    func testReferencesAndCodeActionKeys() {
-        let refs = Engine(text: "hello").type("gr")
-        XCTAssertEqual(refs.actions, [.findReferences])
-        XCTAssertFalse(refs.beep)
-        XCTAssertEqual(Engine(text: "hello").type(" ca").actions, [.codeAction])
-        XCTAssertVim("█hello", keys: "rx", "█xello")
+    func testFailedPrefixReplaysThroughVim() {
+        let bound = Engine(text: "aa\nbb\ncc")
+        bound.keymap.bind("gd", command: "navigate.definition")
+        _ = bound.type("Ggg")
+        XCTAssertEqual(bound.buffer.lineIndex(containing: bound.cursor), 0)
+
+        let down = Engine(text: "hello\nworld")
+        down.keymap.bind("gd", command: "navigate.definition")
+        let plain = Engine(text: "hello\nworld")
+        let mappedDown = down.type("gj")
+        let plainDown = plain.type("gj")
+        XCTAssertEqual(down.cursor, plain.cursor)
+        XCTAssertEqual(down.text, plain.text)
+        XCTAssertEqual(mappedDown.beep, plainDown.beep)
+        XCTAssertEqual(mappedDown.actions, plainDown.actions)
+
+        let end = Engine(text: "hello world")
+        end.keymap.bind("gd", command: "navigate.definition")
+        let plainEnd = Engine(text: "hello world")
+        let mappedEnd = end.type("ge")
+        let plainEndResult = plainEnd.type("ge")
+        XCTAssertEqual(end.cursor, plainEnd.cursor)
+        XCTAssertEqual(end.text, plainEnd.text)
+        XCTAssertEqual(mappedEnd.beep, plainEndResult.beep)
+        XCTAssertEqual(mappedEnd.actions, plainEndResult.actions)
     }
 
-    func testMinusOpensParentDirectory() {
-        let r = Engine(text: "hello").type("-")
-        XCTAssertEqual(r.actions, [.openParentDirectory])
+    func testUnboundLeaderReplaysAsSpaceThenTheKey() {
+        let engine = Engine(text: "hello")
+        engine.keymap.bind(" sf", command: "search.files")
+        let partial = engine.type(" s")
+        XCTAssertTrue(partial.actions.isEmpty)
+        XCTAssertFalse(partial.beep)
+        XCTAssertEqual(engine.statusMessage, "<leader>s")
+        engine.type("<Esc>")
+        XCTAssertEqual(engine.statusMessage, "")
+        let replayed = engine.type(" x")
+        XCTAssertTrue(replayed.actions.isEmpty)
+        XCTAssertEqual(engine.text, "hllo")
+        XCTAssertEqual(engine.statusMessage, "")
+        XCTAssertEqual(engine.type(" sf").actions, [.command("search.files")])
     }
 
-    func testEnterOpensWhenEnabled() {
-        let e = Engine(text: "notes.md\n")
-        e.openOnEnter = true
-        let r = e.type("<CR>")
-        XCTAssertEqual(r.actions, [.openUnderCursor])
-        XCTAssertEqual(e.lineTextUnderCursor(), "notes.md")
-    }
-
-    func testLeaderFindAndGrep() {
-        let e = Engine(text: "hello")
-        XCTAssertEqual(e.type(" sf").actions, [.findFiles])
-        XCTAssertEqual(e.type(" sg").actions, [.liveGrep])
-    }
-
-    func testLeaderUnknownBeeps() {
-        let r = Engine(text: "hello").type(" sx")
-        XCTAssertTrue(r.beep)
+    func testCountSkipsTheKeymap() {
+        let engine = Engine(text: "a\nb\nc\nd")
+        engine.keymap.bind("gd", command: "navigate.definition")
+        let counted = engine.type("3gd")
+        XCTAssertTrue(counted.actions.isEmpty)
+        XCTAssertTrue(counted.beep)
+        XCTAssertEqual(engine.buffer.lineIndex(containing: engine.cursor), 0)
+        _ = engine.type("<Esc>")
+        _ = engine.type("3j")
+        XCTAssertEqual(engine.buffer.lineIndex(containing: engine.cursor), 3)
     }
 
     func testForceQuitSubstituteSetAndSearch() {
-        let dirty = vim("█hello", keys: "i!<Esc>")
-        XCTAssertEqual(dirty.type(":q!<CR>").actions, [.quit])
         XCTAssertVim("█one two one", keys: ":%s/one/two/g<CR>", "█two two two")
         let engine = Engine(text: "hello")
         _ = engine.type(":set shiftwidth=4<CR>")
         XCTAssertEqual(engine.shiftWidth, 4)
+        XCTAssertTrue(engine.type(":set nosuch<CR>").beep)
         XCTAssertVim("█one two", keys: "/o.e<CR>", "█one two")
         XCTAssertVim("█One two", keys: "/one<CR>", "█One two")
         let missed = Engine(text: "one")
@@ -122,7 +177,7 @@ final class ExCommandTests: XCTestCase {
         XCTAssertEqual(engine.buffer.lineIndex(containing: engine.cursor), 0)
     }
 
-    func testKeymap() {
+    func testKeymapCommandAndExParse() {
         let engine = Engine(text: "hello")
         engine.keymap.bind("Q", command: "format")
         XCTAssertEqual(engine.type("Q").actions, [.command("format")])
@@ -132,42 +187,11 @@ final class ExCommandTests: XCTestCase {
         XCTAssertEqual(Ex.parse("'<,'>s/a/b").rangeStart, .mark("<"))
     }
 
-    func testThemeCommandAndLeaderToggle() {
-        let e = Engine(text: "hello")
-        XCTAssertEqual(e.type(":theme dark<CR>").actions, [.setTheme(.dark)])
-        XCTAssertEqual(e.type(":theme light<CR>").actions, [.setTheme(.light)])
-        XCTAssertEqual(e.type(":theme SYSTEM<CR>").actions, [.setTheme(.system)])
-        XCTAssertEqual(e.type(":theme<CR>").actions, [.toggleTheme])
-        let bad = e.type(":theme blue<CR>")
-        XCTAssertTrue(bad.beep)
-        XCTAssertTrue(bad.actions.isEmpty)
-        XCTAssertEqual(e.statusMessage, "theme must be light, dark, or system")
-        XCTAssertEqual(Engine(text: "hello").type(" tt").actions, [.toggleTheme])
-        let reserved = Engine(text: "hello")
-        let prefix = reserved.type(" t")
-        XCTAssertTrue(prefix.actions.isEmpty)
-        XCTAssertFalse(prefix.beep)
-        XCTAssertTrue(reserved.type("x").beep)
-    }
-
-    func testThemeChoice() {
-        XCTAssertEqual(ThemeChoice.parse(" Light "), .light)
-        XCTAssertNil(ThemeChoice.parse("blue"))
-        XCTAssertEqual(ThemeChoice.light.toggled(systemIsDark: true), .dark)
-        XCTAssertEqual(ThemeChoice.dark.toggled(systemIsDark: false), .light)
-        XCTAssertEqual(ThemeChoice.system.toggled(systemIsDark: true), .light)
-        XCTAssertEqual(ThemeChoice.system.toggled(systemIsDark: false), .dark)
-        XCTAssertEqual(ThemeChoice.resolved(config: .system, remembered: .dark), .dark)
-        XCTAssertEqual(ThemeChoice.resolved(config: .light, remembered: nil), .light)
-        XCTAssertFalse(ThemeChoice.light.isDark(systemIsDark: true))
-        XCTAssertTrue(ThemeChoice.dark.isDark(systemIsDark: false))
-        XCTAssertTrue(ThemeChoice.system.isDark(systemIsDark: true))
-    }
-
-    func testLeaderCustomBinding() {
-        let e = Engine(text: "hello")
-        e.leaderBindings["x"] = .command("custom")
-        XCTAssertEqual(e.type(" x").actions, [.command("custom")])
+    func testLineAddressStaysInTheEngine() {
+        let engine = Engine(text: "a\nb\nc")
+        _ = engine.type(":3<CR>")
+        XCTAssertEqual(engine.buffer.lineIndex(containing: engine.cursor), 2)
+        XCTAssertTrue(engine.type(":3<CR>").actions.isEmpty)
     }
 }
 

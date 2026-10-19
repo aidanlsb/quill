@@ -2,27 +2,6 @@ import AppKit
 import QuillSearch
 import QuillVim
 
-/// Maps an engine action onto the command that performs it.
-enum CommandRoutes {
-    static func id(for action: HostAction) -> String? {
-        switch action {
-        case .write: "file.save"
-        case .quit: "file.close"
-        case .goToDefinition: "navigate.definition"
-        case .openParentDirectory: "file.parent"
-        case .openUnderCursor: "file.openEntry"
-        case .findFiles: "search.files"
-        case .liveGrep: "search.grep"
-        case .findReferences: "navigate.references"
-        case .codeAction: "navigate.codeAction"
-        case .toggleTheme: "view.toggleTheme"
-        case .setTheme(let choice): "view.theme.\(choice.rawValue)"
-        case .writeQuit, .formatTables, .shell, .command:
-            nil
-        }
-    }
-}
-
 extension AppModel {
     func installCommands() {
         register(
@@ -32,7 +11,7 @@ extension AppModel {
             bindings: [chord("k", command: true)],
             showsInMenu: true,
             menuCategory: "File"
-        ) { [weak self] in
+        ) { [weak self] _ in
             self?.presentCommandPalette()
         }
         register(
@@ -41,7 +20,7 @@ extension AppModel {
             category: "File",
             bindings: [chord("n", command: true)],
             showsInMenu: true
-        ) { [weak self] in
+        ) { [weak self] _ in
             self?.newUntitled()
         }
         register(
@@ -50,7 +29,7 @@ extension AppModel {
             category: "File",
             bindings: [chord("o", command: true)],
             showsInMenu: true
-        ) { [weak self] in
+        ) { [weak self] _ in
             self?.openPanel()
         }
         register(
@@ -59,7 +38,7 @@ extension AppModel {
             category: "File",
             bindings: [CommandBinding(.keys("-"))],
             showsInMenu: true
-        ) { [weak self] in
+        ) { [weak self] _ in
             self?.openParent()
         }
         register(
@@ -67,17 +46,22 @@ extension AppModel {
             name: "Open Config",
             category: "File",
             showsInMenu: true
-        ) { [weak self] in
+        ) { [weak self] _ in
             self?.openConfigFile()
         }
         register(
             id: "file.save",
             name: "Save",
             category: "File",
-            bindings: [chord("s", command: true), CommandBinding(.ex("w"))],
+            bindings: [chord("s", command: true), CommandBinding(.ex("w")), CommandBinding(.ex("write"))],
             showsInMenu: true
-        ) { [weak self] in
-            self?.save()
+        ) { [weak self] args in
+            guard let self else { return }
+            if args.text.isEmpty {
+                self.save()
+            } else {
+                self.save(toPath: args.text)
+            }
         }
         register(
             id: "file.saveAs",
@@ -86,7 +70,7 @@ extension AppModel {
             bindings: [chord("s", command: true, shift: true)],
             showsInMenu: true,
             enabled: { [weak self] in self?.isDirectory == false }
-        ) { [weak self] in
+        ) { [weak self] _ in
             self?.saveAs()
         }
         register(
@@ -94,7 +78,7 @@ extension AppModel {
             name: "Save and Close",
             category: "File",
             bindings: [CommandBinding(.ex("wq")), CommandBinding(.ex("x"))]
-        ) { [weak self] in
+        ) { [weak self] _ in
             guard let self else { return }
             self.save { self.runCommand("file.close") }
         }
@@ -102,37 +86,44 @@ extension AppModel {
             id: "file.close",
             name: "Close",
             category: "File",
-            bindings: [chord("w", command: true), CommandBinding(.ex("q"))],
+            bindings: [chord("w", command: true), CommandBinding(.ex("q")), CommandBinding(.ex("quit"))],
             showsInMenu: true
-        ) { [weak self] in
-            guard let self else { return }
-            self.recordCloseRequest()
-            NSApplication.shared.keyWindow?.close()
+        ) { [weak self] args in
+            self?.close(bang: args.bang)
+        }
+        register(
+            id: "file.edit",
+            name: "Reload / Edit",
+            category: "File",
+            bindings: [CommandBinding(.ex("e")), CommandBinding(.ex("edit"))]
+        ) { [weak self] args in
+            self?.edit(args)
         }
         register(
             id: "file.openEntry",
             name: "Open Entry",
             category: "File",
+            bindings: [CommandBinding(.keys("<CR>"))],
             enabled: { [weak self] in self?.isDirectory == true }
-        ) { [weak self] in
+        ) { [weak self] _ in
             self?.openCurrentEntry()
         }
         register(
             id: "search.files",
             name: "Find Files",
             category: "Search",
-            bindings: [chord("p", command: true)] + leaderBindings(.findFiles),
+            bindings: [chord("p", command: true), CommandBinding(.leader("sf"))],
             showsInMenu: true
-        ) { [weak self] in
+        ) { [weak self] _ in
             self?.presentFilePicker()
         }
         register(
             id: "search.grep",
             name: "Live Grep",
             category: "Search",
-            bindings: [chord("f", command: true, shift: true)] + leaderBindings(.liveGrep),
+            bindings: [chord("f", command: true, shift: true), CommandBinding(.leader("sg"))],
             showsInMenu: true
-        ) { [weak self] in
+        ) { [weak self] _ in
             self?.presentGrepPicker()
         }
         register(
@@ -141,7 +132,7 @@ extension AppModel {
             category: "Navigate",
             bindings: [chord("d", command: true), CommandBinding(.keys("gd"))],
             showsInMenu: true
-        ) { [weak self] in
+        ) { [weak self] _ in
             self?.goToDefinition()
         }
         register(
@@ -150,16 +141,16 @@ extension AppModel {
             category: "Navigate",
             bindings: [CommandBinding(.keys("gr"))],
             showsInMenu: true
-        ) { [weak self] in
+        ) { [weak self] _ in
             self?.findReferences()
         }
         register(
             id: "navigate.codeAction",
             name: "Code Action",
             category: "Navigate",
-            bindings: leaderBindings(.codeAction),
+            bindings: [CommandBinding(.leader("ca"))],
             showsInMenu: true
-        ) { [weak self] in
+        ) { [weak self] _ in
             self?.presentCodeActions()
         }
         register(
@@ -167,7 +158,7 @@ extension AppModel {
             name: "Toggle Images",
             category: "View",
             showsInMenu: true
-        ) { [weak self] in
+        ) { [weak self] _ in
             self?.toggleImages()
         }
         register(
@@ -176,43 +167,58 @@ extension AppModel {
             category: "View",
             bindings: [chord("f", command: true, control: true)],
             showsInMenu: true
-        ) { [weak self] in
+        ) { [weak self] _ in
             self?.toggleFocus()
         }
         register(
             id: "view.toggleTheme",
             name: "Toggle Light/Dark",
             category: "View",
-            bindings: [chord("l", command: true, shift: true), CommandBinding(.ex("theme"))] + leaderBindings(.toggleTheme),
+            bindings: [chord("l", command: true, shift: true), CommandBinding(.leader("tt"))],
             showsInMenu: true
-        ) { [weak self] in
+        ) { [weak self] _ in
             self?.toggleTheme()
+        }
+        register(
+            id: "view.theme",
+            name: "Set Theme",
+            category: "View",
+            bindings: [CommandBinding(.ex("theme"))]
+        ) { [weak self] args in
+            guard let self else { return }
+            if args.text.isEmpty {
+                self.toggleTheme()
+                return
+            }
+            guard let choice = ThemeChoice.parse(args.text) else {
+                self.message = "theme must be light, dark, or system"
+                NSSound.beep()
+                return
+            }
+            self.setTheme(choice)
         }
         register(
             id: "view.theme.light",
             name: "Theme Light",
             category: "View",
-            bindings: [CommandBinding(.ex("theme light"))],
             showsInMenu: true
-        ) { [weak self] in
+        ) { [weak self] _ in
             self?.setTheme(.light)
         }
         register(
             id: "view.theme.dark",
             name: "Theme Dark",
             category: "View",
-            bindings: [CommandBinding(.ex("theme dark"))],
             showsInMenu: true
-        ) { [weak self] in
+        ) { [weak self] _ in
             self?.setTheme(.dark)
         }
         register(
             id: "view.theme.system",
             name: "Theme System",
             category: "View",
-            bindings: [CommandBinding(.ex("theme system"))],
             showsInMenu: true
-        ) { [weak self] in
+        ) { [weak self] _ in
             self?.setTheme(.system)
         }
         register(
@@ -222,8 +228,18 @@ extension AppModel {
             bindings: [CommandBinding(.ex("TableFormat"))],
             showsInMenu: true,
             enabled: { [weak self] in self?.isDirectory == false }
-        ) { [weak self] in
-            self?.formatTables(startLine: nil, endLine: nil, quiet: false)
+        ) { [weak self] args in
+            guard let self else { return }
+            if !args.text.isEmpty {
+                self.message = "Not an editor command: TableFormat"
+                NSSound.beep()
+                return
+            }
+            if let lines = args.lines {
+                self.formatTables(startLine: lines.lowerBound, endLine: lines.upperBound, quiet: false)
+            } else {
+                self.formatTables(startLine: nil, endLine: nil, quiet: false)
+            }
         }
         for (sequence, command) in config.shellCommands.sorted(by: { $0.key < $1.key }) where !sequence.isEmpty && !command.isEmpty {
             let id = "shell.\(sequence)"
@@ -232,10 +248,11 @@ extension AppModel {
                 name: command,
                 category: "Shell",
                 bindings: [CommandBinding(.leader(sequence))]
-            ) { [weak self] in
+            ) { [weak self] _ in
                 self?.runShell(command)
             }
         }
+        rebuildKeymap()
     }
 
     func menuEntries(category: String) -> [CommandEntry] {
@@ -247,8 +264,17 @@ extension AppModel {
     }
 
     @discardableResult
-    func runCommand(_ id: String) -> Bool {
-        commands.run(id: id)
+    func runCommand(_ id: String, args: CommandArgs = .none) -> Bool {
+        commands.run(id: id, args: args)
+    }
+
+    /// `<CR>` opens a directory entry and moves down in a file.
+    func rebuildKeymap() {
+        let directory = isDirectory
+        engine.keymap = commands.keymap(leader: engine.leaderKey) { id in
+            if id == "file.openEntry" { return directory }
+            return true
+        }
     }
 
     func presentCommandPalette() {
@@ -270,7 +296,7 @@ extension AppModel {
         let items = commands.ranked(matching: query).map { entry in
             PickerItem(
                 title: entry.name,
-                subtitle: CommandBinding.shortcutLabel(for: entry.bindings),
+                subtitle: entry.bindings.map(\.label).joined(separator: " "),
                 payload: entry.id,
                 dimmed: !commands.isEnabled(id: entry.id)
             )
@@ -312,22 +338,6 @@ extension AppModel {
         open(url: url)
     }
 
-    func shellCommandID(_ command: String) -> String? {
-        for (sequence, action) in engine.leaderBindings {
-            if case .shell(let bound) = action, bound == command {
-                return "shell.\(sequence)"
-            }
-        }
-        return nil
-    }
-
-    private func leaderBindings(_ action: HostAction) -> [CommandBinding] {
-        engine.leaderBindings
-            .compactMap { sequence, bound in bound == action ? sequence : nil }
-            .sorted()
-            .map { CommandBinding(.leader($0)) }
-    }
-
     private func chord(
         _ key: Character,
         command: Bool = false,
@@ -346,7 +356,7 @@ extension AppModel {
         showsInMenu: Bool = false,
         menuCategory: String? = nil,
         enabled: @escaping () -> Bool = { true },
-        perform: @escaping () -> Void
+        perform: @escaping (CommandArgs) -> Void
     ) {
         commands.register(
             id: id,

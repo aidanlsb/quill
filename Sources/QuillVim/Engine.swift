@@ -9,25 +9,14 @@ public final class Engine {
     public var layout: any ScreenLayout
     public var clipboard: any Clipboard
     public var shiftWidth: Int = 2
-    /// When true, leaving insert mode asks the host to pad the table under the cursor.
-    public var formatTablesOnInsertLeave = false
-    /// When true, Enter in normal mode asks the host to open the current line
-    /// (directory listings) instead of moving down.
-    public var openOnEnter: Bool = false
     /// Lines Ctrl-d / Ctrl-u move when the user did not type a count.
     /// The host sets this to half the visible window. A count updates it, matching vim's `scroll`.
     public var scrollLineCount: Int = 10
     /// Leader key in normal mode. Space by default; configurable by the host.
+    /// The keymap spells leader sequences as this character plus the rest.
     public var leaderKey: Character = " "
-    /// Sequence → action after the leader. Host loads this from config.
+    /// Normal-mode sequences → registry command id. The host rebuilds this.
     public var keymap = Keymap()
-    public var leaderBindings: [String: HostAction] = [
-        "sf": .findFiles,
-        "sg": .liveGrep,
-        "ca": .codeAction,
-        // `<leader>t*` is reserved for toggles. `tt` is the appearance toggle.
-        "tt": .toggleTheme,
-    ]
     public private(set) var isModified: Bool = false
     public private(set) var statusMessage: String = ""
     public private(set) var commandLine: String = ""
@@ -47,10 +36,11 @@ public final class Engine {
     var pendingRegister: RegisterName = .unnamed
     var pendingFind: FindKind?
     var pendingTextObjectInner: Bool?
-    var pendingLeader: String?
     var pendingMarkSet = false
     var pendingMarkJump: Character?
     var mapPrefix = ""
+    /// True while the first character of a failed mapping is fed back to the parser.
+    private var mapSuppressed = false
 
     var lastFind: (FindKind, Character)?
     var searchPattern: String = ""
@@ -136,7 +126,6 @@ public final class Engine {
         currentStamp = 0
         savedStamp = 0
         lastRepeatable = nil
-        pendingLeader = nil
         resetParser()
         statusMessage = ""
         commandLine = ""
@@ -293,7 +282,6 @@ public final class Engine {
         pendingRegister = .unnamed
         pendingFind = nil
         pendingTextObjectInner = nil
-        pendingLeader = nil
         pendingMarkSet = false
         pendingMarkJump = nil
         mapPrefix = ""
@@ -314,13 +302,26 @@ public final class Engine {
     private func handleNormalLike(_ event: KeyEvent) -> EngineResult {
         switch event.key {
         case .escape:
+            let pendingMap = !mapPrefix.isEmpty
             resetParser()
             mode = .normal
             buffer.clampCursor(normalMode: true)
+            if pendingMap { statusMessage = "" }
             return .noop
         case .enter:
-            if openOnEnter, operatorKind == nil, !mode.isVisual, pendingLeader == nil {
-                return EngineResult(didChangeText: false, beep: false, actions: [.openUnderCursor])
+            if mode == .normal, mapPrefix.isEmpty, parserIsIdle,
+               case .command(let name) = keymap.lookup("<CR>") {
+                resetParser()
+                statusMessage = ""
+                return EngineResult(didChangeText: false, beep: false, actions: [.command(name)])
+            }
+            if mode == .normal, !mapPrefix.isEmpty {
+                let buffered = mapPrefix
+                mapPrefix = ""
+                statusMessage = ""
+                let replayed = replayUnmapped(buffered)
+                let motion = applyMotion(.down, find: nil)
+                return merge(replayed, motion)
             }
             return applyMotion(.down, find: nil)
         case .backspace:
@@ -370,25 +371,28 @@ public final class Engine {
             pendingMarkJump = nil
             return jumpToMark(ch)
         }
-        if parserIsIdle {
+        if mode == .normal, !mapSuppressed, parserIsIdle {
             let next = mapPrefix + String(ch)
             switch keymap.lookup(next) {
             case .command(let name):
                 mapPrefix = ""
+                statusMessage = ""
                 resetParser()
                 return EngineResult(didChangeText: false, beep: false, actions: [.command(name)])
             case .prefix:
                 mapPrefix = next
+                if next.first == leaderKey {
+                    statusMessage = "<leader>" + String(next.dropFirst())
+                }
                 return .noop
             case .none:
                 if !mapPrefix.isEmpty {
+                    let buffered = mapPrefix + String(ch)
                     mapPrefix = ""
-                    return beepResult()
+                    statusMessage = ""
+                    return replayUnmapped(buffered)
                 }
             }
-        }
-        if let prefix = pendingLeader {
-            return handleLeader(prefix, ch)
         }
         if pendingQuote {
             pendingQuote = false
@@ -435,14 +439,6 @@ public final class Engine {
             }
             if ch == "$" {
                 return applyMotion(.lineEnd, find: nil)
-            }
-            if ch == "d", operatorKind == nil, !mode.isVisual {
-                resetParser()
-                return EngineResult(didChangeText: false, beep: false, actions: [.goToDefinition])
-            }
-            if ch == "r", operatorKind == nil, !mode.isVisual {
-                resetParser()
-                return EngineResult(didChangeText: false, beep: false, actions: [.findReferences])
             }
             return beepResult()
         }
@@ -596,37 +592,37 @@ public final class Engine {
             commandLine = ":"
             historyCursor = commandHistory.count
             return .noop
-        case "-":
-            if operatorKind == nil, !mode.isVisual {
-                resetParser()
-                return EngineResult(didChangeText: false, beep: false, actions: [.openParentDirectory])
+        case " ":
+            if mode == .normal {
+                return applyMotion(.right, find: nil)
             }
             return beepResult()
         default:
-            if ch == leaderKey, operatorKind == nil, !mode.isVisual {
-                pendingLeader = ""
-                statusMessage = "<leader>"
-                return .noop
-            }
             return beepResult()
         }
     }
 
-    private func handleLeader(_ prefix: String, _ ch: Character) -> EngineResult {
-        let next = prefix + String(ch)
-        if let action = leaderBindings[next] {
-            pendingLeader = nil
-            statusMessage = ""
-            return EngineResult(didChangeText: false, beep: false, actions: [action])
+    /// Feeds a failed mapping back through the parser. The first character skips
+    /// the keymap so a prefix such as `g` cannot match itself again.
+    private func replayUnmapped(_ text: String) -> EngineResult {
+        var combined = EngineResult.noop
+        var suppress = true
+        for ch in text {
+            mapSuppressed = suppress
+            let result = handleNormalCharacter(ch)
+            mapSuppressed = false
+            suppress = false
+            combined = merge(combined, result)
         }
-        if leaderBindings.keys.contains(where: { $0.hasPrefix(next) }) {
-            pendingLeader = next
-            statusMessage = "<leader>" + next
-            return .noop
-        }
-        pendingLeader = nil
-        statusMessage = ""
-        return beepResult()
+        return combined
+    }
+
+    private func merge(_ a: EngineResult, _ b: EngineResult) -> EngineResult {
+        EngineResult(
+            didChangeText: a.didChangeText || b.didChangeText,
+            beep: a.beep || b.beep,
+            actions: a.actions + b.actions
+        )
     }
 
     private func iaSpecifier(_ ch: Character) -> Bool? {
@@ -1177,10 +1173,7 @@ public final class Engine {
         if !inserted.isEmpty {
             registers.lastInsert = Register(text: inserted, style: .characterwise)
         }
-        let actions: [HostAction] = formatTablesOnInsertLeave
-            ? [.formatTables(startLine: nil, endLine: nil, quiet: true)]
-            : []
-        return EngineResult(didChangeText: inserted.count > 0, beep: false, actions: actions)
+        return EngineResult(didChangeText: inserted.count > 0, beep: false, actions: [])
     }
 
     private func insertedTextSinceBaseline() -> String {
@@ -1717,7 +1710,7 @@ public final class Engine {
     }
 
     private var parserIsIdle: Bool {
-        count == nil && operatorKind == nil && !pendingG && !pendingQuote && pendingLeader == nil
+        count == nil && operatorKind == nil && !pendingG && !pendingQuote
             && !pendingMarkSet && pendingMarkJump == nil
     }
 
@@ -1747,38 +1740,9 @@ public final class Engine {
 
     private func executeEx(_ cmd: String) -> EngineResult {
         let parsed = Ex.parse(cmd)
-        if parsed.name.lowercased() == "tableformat" {
-            return tableFormat(parsed)
-        }
         switch parsed.name {
-        case "w":
-            return EngineResult(didChangeText: false, beep: false, actions: [.write])
-        case "q":
-            if parsed.bang || !isModified {
-                return EngineResult(didChangeText: false, beep: false, actions: [.quit])
-            }
-            statusMessage = "No write since last change"
-            return beepResult()
-        case "wq", "x":
-            return EngineResult(didChangeText: false, beep: false, actions: [.writeQuit])
-        case "e":
-            let name = parsed.args.isEmpty ? "edit" : "edit:\(parsed.args)"
-            return EngineResult(didChangeText: false, beep: false, actions: [.command(name)])
-        case "sp":
-            return EngineResult(didChangeText: false, beep: false, actions: [.command("split")])
-        case "vs":
-            return EngineResult(didChangeText: false, beep: false, actions: [.command("vsplit")])
         case "set":
             return applySet(parsed.args)
-        case "theme":
-            if parsed.args.isEmpty {
-                return EngineResult(didChangeText: false, beep: false, actions: [.toggleTheme])
-            }
-            guard let choice = ThemeChoice.parse(parsed.args) else {
-                statusMessage = "theme must be light, dark, or system"
-                return beepResult()
-            }
-            return EngineResult(didChangeText: false, beep: false, actions: [.setTheme(choice)])
         case "s":
             return substitute(parsed)
         case "" where parsed.rangeStart != nil && parsed.args.isEmpty:
@@ -1791,29 +1755,27 @@ public final class Engine {
             resetCurswant()
             return .noop
         default:
-            statusMessage = "Not an editor command"
-            return beepResult()
+            let call = ExCall(
+                name: parsed.name,
+                args: parsed.args,
+                lines: resolvedLines(parsed),
+                bang: parsed.bang
+            )
+            return EngineResult(didChangeText: false, beep: false, actions: [.ex(call)])
         }
     }
 
-    private func tableFormat(_ parsed: ParsedEx) -> EngineResult {
-        if !parsed.args.isEmpty {
-            statusMessage = "Not an editor command"
-            return beepResult()
-        }
+    /// Inclusive 0-based lines. Nil when the command was typed with no address.
+    private func resolvedLines(_ parsed: ParsedEx) -> ClosedRange<Int>? {
+        if parsed.rangeStart == nil && parsed.rangeEnd == nil { return nil }
         let last = buffer.lastLine
         let current = buffer.lineIndex(containing: buffer.cursor)
-        let action: HostAction
-        if parsed.rangeStart == nil && parsed.rangeEnd == nil {
-            action = .formatTables(startLine: nil, endLine: nil, quiet: false)
-        } else if parsed.rangeStart == .all || parsed.rangeEnd == .all {
-            action = .formatTables(startLine: 0, endLine: last, quiet: false)
-        } else {
-            let start = resolveAddress(parsed.rangeStart, current: current, last: last)
-            let end = resolveAddress(parsed.rangeEnd ?? parsed.rangeStart, current: current, last: last)
-            action = .formatTables(startLine: min(start, end), endLine: max(start, end), quiet: false)
+        if parsed.rangeStart == .all || parsed.rangeEnd == .all {
+            return 0...last
         }
-        return EngineResult(didChangeText: false, beep: false, actions: [action])
+        let start = resolveAddress(parsed.rangeStart, current: current, last: last)
+        let end = resolveAddress(parsed.rangeEnd ?? parsed.rangeStart, current: current, last: last)
+        return min(start, end)...max(start, end)
     }
 
     private func applySet(_ args: String) -> EngineResult {

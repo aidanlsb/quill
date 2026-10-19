@@ -39,7 +39,7 @@ final class SaveRaceTests: XCTestCase {
         let gate = pauseWrites(of: model)
 
         let result = model.engine.type(":wq<CR>")
-        XCTAssertEqual(result.actions, [.writeQuit])
+        XCTAssertEqual(result.actions, [.ex(ExCall(name: "wq"))])
         model.handleEngineResult(result)
         XCTAssertEqual(model.closeRequests, 0, "close ran before the write finished")
 
