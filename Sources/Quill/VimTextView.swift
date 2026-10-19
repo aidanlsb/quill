@@ -732,9 +732,21 @@ final class VimTextView: NSTextView {
         let height = clip.height > 2 ? clip.height : 600
         let originY = textContainerOrigin.y
         let top = clip.height > 2 ? clip.minY : 0
-        let first = max(0, Int(floor((top - originY) / row)) - 4)
-        let last = min(count, max(first + 1, Int(ceil((top + height - originY) / row)) + 8))
+        // `y / row` assumes one row per buffer line. Wrapped lines and headings
+        // are taller, so prefer the line TextKit actually laid out at that y.
+        let topLine = laidOutLine(atContainerY: top - originY) ?? Int(floor((top - originY) / row))
+        let bottomLine = laidOutLine(atContainerY: top + height - originY) ?? Int(ceil((top + height - originY) / row))
+        let first = min(count - 1, max(0, topLine - 4))
+        let last = min(count, max(first + 1, bottomLine + 8))
         return first..<last
+    }
+
+    private func laidOutLine(atContainerY y: CGFloat) -> Int? {
+        guard let lm = textLayoutManager,
+              let fragment = lm.textLayoutFragment(for: CGPoint(x: 0, y: max(0, y))) else { return nil }
+        let offset = lm.offset(from: lm.documentRange.location, to: fragment.rangeInElement.location)
+        guard offset != NSNotFound else { return nil }
+        return engine.buffer.lineIndex(containing: min(max(0, offset), engine.buffer.count))
     }
 
     private func viewportLastLine() -> Int {
