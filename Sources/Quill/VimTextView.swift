@@ -1155,9 +1155,17 @@ final class VimTextView: NSTextView {
         // A fragment at or below that row is the real line, including wrap.
         let row = rowHeight()
         let line = engine.buffer.lineIndex(containing: clampUTF16(engine.cursor))
+        let lineCount = max(1, engine.buffer.lineCount)
+        // TextKit's laid-out height can exceed one `rowHeight` per buffer line
+        // (select-all, wrap, leading). A stale fragment then sits near the short
+        // estimate and `G` stops above the end.
+        let inset = textContainerInset.height * 2
+        let estimatedSpan = CGFloat(lineCount) * row + imagePreviews.reservedHeight
+        let extra = max(0, bounds.height - inset - estimatedSpan)
+        let progress = CGFloat(line) / CGFloat(max(lineCount - 1, 1))
         let estimated = NSRect(
             x: 0,
-            y: textContainerOrigin.y + CGFloat(line) * row + imagePreviews.heightBefore(line: line),
+            y: textContainerOrigin.y + CGFloat(line) * row + imagePreviews.heightBefore(line: line) + extra * progress,
             width: 1,
             height: row
         )
