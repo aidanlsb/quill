@@ -5,63 +5,76 @@ import UniformTypeIdentifiers
 @main
 struct QuillApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    @State private var model = AppModel()
 
     var body: some Scene {
         WindowGroup {
-            ContentView(model: model)
-                .frame(minWidth: 720, minHeight: 480)
-                .onAppear {
-                    appDelegate.attach(model)
-                    AppActivation.bringForward()
-                    model.consumeLaunchArguments(Array(CommandLine.arguments.dropFirst()))
-                    NSApplication.shared.windows.forEach { $0.delegate = appDelegate }
-                    WindowChrome.apply(theme: model.theme)
-                    QuillTrace.event("keyWindow")
-                    AppPerf.noteKeyWindow()
-                    AppSmoke.noteWindowAppeared()
-                    AppSmoke.runIfRequested(model: model)
-                }
-                .onOpenURL { url in
-                    model.open(url: url)
-                    AppActivation.bringForward()
-                }
+            EditorRoot(model: appDelegate.model, delegate: appDelegate)
         }
         .defaultSize(width: 960, height: 760)
         .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("New") { model.newUntitled() }
+                Button("New") { appDelegate.model.newUntitled() }
                     .keyboardShortcut("n", modifiers: .command)
-                Button("Open…") { model.openPanel() }
+                Button("Open…") { appDelegate.model.openPanel() }
                     .keyboardShortcut("o", modifiers: .command)
-                Button("Save") { model.save() }
+                Button("Save") { appDelegate.model.save() }
                     .keyboardShortcut("s", modifiers: .command)
-                Button("Save As…") { model.saveAs() }
+                Button("Save As…") { appDelegate.model.saveAs() }
                     .keyboardShortcut("s", modifiers: [.command, .shift])
             }
             CommandGroup(after: .toolbar) {
-                Button("Find Files") { model.presentFilePicker() }
+                Button("Find Files") { appDelegate.model.presentFilePicker() }
                     .keyboardShortcut("p", modifiers: .command)
-                Button("Live Grep") { model.presentGrepPicker() }
+                Button("Live Grep") { appDelegate.model.presentGrepPicker() }
                     .keyboardShortcut("f", modifiers: [.command, .shift])
-                Button("Focus Mode") { model.toggleFocus() }
+                Button("Focus Mode") { appDelegate.model.toggleFocus() }
                     .keyboardShortcut("f", modifiers: [.command, .control])
-                Button("Go to Definition") { model.goToDefinition() }
+                Button("Go to Definition") { appDelegate.model.goToDefinition() }
                     .keyboardShortcut("d", modifiers: .command)
             }
             CommandGroup(after: .sidebar) {
-                Button("Toggle Light/Dark") { model.toggleTheme() }
+                Button("Toggle Light/Dark") { appDelegate.model.toggleTheme() }
                     .keyboardShortcut("l", modifiers: [.command, .shift])
             }
         }
     }
 }
 
+/// The document view. An existing window prefers the `quill://` event so a
+/// warm launch does not try to open a second scene and then show neither.
+private struct EditorRoot: View {
+    @Bindable var model: AppModel
+    var delegate: AppDelegate
+
+    var body: some View {
+        ContentView(model: model)
+            .frame(minWidth: 720, minHeight: 480)
+            .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
+            .onAppear { delegate.noteWindow() }
+            .onOpenURL { url in
+                delegate.accept(url)
+            }
+    }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
-    var model: AppModel?
+    private var ownedModel: AppModel?
     private var pending: [URL] = []
+    private var launched = false
+    /// `quill://` was delivered. SwiftUI will not open a window for that event
+    /// once this delegate has taken `kAEGetURL`, so we open one ourselves.
+    private var quillOpenNeedsWindow = false
+    private var ensuringWindow = false
+    private var hostedWindow: NSWindow?
+
+    var model: AppModel {
+        if let ownedModel { return ownedModel }
+        let created = AppModel()
+        ownedModel = created
+        return created
+    }
 
     override init() {
         super.init()
@@ -69,18 +82,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func attach(_ model: AppModel) {
-        self.model = model
+        ownedModel = model
         drainPending()
         AppSmoke.noteAttachedModel()
     }
 
+    func noteWindow() {
+        attach(model)
+        model.consumeLaunchArguments(Array(CommandLine.arguments.dropFirst()))
+        let app = NSApplication.shared
+        app.windows.forEach { $0.delegate = self }
+        WindowChrome.apply(theme: model.theme)
+        QuillTrace.event("keyWindow")
+        AppPerf.noteKeyWindow()
+        AppSmoke.noteWindowAppeared()
+        AppSmoke.runIfRequested(model: model)
+        ensureDocumentWindowIfNeeded()
+        AppActivation.bringForward()
+    }
+
     func applicationWillFinishLaunching(_ notification: Notification) {
-        NSAppleEventManager.shared().setEventHandler(
-            self,
-            andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)),
-            forEventClass: AEEventClass(kInternetEventClass),
-            andEventID: AEEventID(kAEGetURL)
-        )
+        installURLHandler()
         // `.regular` before any window exists. A quill:// open from the CLI
         // otherwise comes up behind the terminal.
         AppActivation.prepare()
@@ -91,7 +113,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     /// Apple events arrive on the main thread, sometimes before SwiftUI has
-    /// attached the model. `NSApp` is not required; the URL is queued.
+    /// attached the model. Taking this event is what stops WindowGroup from
+    /// creating a window; `ensureDocumentWindowIfNeeded` opens one instead.
     @objc nonisolated func handleGetURLEvent(
         _ event: NSAppleEventDescriptor,
         withReplyEvent reply: NSAppleEventDescriptor
@@ -109,23 +132,109 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         urls.forEach { accept($0) }
     }
 
-    private func accept(_ url: URL) {
-        if let model {
+    func accept(_ url: URL) {
+        if url.scheme == "quill" {
+            quillOpenNeedsWindow = true
+        }
+        if ownedModel != nil || launched {
             model.open(url: url)
         } else {
             pending.append(url)
+        }
+        if launched {
+            ensureDocumentWindowIfNeeded()
         }
         AppActivation.bringForward()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        launched = true
+        installURLHandler()
         drainPending()
+        // SwiftUI may still be building its window. Front that one if it is
+        // already on screen; the task below opens a window if it never appears.
+        if quillOpenNeedsWindow, let existing = documentWindow(), existing.isVisible {
+            show(existing)
+            quillOpenNeedsWindow = false
+        }
         AppActivation.bringForward()
         QuillTrace.event("didFinishLaunching")
         // Do not wait for onAppear. That callback is the only thing that used
         // to start smoke, and it never runs when no window becomes key.
-        AppSmoke.launchDidFinish(model: model)
+        AppSmoke.launchDidFinish(model: ownedModel)
         AppPerf.launchDidFinish()
+        Task { @MainActor in
+            installURLHandler()
+            ensureDocumentWindowIfNeeded()
+            AppActivation.bringForward()
+        }
+    }
+
+    private func installURLHandler() {
+        NSAppleEventManager.shared().setEventHandler(
+            self,
+            andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)),
+            forEventClass: AEEventClass(kInternetEventClass),
+            andEventID: AEEventID(kAEGetURL)
+        )
+    }
+
+    /// Front a document window. SwiftUI's scene is used when it already has
+    /// one; otherwise a hosted window shows the same model the URL opened.
+    private func ensureDocumentWindowIfNeeded() {
+        guard quillOpenNeedsWindow, !ensuringWindow else { return }
+        let env = ProcessInfo.processInfo.environment
+        if env["QUILL_SMOKE"] == "1" || env["QUILL_PERF"] == "1" { return }
+        ensuringWindow = true
+        defer { ensuringWindow = false }
+        AppActivation.prepare()
+        if let existing = documentWindow() {
+            show(existing)
+            quillOpenNeedsWindow = false
+            return
+        }
+        if let hostedWindow {
+            show(hostedWindow)
+            quillOpenNeedsWindow = false
+            return
+        }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 960, height: 760),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Quill"
+        window.isReleasedWhenClosed = false
+        window.collectionBehavior = window.collectionBehavior.union(.moveToActiveSpace)
+        window.contentViewController = NSHostingController(
+            rootView: EditorRoot(model: model, delegate: self)
+        )
+        window.delegate = self
+        hostedWindow = window
+        WindowChrome.apply(model.theme, to: window)
+        window.center()
+        show(window)
+        quillOpenNeedsWindow = false
+    }
+
+    private func show(_ window: NSWindow) {
+        window.collectionBehavior = window.collectionBehavior.union(.moveToActiveSpace)
+        let app = NSApplication.shared
+        app.activate()
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+        app.activate()
+    }
+
+    private func documentWindow() -> NSWindow? {
+        let candidates = NSApplication.shared.windows.filter { window in
+            window.canBecomeKey
+                && window.styleMask.contains(.titled)
+                && window.frame.width > 200
+                && window.frame.height > 80
+        }
+        return candidates.first { $0.isVisible } ?? candidates.first
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -137,18 +246,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        model?.requestTerminate() ?? .terminateNow
+        ownedModel?.requestTerminate() ?? .terminateNow
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        model?.requestClose(sender) ?? true
+        ownedModel?.requestClose(sender) ?? true
     }
 
     private func drainPending() {
-        guard let model, !pending.isEmpty else { return }
+        guard let ownedModel, !pending.isEmpty else { return }
         let urls = pending
         pending.removeAll()
-        urls.forEach { model.open(url: $0) }
+        urls.forEach { ownedModel.open(url: $0) }
     }
 }
 
