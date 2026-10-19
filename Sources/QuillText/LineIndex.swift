@@ -101,6 +101,29 @@ public struct LineIndex: Equatable, Sendable {
         return String(out)
     }
 
+    /// The text of each line without its break, as LSP counts lines: `"a\nb\n"` gives
+    /// `["a", "b", ""]`. For code that reads lines from a string it does not index,
+    /// such as a file on disk. Breaks are normalized first, so line `n` here is line
+    /// `n` once the editor loads the same text.
+    public static func contents(of raw: String) -> [Substring] {
+        let text = normalizingNewlines(raw)
+        let index = LineIndex(text)
+        let units = text.utf16
+        var out: [Substring] = []
+        out.reserveCapacity(index.lineCount)
+        var cursor = units.startIndex
+        var at = 0
+        for line in 0..<index.lineCount {
+            let content = index.line(line).content
+            let lower = units.index(cursor, offsetBy: content.lowerBound - at)
+            let upper = units.index(lower, offsetBy: content.count)
+            out.append(text[lower..<upper])
+            cursor = upper
+            at = content.upperBound
+        }
+        return out
+    }
+
     /// Line holding `offset`. Offsets are clamped to `0...utf16Count`; the
     /// document end belongs to the last line.
     public func line(containing offset: Int) -> Int {
@@ -156,12 +179,12 @@ public struct LineIndex: Equatable, Sendable {
         let lower = min(max(0, range.lowerBound), utf16Count)
         let upper = min(max(lower, range.upperBound), utf16Count)
         let first = line(containing: lower)
-        var next = Array(starts[0...first])
+        var added: [Int] = []
         var inserted = 0
         for unit in new {
             inserted += 1
             if unit == Self.newline {
-                next.append(lower + inserted)
+                added.append(lower + inserted)
             }
         }
         let delta = inserted - (upper - lower)
@@ -170,11 +193,10 @@ public struct LineIndex: Equatable, Sendable {
         while survivor < starts.count, starts[survivor] <= upper {
             survivor += 1
         }
-        while survivor < starts.count {
-            next.append(starts[survivor] + delta)
-            survivor += 1
+        if delta != 0 {
+            for k in survivor..<starts.count { starts[k] += delta }
         }
-        starts = next
+        starts.replaceSubrange((first + 1)..<survivor, with: added)
         utf16Count += delta
     }
 }

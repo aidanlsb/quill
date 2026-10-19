@@ -34,18 +34,22 @@ let package = Package(
         ),
         .target(
             name: "QuillFS",
+            dependencies: ["QuillText"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .target(
             name: "QuillSearch",
+            dependencies: ["QuillText"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .target(
             name: "QuillMarkdown",
+            dependencies: ["QuillText"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .target(
             name: "QuillWorkspace",
+            dependencies: ["QuillText"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .target(
