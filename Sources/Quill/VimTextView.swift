@@ -797,7 +797,7 @@ final class VimTextView: NSTextView {
                     afterSpans,
                     editAt: edit.range.lowerBound,
                     delta: delta
-                ) || editRewritesListMarker(beforeSpans, edit) {
+                ) || Self.editRewritesListMarker(beforeSpans, edit) {
                     plainShift = false
                 }
                 if covered.isEmpty {
