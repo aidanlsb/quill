@@ -71,6 +71,9 @@ public final class Engine {
     private var strokeEdits: [TextEdit] = []
     private var groupDepth = 0
     private var groupForward: [TextEdit] = []
+    /// Start of the last line when a group began, if that line had content and no
+    /// newline. Edits in the group carry it along; see `keepEmptiedLastLine`.
+    private var groupBareLastLineStart: Int?
     private var groupInverse: [TextEdit] = []
     private var groupCursorBefore = 0
     private var nextStamp = 1
@@ -127,6 +130,7 @@ public final class Engine {
         groupDepth = 0
         groupForward = []
         groupInverse = []
+        groupBareLastLineStart = nil
         strokeEdits = []
         nextStamp = 1
         currentStamp = 0
@@ -539,8 +543,10 @@ public final class Engine {
         case "N":
             return applyMotion(.search(forward: false), find: nil)
         case "x":
+            if mode.isVisual { return applyOperatorToVisual(.delete) }
             return commandDeleteChars(count: effectiveCount(), enterInsert: false)
         case "s":
+            if mode.isVisual { return applyOperatorToVisual(.change) }
             return commandDeleteChars(count: effectiveCount(), enterInsert: true)
         case "r":
             mode = .replaceChar
@@ -839,17 +845,16 @@ public final class Engine {
             return beepResult()
         }
         let style: RangeStyle = mode == .visualLine ? .linewise : .characterwise
-        let lineCount: Int
-        if style == .linewise {
+        let target: RepeatTarget
+        // `>` and `<` shift whole lines from any visual mode, so `.` repeats them by line.
+        if style == .linewise || op == .indent || op == .unindent {
             let l1 = buffer.lineIndex(containing: range.lowerBound)
             let l2 = buffer.lineIndex(containing: max(range.lowerBound, range.upperBound - 1))
-            lineCount = abs(l2 - l1) + 1
+            target = .visualLines(abs(l2 - l1) + 1)
         } else {
-            lineCount = range.count
+            // The replay counts characters, not UTF-16 units.
+            target = .characterCount(max(1, buffer.graphemes(in: range).count))
         }
-        let target: RepeatTarget = style == .linewise
-            ? .visualLines(lineCount)
-            : .characterCount(max(1, range.count))
         return applyOperator(op, range: range, style: style, target: target)
     }
 
@@ -1146,6 +1151,14 @@ public final class Engine {
         operatorKind = nil
         operatorCount = nil
         count = nil
+        if !groupForward.isEmpty, buffer.cursor == buffer.count, buffer.lines.endsWithNewline {
+            // The edit left the caret on the empty text after a final newline, which
+            // is not a line in normal mode. One more newline makes it one, so
+            // `o<Esc>` and `A<CR><Esc>` keep the line they made.
+            let at = buffer.count
+            replace(at..<at, with: "\n")
+            buffer.cursor = at
+        }
         if buffer.cursor > buffer.bufferLine(containing: buffer.cursor).start {
             buffer.cursor = buffer.graphemeStart(before: buffer.cursor)
         }
@@ -1163,14 +1176,15 @@ public final class Engine {
 
     private func insertedTextSinceBaseline() -> String {
         // Net text that appeared at the original insert cursor.
-        if buffer.text == insertBaseline { return "" }
-        let start = min(insertBaselineCursor, buffer.count)
-        if buffer.text.hasPrefix(String(insertBaseline.prefix(start))),
-           buffer.text.hasSuffix(String(insertBaseline.dropFirst(start))) {
-            let end = buffer.count - (insertBaseline.count - start)
-            if start <= end {
-                return buffer.substring(start..<end)
-            }
+        let old = insertBaseline.utf16
+        let new = buffer.text.utf16
+        if old.elementsEqual(new) { return "" }
+        let start = min(insertBaselineCursor, old.count, new.count)
+        let tail = old.count - start
+        if new.count - tail >= start,
+           new.prefix(start).elementsEqual(old.prefix(start)),
+           new.suffix(tail).elementsEqual(old.suffix(tail)) {
+            return buffer.substring(start..<(new.count - tail))
         }
         // Fallback: characters currently between original cursor and now.
         let a = min(insertBaselineCursor, buffer.cursor)
@@ -1353,11 +1367,13 @@ public final class Engine {
             let insertAt = after ? target.end : target.start
             // After a last line with no newline, the lines go in as `"\n" + lines`
             // minus their final newline, so the buffer still ends without one.
+            // An empty last line keeps its newline, since empty text after a final
+            // newline is no line at all.
             let shift = after && !target.hasNewline ? 1 : 0
-            if shift == 1 { text = "\n" + text.dropLast() }
+            if shift == 1 { text = "\n" + (text == "\n" || text.hasSuffix("\n\n") ? text : String(text.dropLast())) }
             replace(insertAt..<insertAt, with: text)
             installPutAnchors(source, at: insertAt + shift)
-            buffer.cursor = buffer.firstNonBlank(onLine: buffer.lineIndex(containing: insertAt + shift))
+            buffer.cursor = buffer.firstNonBlank(onLine: min(buffer.lineIndex(containing: insertAt + shift), buffer.lastLine))
         } else {
             var at = buffer.cursor
             if after, !buffer.isEmpty {
@@ -1437,8 +1453,9 @@ public final class Engine {
         case .insert(let kind, let text, let n):
             _ = beginInsert(kind)
             if !text.isEmpty {
-                replace(buffer.cursor..<buffer.cursor, with: String(repeating: text, count: max(1, n)))
-                buffer.cursor += text.count * max(1, n)
+                let repeated = String(repeating: text, count: max(1, n))
+                replace(buffer.cursor..<buffer.cursor, with: repeated)
+                buffer.cursor += buffer.measure(repeated)
             }
             return finishInsertKeepingRepeatable(command)
         case .operate(let op, let n, let target, let inserted):
@@ -1461,12 +1478,15 @@ public final class Engine {
                 count = lines
                 result = applyLinewiseOperator(op)
             }
-            if op == .change, let inserted, !inserted.isEmpty, mode == .insert {
-                replace(buffer.cursor..<buffer.cursor, with: inserted)
-                buffer.cursor += inserted.count
+            if op == .change, mode == .insert {
+                if let inserted, !inserted.isEmpty {
+                    replace(buffer.cursor..<buffer.cursor, with: inserted)
+                    buffer.cursor += buffer.measure(inserted)
+                }
                 _ = finishInsertKeepingRepeatable(command)
             }
             lastRepeatable = command
+            if mode != .insert { resetParser() }
             return result
         case .replace(let n, let ch):
             count = n
@@ -1493,12 +1513,27 @@ public final class Engine {
             groupInverse.removeAll(keepingCapacity: true)
             groupCursorBefore = buffer.cursor
             redoStack.removeAll()
+            groupBareLastLineStart = buffer.isEmpty || buffer.lines.endsWithNewline ? nil : buffer.line(buffer.lastLine).start
         }
         groupDepth += 1
     }
 
+    /// Empty text after a final newline is not a line, so emptying a last line that
+    /// has no newline (`x` on the `b` of `"a\nb"`) would delete the line itself.
+    /// Vim keeps it as an empty line; one more newline does the same here. A newline
+    /// added after the line's content (a formatter's final newline) leaves its start
+    /// where it was, so it does not trigger this.
+    private func keepEmptiedLastLine() {
+        guard let start = groupBareLastLineStart, start == buffer.count, buffer.lines.endsWithNewline else { return }
+        let onLine = buffer.cursor >= start || groupCursorBefore >= start
+        replace(start..<start, with: "\n")
+        if onLine { buffer.cursor = start }
+    }
+
     private func commitTransaction() {
         guard groupDepth > 0 else { return }
+        if groupDepth == 1 { keepEmptiedLastLine() }
+        groupBareLastLineStart = groupDepth == 1 ? nil : groupBareLastLineStart
         groupDepth -= 1
         if groupDepth == 0 {
             if !groupForward.isEmpty {
@@ -1521,6 +1556,7 @@ public final class Engine {
 
     private func abortTransaction() {
         groupDepth = 0
+        groupBareLastLineStart = nil
         groupForward.removeAll(keepingCapacity: true)
         groupInverse.removeAll(keepingCapacity: true)
     }
@@ -1653,6 +1689,13 @@ public final class Engine {
             let width = buffer.measure(new)
             groupForward.append(edit)
             groupInverse.append(TextEdit(range: lower..<(lower + width), replacement: old))
+            if let start = groupBareLastLineStart {
+                if span.isEmpty ? start >= lower : start >= upper {
+                    groupBareLastLineStart = start + width - span.count
+                } else if start > lower {
+                    groupBareLastLineStart = lower
+                }
+            }
         }
         buffer.replace(span, with: new)
         strokeEdits.append(edit)
@@ -1793,20 +1836,28 @@ public final class Engine {
         let lower = min(startLine, endLine)
         let upper = max(startLine, endLine)
         beginTransaction()
-        var changed = false
+        // UTF-16 distance from the end of the last changed text to the end of the
+        // buffer. Edits above it (which may add lines) leave this distance alone.
+        var lastChangedFromEnd: Int?
         for line in stride(from: upper, through: lower, by: -1) {
             let content = buffer.lineContentRange(at: line)
             let text = buffer.substring(content)
             let updated = replaceInLine(text, pattern: parts.pattern, with: LineIndex.normalizingNewlines(parts.replacement), global: parts.global)
             if updated != text {
                 replace(content, with: updated)
-                changed = true
+                if lastChangedFromEnd == nil {
+                    lastChangedFromEnd = buffer.count - (content.lowerBound + buffer.measure(updated))
+                }
             }
         }
-        if !changed {
+        guard let lastChangedFromEnd else {
             abortTransaction()
             return beepResult()
         }
+        // Like vim, the caret goes to the last line changed.
+        let landing = buffer.lineIndex(containing: buffer.count - lastChangedFromEnd)
+        buffer.cursor = buffer.firstNonBlank(onLine: min(landing, buffer.lastLine))
+        resetCurswant()
         commitTransaction()
         return EngineResult(didChangeText: true, beep: false, actions: [])
     }
