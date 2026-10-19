@@ -6,12 +6,29 @@ import QuillWorkspace
 @main
 enum QuillMain {
     static func main() {
-        let targets = LaunchRequest.parse(Array(CommandLine.arguments.dropFirst()))
-        if targets.isEmpty {
-            QuillApp.main()
+        let arguments = Array(CommandLine.arguments.dropFirst())
+        if LaunchRequest.parse(arguments).isEmpty {
+            // `open -a` delivers quill:// as the current Apple event, with an empty argv.
+            if let url = EarlyOpenURL.current() {
+                FastOpen.main(launchURL: url)
+            } else {
+                QuillApp.main()
+            }
         } else {
             FastOpen.main()
         }
+    }
+}
+
+enum EarlyOpenURL {
+    static func current() -> URL? {
+        guard let event = NSAppleEventManager.shared().currentAppleEvent else { return nil }
+        guard event.eventClass == AEEventClass(kInternetEventClass),
+              event.eventID == AEEventID(kAEGetURL),
+              let raw = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
+              let url = URL(string: raw),
+              LaunchRequest.target(from: url) != nil else { return nil }
+        return url
     }
 }
 
@@ -132,7 +149,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// default window, so `onAppear` never runs and the launch-argument open never starts.
     /// Claiming the file here lets that path proceed. The bytes are loaded from argv.
     func application(_ sender: NSApplication, openFile filename: String) -> Bool {
-        _ = filename
+        if let url = URL(string: filename), url.scheme == "quill" {
+            accept(url)
+        } else {
+            accept(URL(fileURLWithPath: filename))
+        }
         return true
     }
 
@@ -140,14 +161,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         drainPending()
         NSApplication.shared.activate()
         OpenReadyProbe.armIfRequested()
-        presentMainWindowIfNeeded()
+        // SwiftUI creates its window on this turn. A window built here stacks a second one.
+        Task { @MainActor [weak self] in
+            self?.presentMainWindowIfNeeded()
+        }
     }
 
     /// SwiftUI's `WindowGroup` stays empty when argv contains a path. Host the same
     /// `ContentView` so launch-argument open still runs from `onAppear`.
     private func presentMainWindowIfNeeded() {
         guard let model else { return }
-        if NSApplication.shared.windows.contains(where: \.isVisible) { return }
+        if !NSApplication.shared.windows.isEmpty { return }
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 960, height: 760),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],

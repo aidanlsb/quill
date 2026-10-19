@@ -36,9 +36,12 @@ enum OpenReadyProbe {
     }
 
     private static func loadExpectedText() -> String? {
-        guard let target = LaunchRequest.parse(Array(CommandLine.arguments.dropFirst())).last else { return nil }
-        let path = LaunchRequest.standardized(target.path)
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return nil }
+        let arguments = Array(CommandLine.arguments.dropFirst())
+        let path = LaunchRequest.parse(arguments).last?.path
+            ?? EarlyOpenURL.current().flatMap { LaunchRequest.target(from: $0)?.path }
+        guard let path else { return nil }
+        let url = URL(fileURLWithPath: LaunchRequest.standardized(path))
+        guard let data = try? Data(contentsOf: url) else { return nil }
         return try? TextCodec.decode(data).text
     }
 

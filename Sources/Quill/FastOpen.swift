@@ -12,7 +12,7 @@ import QuillVim
 enum FastOpen {
     private static var session: FastEditor?
 
-    static func main() {
+    static func main(launchURL: URL? = nil) {
         let app = NSApplication.shared
         app.setActivationPolicy(.regular)
         let delegate = AppDelegate()
@@ -20,6 +20,9 @@ enum FastOpen {
         delegate.attach(model)
         app.delegate = delegate
         OpenReadyProbe.armIfRequested()
+        if let launchURL {
+            model.open(url: launchURL)
+        }
         model.consumeLaunchArguments(Array(CommandLine.arguments.dropFirst()))
         let editor = FastEditor(model: model, delegate: delegate)
         session = editor
@@ -30,7 +33,7 @@ enum FastOpen {
 }
 
 @MainActor
-private final class FastEditor: NSObject, VimTextViewDelegate {
+final class FastEditor: NSObject, VimTextViewDelegate {
     let model: AppModel
     let delegate: AppDelegate
     let textView: VimTextView
@@ -47,6 +50,9 @@ private final class FastEditor: NSObject, VimTextViewDelegate {
             defer: true
         )
         super.init()
+        model.onEditorState = { [weak self] in
+            self?.syncHost()
+        }
     }
 
     func present() {
@@ -67,25 +73,83 @@ private final class FastEditor: NSObject, VimTextViewDelegate {
 
         window.title = model.title
         window.isReleasedWhenClosed = false
-        window.hasShadow = true
+        // Shadow and titlebar chrome wait until the note is styled. Both rebuild
+        // window frames, and the ready line only requires the visible text.
+        window.hasShadow = false
         window.isMovableByWindowBackground = true
         window.delegate = delegate
         window.contentView = scroll
         window.setContentSize(NSSize(width: 960, height: 760))
-        window.center()
-        window.makeKeyAndOrderFront(nil)
-        WindowChrome.apply(model.theme, to: window)
+        window.orderFront(nil)
 
         textView.columnWidth = model.theme.columnWidth
         textView.isDirectoryBuffer = model.isDirectory
         textView.applyTheme(model.theme, focus: model.focusMode)
+        textView.appliedThemeID = model.themeIdentity
+        textView.appliedFocus = model.focusMode
         textView.syncFromEngine()
         textView.restyleNow()
+
+        window.center()
+        window.hasShadow = true
+        WindowChrome.apply(model.theme, to: window)
+        window.makeKey()
         window.makeFirstResponder(textView)
+    }
+
+    /// `:e`, `-`, and directory Enter replace the engine buffer with `didChangeText == false`,
+    /// so `applyResult` leaves the old string on screen. Theme and focus land the same way.
+    func syncHost() {
+        textView.columnWidth = model.theme.columnWidth
+        textView.isDirectoryBuffer = model.isDirectory
+        window.title = model.title
+        if textView.appliedThemeID != model.themeIdentity || textView.appliedFocus != model.focusMode {
+            textView.applyTheme(model.theme, focus: model.focusMode)
+            textView.appliedThemeID = model.themeIdentity
+            textView.appliedFocus = model.focusMode
+            WindowChrome.apply(model.theme, to: window)
+        }
+        let caret = min(model.engine.cursor, (textView.string as NSString).length)
+        if textView.string != model.engine.text || textView.selectedRange().location != caret {
+            textView.syncFromEngine()
+            textView.restyleNow()
+        }
+        if model.showUnsaved {
+            presentUnsaved()
+        }
     }
 
     func vimTextView(_ view: VimTextView, didHandle result: EngineResult) {
         model.handleEngineResult(result)
+        syncHost()
+    }
+
+    private var promptingUnsaved = false
+
+    private func presentUnsaved() {
+        guard !promptingUnsaved else { return }
+        promptingUnsaved = true
+        window.makeKeyAndOrderFront(nil)
+        let alert = NSAlert()
+        alert.messageText = model.message
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Don't Save")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.promptingUnsaved = false
+                switch response {
+                case .alertFirstButtonReturn:
+                    self.model.saveAndContinue()
+                case .alertSecondButtonReturn:
+                    self.model.discardAndContinue()
+                default:
+                    self.model.cancelNavigation()
+                }
+                self.syncHost()
+            }
+        }
     }
 
     func vimTextViewDidClick(_ view: VimTextView, characterOffset: Int, commandClick: Bool) {

@@ -248,9 +248,9 @@ final class VimTextView: NSTextView {
     private var restyleQueued = false
     private var sizing = false
     private var tokenizer = MarkdownTokenizer(text: "")
-    /// Read by `EditorView` in this file. `private` would hide them from that type.
-    fileprivate var appliedThemeID = -1
-    fileprivate var appliedFocus = false
+    /// `EditorView` and `FastEditor` both record what the text view is already showing.
+    var appliedThemeID = -1
+    var appliedFocus = false
     private var mouseAnchor: Int?
 
     override func awakeFromNib() {

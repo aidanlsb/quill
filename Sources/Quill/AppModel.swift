@@ -32,6 +32,8 @@ final class AppModel {
     var completions: [String] = []
     var diagnostics: [Diagnostic] = []
     var showUnsaved = false
+    /// FastOpen has no SwiftUI sheet. It refreshes the text view and the save prompt from here.
+    var onEditorState: (@MainActor () -> Void)?
     /// Bumped when the buffer changes outside `keyDown`, so the text view syncs.
     var revision = 0
 
@@ -100,6 +102,7 @@ final class AppModel {
         themeChoice = choice
         theme = makeTheme(choice)
         themeIdentity += 1
+        onEditorState?()
         guard remember else { return }
         message = "theme \(choice.rawValue)"
         let url = ThemeMemory.url(home: FileManager.default.homeDirectoryForCurrentUser)
@@ -151,9 +154,7 @@ final class AppModel {
         let url = URL(fileURLWithPath: path)
         switch NavigationGuard.decide(isModified: engine.isModified, force: false) {
         case .prompt(let text):
-            message = text
-            pendingNavigation = .open(url)
-            showUnsaved = true
+            askUnsaved(text, pending: .open(url))
             return
         case .allow:
             performOpen(url)
@@ -163,9 +164,7 @@ final class AppModel {
     func openDirectory(_ url: URL) {
         switch NavigationGuard.decide(isModified: engine.isModified && isDirectory, force: false) {
         case .prompt(let text):
-            message = text
-            pendingNavigation = .open(url)
-            showUnsaved = true
+            askUnsaved(text, pending: .open(url))
             return
         case .allow:
             break
@@ -176,13 +175,18 @@ final class AppModel {
     func newUntitled() {
         switch NavigationGuard.decide(isModified: engine.isModified, force: false) {
         case .prompt(let text):
-            message = text
-            pendingNavigation = .newFile
-            showUnsaved = true
+            askUnsaved(text, pending: .newFile)
             return
         case .allow:
             performNew()
         }
+    }
+
+    private func askUnsaved(_ text: String, pending: PendingNavigation) {
+        message = text
+        pendingNavigation = pending
+        showUnsaved = true
+        onEditorState?()
     }
 
     func discardAndContinue() {
@@ -229,9 +233,7 @@ final class AppModel {
         case .allow:
             return true
         case .prompt(let text):
-            message = text
-            pendingNavigation = .close(window)
-            showUnsaved = true
+            askUnsaved(text, pending: .close(window))
             return false
         }
     }
@@ -241,9 +243,7 @@ final class AppModel {
         case .allow:
             return .terminateNow
         case .prompt(let text):
-            message = text
-            pendingNavigation = .terminate
-            showUnsaved = true
+            askUnsaved(text, pending: .terminate)
             return .terminateLater
         }
     }
@@ -269,10 +269,10 @@ final class AppModel {
         case .write:
             save()
         case .quit:
-            NSApplication.shared.keyWindow?.close()
+            closeFrontWindow()
         case .writeQuit:
             save()
-            if !engine.isModified { NSApplication.shared.keyWindow?.close() }
+            if !engine.isModified { closeFrontWindow() }
         case .goToDefinition:
             goToDefinition()
         case .openParentDirectory:
@@ -303,6 +303,19 @@ final class AppModel {
                 message = "No mapping for \(name)"
             }
         }
+    }
+
+    /// A borderless launch window is ordered front without becoming key until the app activates.
+    /// `NSWindow.close()` then orders it out and skips `windowShouldClose`, so the unsaved
+    /// prompt never runs. Ask the delegate first and close only when it allows it.
+    private func closeFrontWindow() {
+        let app = NSApplication.shared
+        let window = app.windows.last(where: \.isVisible) ?? app.keyWindow
+        guard let window else { return }
+        if let delegate = window.delegate as? AppDelegate, !delegate.windowShouldClose(window) {
+            return
+        }
+        window.close()
     }
 
     func save() {
@@ -608,7 +621,10 @@ final class AppModel {
         }
     }
 
-    func toggleFocus() { focusMode.toggle() }
+    func toggleFocus() {
+        focusMode.toggle()
+        onEditorState?()
+    }
 
     func nsDiagnosticRanges() -> [(NSRange, Int)] {
         diagnostics.map { diag in
