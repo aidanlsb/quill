@@ -191,6 +191,10 @@ final class VimTextView: NSTextView {
     private let caretChrome = CaretChrome(frame: .zero)
     private var placingCaret = false
     private var orderingCaret = false
+    /// `revealCaret` scrolls, and that scroll restyles the new lines. Restyle
+    /// moves the caret, so a second pass measures again. The flag stops that
+    /// pass from re-entering through the clip notification.
+    private var revealingCaret = false
     let imagePreviews = ImagePreviewController()
 
     override func awakeFromNib() {
@@ -1145,7 +1149,9 @@ final class VimTextView: NSTextView {
     }
 
     func revealCaret() {
-        guard let scroll = enclosingScrollView else { return }
+        guard let scroll = enclosingScrollView, !revealingCaret else { return }
+        revealingCaret = true
+        defer { revealingCaret = false }
         let clip = scroll.contentView
         // Measure first: that lays out the caret's paragraph, and the frame
         // height below must already include it. Sizing the frame first left a
@@ -1169,35 +1175,49 @@ final class VimTextView: NSTextView {
             width: 1,
             height: row
         )
-        let rect: NSRect
-        if let measured = caretLineRect(), measured.midY + row * 4 >= estimated.midY {
-            rect = measured
-        } else {
-            rect = estimated
+        // The typographic bounds are a partial rect: their height drops the line
+        // spacing, and the em box hangs from the bottom of the screen line, so the
+        // caret is already halfway off while that rect still counts as visible.
+        // `scrollRect` is the whole screen line in text-view coordinates (it
+        // includes `textContainerOrigin`). The last row also owns the paragraph
+        // gap under it, which is where an image preview sits.
+        // Scrolling restyles the lines that come on screen, and that moves the
+        // caret a few points, so measure again. A later pass that cannot see the
+        // caret keeps the scroll already made: `G` on a long note lays the end
+        // out once, and the estimate sits short of that real line.
+        for pass in 0..<3 {
+            let caret = caretRect(forcingLayout: false)
+            let rect: NSRect
+            if let caret, let measured = scrollRect(around: caret), measured.midY + row * 4 >= estimated.midY {
+                rect = measured
+            } else if pass > 0 {
+                return
+            } else {
+                rect = estimated
+            }
+            if pass == 0 {
+                noteContentSizeChanged()
+            }
+            let visible = clip.bounds
+            var origin = visible.origin
+            origin.y = verticalOrigin(keeping: rect, caret: caret, in: visible, margin: row)
+            let maxY = max(0, bounds.height - visible.height)
+            origin.y = min(max(0, origin.y), maxY)
+            // The view is as wide as the clip, so this pins x to 0. It also undoes a
+            // sideways scroll that AppKit makes on its own, e.g. for a selection.
+            let across = caret ?? rect
+            if across.maxX > visible.maxX {
+                origin.x += across.maxX - visible.maxX
+            } else if across.minX < visible.minX {
+                origin.x -= visible.minX - across.minX
+            }
+            origin.x = min(max(0, origin.x), max(0, bounds.width - visible.width))
+            let nudgeY = abs(origin.y - visible.origin.y)
+            if pass > 0, nudgeY > row * 4 { return }
+            guard nudgeY > 0.5 || abs(origin.x - visible.origin.x) > 0.5 else { return }
+            clip.setBoundsOrigin(origin)
+            scroll.reflectScrolledClipView(clip)
         }
-        noteContentSizeChanged()
-        let visible = clip.bounds
-        var origin = visible.origin
-        let pad = rowHeight()
-        if rect.maxY > visible.maxY - 1 {
-            origin.y += rect.maxY - visible.maxY + pad
-        } else if rect.minY < visible.minY + 1 {
-            origin.y -= visible.minY - rect.minY + pad
-        }
-        let maxY = max(0, bounds.height - visible.height)
-        origin.y = min(max(0, origin.y), maxY)
-        // The view is as wide as the clip, so this pins x to 0. It also undoes a
-        // sideways scroll that AppKit makes on its own, e.g. for a selection.
-        let caret = caretRect(forcingLayout: false) ?? rect
-        if caret.maxX > visible.maxX {
-            origin.x += caret.maxX - visible.maxX
-        } else if caret.minX < visible.minX {
-            origin.x -= visible.minX - caret.minX
-        }
-        origin.x = min(max(0, origin.x), max(0, bounds.width - visible.width))
-        guard abs(origin.y - visible.origin.y) > 0.5 || abs(origin.x - visible.origin.x) > 0.5 else { return }
-        clip.setBoundsOrigin(origin)
-        scroll.reflectScrolledClipView(clip)
     }
 
     /// Rewrapping moves the caret's row. The resize anchor measures it before
@@ -1494,6 +1514,98 @@ final class VimTextView: NSTextView {
         rect.origin.x += container.x + fragmentFrame.minX
         rect.origin.y += container.y + fragmentFrame.minY
         return rect
+    }
+
+    /// Screen line that must stay on screen, in text-view coordinates.
+    /// The caret baseline already includes `textContainerOrigin`, so a non-zero
+    /// inset is part of the rect. Paragraph spacing on the last screen row is the
+    /// image preview under that line; a wrapped row above the last one does not
+    /// include it.
+    private func scrollRect(around caret: NSRect) -> NSRect? {
+        let index = caretUTF16()
+        let caretFont = font(atUTF16: index)
+        let style = paragraphStyle(atUTF16: index)
+        let lineHeight = CGFloat(CaretGeometry.lineFragmentHeight(
+            ascender: Double(caretFont.ascender),
+            descender: Double(caretFont.descender),
+            leading: Double(caretFont.leading),
+            lineHeightMultiple: Double(style.lineHeightMultiple),
+            lineSpacing: Double(style.lineSpacing),
+            minimumLineHeight: Double(style.minimumLineHeight),
+            maximumLineHeight: Double(style.maximumLineHeight)
+        ))
+        let height = max(lineHeight, caret.height)
+        var top = min(caret.minY, caret.maxY - height)
+        var bottom = max(caret.maxY, top + height)
+        let ends = screenRowEnds(atUTF16: index)
+        if ends.first {
+            top -= max(0, style.paragraphSpacingBefore)
+        }
+        if ends.last {
+            bottom += max(0, style.paragraphSpacing)
+        }
+        if let laid = caretLineRect(),
+           laid.maxY > caret.minY - 1,
+           laid.minY < caret.maxY + 1,
+           laid.minY >= top - height,
+           laid.maxY <= bottom + height {
+            top = min(top, laid.minY)
+            bottom = max(bottom, laid.maxY)
+        }
+        guard bottom > top + 0.5 else { return nil }
+        return NSRect(x: 0, y: top, width: 1, height: bottom - top)
+    }
+
+    /// `true` for the first and last text rows of the caret's layout fragment.
+    /// An image preview's gap belongs to the last row only.
+    private func screenRowEnds(atUTF16 index: Int) -> (first: Bool, last: Bool) {
+        guard let lm = textLayoutManager else { return (true, true) }
+        let length = (string as NSString).length
+        if length == 0 { return (true, true) }
+        let clamped = min(max(0, index), length)
+        let doc = lm.documentRange.location
+        let probe = clamped < length ? clamped : max(0, length - 1)
+        guard let location = lm.location(doc, offsetBy: probe),
+              let fragment = lm.textLayoutFragment(for: location) else { return (true, true) }
+        let start = lm.offset(from: doc, to: fragment.rangeInElement.location)
+        let end = lm.offset(from: doc, to: fragment.rangeInElement.endLocation)
+        guard fragmentCovers(clamped, start: start, end: end, documentLength: length) else {
+            return (true, true)
+        }
+        let content = fragment.textLineFragments.filter { $0.characterRange.length > 0 }
+        guard !content.isEmpty else { return (true, true) }
+        if clamped >= length { return (false, true) }
+        let local = clamped - start
+        guard let hit = content.firstIndex(where: { line in
+            let span = line.characterRange
+            return local >= span.location && local < span.location + span.length
+        }) else { return (true, true) }
+        return (hit == 0, hit == content.count - 1)
+    }
+
+    /// Scroll so `rect` stays fully inside `visible` with up to one line of margin.
+    /// A preview taller than the window keeps the caret cell instead, so the
+    /// picture cannot push the cursor off the top.
+    private func verticalOrigin(keeping rect: NSRect, caret: NSRect?, in visible: NSRect, margin: CGFloat) -> CGFloat {
+        let target: NSRect
+        let pad: CGFloat
+        if rect.height + 0.5 < visible.height {
+            target = rect
+            pad = min(margin, max(0, (visible.height - rect.height) / 2))
+        } else if let caret, caret.height + 0.5 < visible.height {
+            target = caret
+            pad = min(margin, max(0, (visible.height - caret.height) / 2))
+        } else {
+            target = caret ?? rect
+            pad = 0
+        }
+        var y = visible.origin.y
+        if target.maxY > visible.maxY - pad + 0.5 {
+            y += target.maxY - (visible.maxY - pad)
+        } else if target.minY < visible.minY + pad - 0.5 {
+            y -= (visible.minY + pad) - target.minY
+        }
+        return y
     }
 
     @objc private func clipViewBoundsChanged(_ notification: Notification) {
