@@ -409,7 +409,11 @@ final class VimTextView: NSTextView {
         }
         var applied: [TextEdit] = []
         if result.didChangeText {
-            if result.edits.isEmpty {
+            let delta = result.edits.reduce(0) { $0 + $1.replacement.utf16.count - $1.range.count }
+            let previous = engine.buffer.count - delta
+            // TextKit 2 can leave `textStorage.length` behind `string`. Patching
+            // that short storage would edit the wrong document, so replace it.
+            if result.edits.isEmpty || textStorage?.length != previous {
                 string = engine.text
                 tokenizer = MarkdownTokenizer(text: string)
             } else if let storage = textStorage {
@@ -492,7 +496,10 @@ final class VimTextView: NSTextView {
 
     private func assertViewMatchesEngine() {
         #if DEBUG
-        if let length = textStorage?.length, length != engine.buffer.count {
+        // `textStorage.length` can lag the document in TextKit 2. Reload and the
+        // layout adapter both treat `string` as the buffer the engine owns.
+        let length = (string as NSString).length
+        if length != engine.buffer.count {
             assertionFailure("text view drifted from the engine (\(length) vs \(engine.buffer.count))")
         }
         #endif
