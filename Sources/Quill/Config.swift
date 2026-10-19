@@ -302,6 +302,7 @@ struct QuillConfig: Equatable {
         }
     }
 
+    @MainActor
     func apply(to model: AppModel) {
         if let ch = leader.first {
             model.engine.leaderKey = ch
