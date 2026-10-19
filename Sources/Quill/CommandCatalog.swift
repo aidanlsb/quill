@@ -96,8 +96,7 @@ extension AppModel {
             bindings: [CommandBinding(.ex("wq")), CommandBinding(.ex("x"))]
         ) { [weak self] in
             guard let self else { return }
-            self.runCommand("file.save")
-            if !self.engine.isModified { self.runCommand("file.close") }
+            self.save { self.runCommand("file.close") }
         }
         register(
             id: "file.close",
@@ -106,6 +105,8 @@ extension AppModel {
             bindings: [chord("w", command: true), CommandBinding(.ex("q"))],
             showsInMenu: true
         ) { [weak self] in
+            guard let self else { return }
+            self.closeRequests += 1
             NSApplication.shared.keyWindow?.close()
         }
         register(

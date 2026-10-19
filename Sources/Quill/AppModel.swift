@@ -71,6 +71,15 @@ final class AppModel {
     var themeChoice: ThemeChoice = .system
     /// Session override of `config.images`. The command palette toggles this.
     var showImages = true
+    /// Atomic write of one snapshot. Tests pause this so an edit can land between
+    /// the captured stamp and `markSaved(stamp:)`.
+    var diskWrite: @Sendable (Data, URL) async throws -> Void = { bytes, url in
+        try await Task.detached {
+            try bytes.write(to: url, options: .atomic)
+        }.value
+    }
+    /// How many times `file.close` ran. Tests observe `:wq` when no key window exists.
+    private(set) var closeRequests = 0
 
     init() {
         let home = FileManager.default.homeDirectoryForCurrentUser
@@ -278,8 +287,7 @@ final class AppModel {
     func perform(_ action: HostAction) {
         switch action {
         case .writeQuit:
-            runCommand("file.save")
-            if !engine.isModified { runCommand("file.close") }
+            save { self.runCommand("file.close") }
         case .formatTables(let startLine, let endLine, let quiet):
             formatTables(startLine: startLine, endLine: endLine, quiet: quiet)
         case .shell(let command):
@@ -320,7 +328,7 @@ final class AppModel {
         handleEngineResult(result)
     }
 
-    func save() {
+    func save(then completion: (@MainActor () -> Void)? = nil) {
         if isDirectory {
             guard let snap = directorySnapshot else { return }
             let ops = DirectoryListing.plan(original: snap, lines: listingLines())
@@ -328,6 +336,7 @@ final class AppModel {
                 engine.markSaved()
                 modified = false
                 message = "No filesystem changes"
+                if !engine.isModified { completion?() }
                 return
             }
             pendingOps = ops
@@ -337,7 +346,7 @@ final class AppModel {
             showConfirm = true
             return
         }
-        writeFile()
+        writeFile(then: completion)
     }
 
     func applyPendingOps() {
@@ -359,7 +368,7 @@ final class AppModel {
         message = "Applied"
     }
 
-    func writeFile() {
+    func writeFile(then completion: (@MainActor () -> Void)? = nil) {
         guard let url = fileURL else {
             saveAs()
             return
@@ -370,21 +379,30 @@ final class AppModel {
             message = "File changed on disk. Save again to overwrite."
             return
         }
+        // Stamp and bytes are this snapshot. A later edit keeps the buffer dirty,
+        // and a buffer replaced while the write runs is left alone.
+        let stamp = engine.changeStamp
+        let savedURL = url
         let data = TextCodec.encode(engine.text, ending: ending)
-        let bytes = data
+        let write = diskWrite
         Task {
             do {
-                try await Task.detached {
-                    try bytes.write(to: url, options: .atomic)
-                }.value
-                self.engine.markSaved()
-                self.modified = false
-                self.loadedAt = self.modificationDate(url)
+                try await write(data, savedURL)
+                guard self.fileURL == savedURL else { return }
+                self.engine.markSaved(stamp: stamp)
+                self.modified = self.engine.isModified
+                self.loadedAt = self.modificationDate(savedURL)
                 self.confirmOverwrite = false
-                self.lspDidSave(url)
+                self.lspDidSave(savedURL)
                 self.message = "Saved"
-                if self.pendingNavigation != nil { self.discardAndContinue() }
+                guard !self.engine.isModified else { return }
+                if self.pendingNavigation != nil {
+                    self.discardAndContinue()
+                } else {
+                    completion?()
+                }
             } catch {
+                guard self.fileURL == savedURL else { return }
                 self.message = error.localizedDescription
             }
         }

@@ -149,9 +149,18 @@ public final class Engine {
         return buffer.substring(range)
     }
 
+    /// Id of the last committed edit. A save captures this and passes it to
+    /// `markSaved(stamp:)` so keystrokes during the write stay modified.
+    public var changeStamp: Int { currentStamp }
+
+    /// Records `stamp` as the bytes on disk. A newer `changeStamp` stays modified.
+    public func markSaved(stamp: Int) {
+        savedStamp = stamp
+        isModified = currentStamp != savedStamp
+    }
+
     public func markSaved() {
-        savedStamp = currentStamp
-        isModified = false
+        markSaved(stamp: changeStamp)
     }
 
     /// Host-initiated edit (completion, snippet). Goes through the same funnel as keys.
