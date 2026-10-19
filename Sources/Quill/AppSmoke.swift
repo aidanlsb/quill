@@ -391,8 +391,10 @@ enum AppSmoke {
             tv.applyResult(result)
         }
         let line = engine.buffer.lineIndex(containing: engine.cursor)
+        let column = engine.buffer.column(of: engine.cursor)
         let afterJ = motionDiag(engine: engine, tv: tv, scroll: scroll)
         check(line == 40, "j stopped on line \(line) (\(afterJ))", failures: &failures)
+        check(column == 0, "j column drifted to \(column) (\(afterJ))", failures: &failures)
         check(
             scroll.contentView.bounds.origin.y > 20,
             "j did not scroll the viewport (\(afterJ))",
@@ -437,6 +439,7 @@ enum AppSmoke {
         )
 
         checkWrappedVertical(engine: engine, tv: tv, failures: &failures)
+        checkStyledVertical(engine: engine, tv: tv, failures: &failures)
     }
 
     /// A 10k-line note stays one buffer in the text view: `G` scrolls to the
@@ -524,8 +527,8 @@ enum AppSmoke {
         window.orderOut(nil)
     }
 
-    /// A long paragraph in a narrow column. `j` must step one screen row and
-    /// stay on that paragraph, not jump to its last character.
+    /// A long paragraph in a narrow column. `j` moves to the next logical line.
+    /// `gj` may step a screen row. `$` remembers end-of-line, not the screen-row x.
     @MainActor
     private static func checkWrappedVertical(engine: Engine, tv: VimTextView, failures: inout [String]) {
         tv.columnWidth = 160
@@ -540,48 +543,40 @@ enum AppSmoke {
 
         _ = engine.type("0")
         let start = engine.cursor
+        let paragraphEnd = paragraph.utf16.count - 1
         let first = engine.handle(KeyEvent(.character("j")))
         tv.applyResult(first)
-        let afterFirst = engine.cursor
         check(
-            engine.buffer.lineIndex(containing: afterFirst) == 0,
-            "j left the paragraph at \(afterFirst)",
+            engine.buffer.lineIndex(containing: engine.cursor) == 1,
+            "j stayed in the paragraph at \(engine.cursor)",
             failures: &failures
         )
-        check(afterFirst > start, "j did not advance from \(start)", failures: &failures)
-        let paragraphEnd = paragraph.utf16.count - 1
         check(
-            afterFirst < paragraphEnd - 20,
-            "j jumped to \(afterFirst) near \(paragraphEnd)",
+            engine.buffer.column(of: engine.cursor) == 0,
+            "j column \(engine.buffer.column(of: engine.cursor)) on Z",
+            failures: &failures
+        )
+        let back = engine.handle(KeyEvent(.character("k")))
+        tv.applyResult(back)
+        check(
+            engine.cursor == start && engine.buffer.column(of: engine.cursor) == 0,
+            "k returned to \(engine.cursor) column \(engine.buffer.column(of: engine.cursor))",
             failures: &failures
         )
 
-        let second = engine.handle(KeyEvent(.character("j")))
-        tv.applyResult(second)
+        let visualStep = engine.handle(KeyEvent(.character("g")))
+        tv.applyResult(visualStep)
+        let visualDown = engine.handle(KeyEvent(.character("j")))
+        tv.applyResult(visualDown)
         check(
-            engine.buffer.lineIndex(containing: engine.cursor) == 0,
-            "j left the paragraph at \(engine.cursor)",
-            failures: &failures
-        )
-        check(engine.cursor > afterFirst, "j did not advance from \(afterFirst)", failures: &failures)
-        check(
-            engine.cursor < paragraphEnd - 20,
-            "j jumped to \(engine.cursor) near \(paragraphEnd)",
+            engine.buffer.lineIndex(containing: engine.cursor) == 0 && engine.cursor > start && engine.cursor < paragraphEnd - 20,
+            "gj left the paragraph at \(engine.cursor) of \(paragraphEnd)",
             failures: &failures
         )
 
         _ = engine.type("gg")
-        let back = engine.handle(KeyEvent(.character("k")))
-        check(back.beep, "k returned by moving at the top", failures: &failures)
-
-        _ = engine.type("j")
-        let row = engine.cursor
-        _ = engine.type("k")
-        check(
-            engine.cursor == start,
-            "k returned to \(engine.cursor) instead of \(start) from \(row)",
-            failures: &failures
-        )
+        let stuck = engine.handle(KeyEvent(.character("k")))
+        check(stuck.beep, "k returned by moving at the top", failures: &failures)
 
         _ = engine.type("$")
         let screenEnd = engine.cursor
@@ -590,12 +585,144 @@ enum AppSmoke {
             "screen $ landed at \(screenEnd)",
             failures: &failures
         )
+        _ = engine.type("j")
+        check(
+            engine.buffer.lineIndex(containing: engine.cursor) == 1,
+            "$j left Z at \(engine.cursor)",
+            failures: &failures
+        )
+        _ = engine.type("k")
+        check(
+            engine.cursor == paragraphEnd,
+            "$ set the desired column to \(engine.cursor) instead of \(paragraphEnd)",
+            failures: &failures
+        )
         _ = engine.type("g$")
         check(
             engine.cursor > 200,
             "g$ landed at \(engine.cursor)",
             failures: &failures
         )
+    }
+
+    /// Headings, bold, a list, a table, and short or empty lines. `j` / `k` report
+    /// the character column, including after the text view has styled the note.
+    @MainActor
+    private static func checkStyledVertical(engine: Engine, tv: VimTextView, failures: inout [String]) {
+        tv.columnWidth = 80
+        tv.updateInsets()
+        let lines = [
+            "# Heading line here",
+            "**bold words in prose**",
+            "- list item longer",
+            "short",
+            "",
+            "| Name | Quantity |",
+            "| --- | ---: |",
+            "| apple | 12 |",
+            "| pear | 3 |",
+            "restored column line",
+        ]
+        let text = lines.joined(separator: "\n")
+        engine.load(text: text)
+        tv.syncFromEngine()
+        tv.layoutSubtreeIfNeeded()
+        tv.layoutAdapter.ensureFullLayout()
+        guard let storage = tv.textStorage else {
+            failures.append("styled column missing text storage")
+            return
+        }
+        let bodySize = tv.theme.bodyFont.pointSize
+        let heading = storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+        check(
+            (heading?.pointSize ?? 0) > bodySize + 1,
+            "heading font \(heading?.pointSize ?? 0) is not larger than body \(bodySize)",
+            failures: &failures
+        )
+        let boldAt = utf16Length(lines[0]) + 1 + 2
+        let bold = storage.attribute(.font, at: boldAt, effectiveRange: nil) as? NSFont
+        let boldTraits = NSFontManager.shared.traits(of: bold ?? tv.theme.bodyFont)
+        check(boldTraits.contains(.boldFontMask), "bold run missing at \(boldAt)", failures: &failures)
+        var tableAt = 0
+        for line in lines.prefix(5) {
+            tableAt += utf16Length(line) + 1
+        }
+        let tableFont = storage.attribute(.font, at: tableAt, effectiveRange: nil) as? NSFont
+        check(tableFont?.isFixedPitch == true, "table font \(tableFont?.fontName ?? "missing")", failures: &failures)
+
+        let desired = 8
+        _ = engine.type("0")
+        _ = engine.type("8l")
+        tv.syncFromEngine()
+        expectCaret(engine, line: 0, column: caretColumn(lines[0], desired: desired), label: "start", failures: &failures)
+        for index in 1..<lines.count {
+            let result = engine.handle(KeyEvent(.character("j")))
+            tv.applyResult(result)
+            expectCaret(
+                engine,
+                line: index,
+                column: caretColumn(lines[index], desired: desired),
+                label: "j\(index)",
+                failures: &failures
+            )
+        }
+        for index in stride(from: lines.count - 2, through: 0, by: -1) {
+            let result = engine.handle(KeyEvent(.character("k")))
+            tv.applyResult(result)
+            expectCaret(
+                engine,
+                line: index,
+                column: caretColumn(lines[index], desired: desired),
+                label: "k\(index)",
+                failures: &failures
+            )
+        }
+
+        _ = engine.type("5j")
+        tv.syncFromEngine()
+        expectCaret(engine, line: 5, column: caretColumn(lines[5], desired: desired), label: "5j", failures: &failures)
+        _ = engine.type("5k")
+        expectCaret(engine, line: 0, column: caretColumn(lines[0], desired: desired), label: "5k", failures: &failures)
+
+        _ = engine.type("$")
+        let end = caretColumn(lines[0], desired: Int.max)
+        expectCaret(engine, line: 0, column: end, label: "$", failures: &failures)
+        _ = engine.type("j")
+        expectCaret(engine, line: 1, column: caretColumn(lines[1], desired: Int.max), label: "$j", failures: &failures)
+        _ = engine.type("k")
+        expectCaret(engine, line: 0, column: end, label: "$k", failures: &failures)
+
+        _ = engine.type("0")
+        expectCaret(engine, line: 0, column: 0, label: "0", failures: &failures)
+        _ = engine.type("j")
+        expectCaret(engine, line: 1, column: 0, label: "0j", failures: &failures)
+    }
+
+    private static func caretColumn(_ line: String, desired: Int) -> Int {
+        let count = utf16Length(line)
+        if count == 0 { return 0 }
+        return min(desired, count - 1)
+    }
+
+    @MainActor
+    private static func expectCaret(
+        _ engine: Engine,
+        line: Int,
+        column: Int,
+        label: String,
+        failures: inout [String]
+    ) {
+        let gotLine = engine.buffer.lineIndex(containing: engine.cursor)
+        let gotColumn = engine.buffer.column(of: engine.cursor)
+        check(
+            gotLine == line && gotColumn == column,
+            "\(label) landed \(gotLine),\(gotColumn) want \(line),\(column)",
+            failures: &failures
+        )
+    }
+
+    private static func utf16Length(_ text: String) -> Int {
+        (text as NSString).length
     }
 
     @MainActor

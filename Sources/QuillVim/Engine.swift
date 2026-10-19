@@ -705,16 +705,14 @@ public final class Engine {
             layout: layout,
             find: find,
             searchPattern: searchPattern,
-            searchForward: searchForward,
-            operatorPending: operatorKind != nil
+            searchForward: searchForward
         )
         if kind == .gotoLine, count == 0 {
             let last = MotionResolver.resolve(
                 .gotoLine,
                 count: 0,
                 buffer: buffer,
-                layout: layout,
-                operatorPending: operatorKind != nil
+                layout: layout
             )
             return finishMotion(last, kind: kind, find: find, motionCount: 0)
         }
@@ -768,7 +766,7 @@ public final class Engine {
         }
     }
 
-    /// Remember the caret's buffer column. The layout turns it into a screen column.
+    /// Remember the caret's character column. `j` / `k` keep it until a horizontal motion or an edit.
     private func capturePreferredColumn() {
         buffer.preferredColumn = buffer.column(of: buffer.cursor)
     }
@@ -1065,8 +1063,10 @@ public final class Engine {
             capturePreferredColumn()
             return .noop
         case .up, .down:
+            // Same character column as normal-mode j/k. The view's pixel x drifts
+            // under headings, bold, and tables, so arrows do not ask the layout for it.
             let delta = event.key == .up ? -1 : 1
-            buffer.cursor = layout.position(
+            buffer.cursor = LogicalLineLayout.shared.position(
                 from: buffer.cursor,
                 displayLines: delta,
                 preferredColumn: buffer.preferredColumn,
@@ -1173,6 +1173,7 @@ public final class Engine {
         yank(range, style: .characterwise, deleting: true)
         replace(range, with: "")
         buffer.cursor = buffer.clampedCursor(range.lowerBound, normalMode: !enterInsert)
+        capturePreferredColumn()
         if enterInsert {
             lastRepeatable = .operate(.change, count: count, target: .characterCount(count), inserted: nil)
             enterInsertMode(.s)
@@ -1209,6 +1210,7 @@ public final class Engine {
         let replacement = String(repeating: String(ch), count: end - buffer.cursor)
         replace(buffer.cursor..<end, with: replacement)
         buffer.cursor = buffer.clampedCursor(max(buffer.cursor, end - 1), normalMode: true)
+        capturePreferredColumn()
         lastRepeatable = .replace(count: n, ch)
         resetParser()
         commitTransaction()
@@ -1221,6 +1223,7 @@ public final class Engine {
             toggleCase(in: range)
             commitTransaction()
             mode = .normal
+            capturePreferredColumn()
             lastRepeatable = .toggleCase(count: range.count)
             resetParser()
             return EngineResult(didChangeText: true, beep: false, actions: [])
@@ -1236,6 +1239,7 @@ public final class Engine {
             buffer.cursor = end
             buffer.clampCursor(normalMode: true)
         }
+        capturePreferredColumn()
         lastRepeatable = .toggleCase(count: n)
         resetParser()
         commitTransaction()
@@ -1287,6 +1291,7 @@ public final class Engine {
             buffer.cursor = end
         }
         buffer.clampCursor(normalMode: true)
+        capturePreferredColumn()
         lastRepeatable = .join(count: n)
         resetParser()
         commitTransaction()
@@ -1338,6 +1343,7 @@ public final class Engine {
             installPutAnchors(source, at: at, inserted: payload)
             buffer.cursor = buffer.clampedCursor(at + max(0, buffer.measure(payload) - 1), normalMode: true)
         }
+        capturePreferredColumn()
         lastRepeatable = .put(after: after, count: n)
         resetParser()
         mode = .normal

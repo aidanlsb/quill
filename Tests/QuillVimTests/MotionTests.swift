@@ -127,52 +127,52 @@ final class MotionTests: XCTestCase {
 
     func testDisplayLineJK() {
         let layout = WrapLayout(width: 4)
-        let e = vim("█abcdefgh", keys: "j", layout: layout)
+        let e = vim("█abcdefgh", keys: "gj", layout: layout)
         XCTAssertEqual(e.cursor, 4)
-        e.type("k")
+        e.type("gk")
         XCTAssertEqual(e.cursor, 0)
     }
 
     func testDisplayLineJKKeepsScreenColumn() {
         let layout = WrapLayout(width: 4)
         // abcd / efgh / ij
-        let e = vim("a█bcdefghij", keys: "jj", layout: layout)
+        let e = vim("a█bcdefghij", keys: "gjgj", layout: layout)
         XCTAssertEqual(e.cursor, 9)
-        e.type("k")
+        e.type("gk")
         XCTAssertEqual(e.cursor, 5)
-        e.type("k")
+        e.type("gk")
         XCTAssertEqual(e.cursor, 1)
     }
 
-    func testJFromContinuationStartStaysOnTheLeftEdge() {
+    func testGJFromContinuationStartStaysOnTheLeftEdge() {
         let layout = WrapLayout(width: 4)
         // 4l sits on the left edge of the second screen row. The buffer column
         // is 4, which used to clamp to the last cell of the next row.
-        let e = vim("█abcdefghij", keys: "4lj", layout: layout)
+        let e = vim("█abcdefghij", keys: "4lgj", layout: layout)
         XCTAssertEqual(e.cursor, 8)
-        e.type("k")
+        e.type("gk")
         XCTAssertEqual(e.cursor, 4)
-        e.type("k")
+        e.type("gk")
         XCTAssertEqual(e.cursor, 0)
     }
 
-    func testJFromShortLineRemembersTheScreenColumn() {
+    func testGJFromShortLineRemembersTheScreenColumn() {
         let layout = WrapLayout(width: 4)
-        // Column 4 is the left edge. j lands on the only character of the next
-        // line and must not turn the following j into "end of the line".
-        let e = vim("█abcdef\nX\nabcdefgh", keys: "4ljj", layout: layout)
+        // Column 4 is the left edge. gj lands on the only character of the next
+        // line and must not turn the following gj into "end of the line".
+        let e = vim("█abcdef\nX\nabcdefgh", keys: "4lgjgj", layout: layout)
         XCTAssertEqual(e.cursor, 9)
     }
 
-    func testKFromNextParagraphKeepsTheScreenColumn() {
+    func testGKFromNextParagraphKeepsTheScreenColumn() {
         let layout = WrapLayout(width: 4)
-        let e = vim("█abcdef\nXYZW", keys: "4ljk", layout: layout)
+        let e = vim("█abcdef\nXYZW", keys: "4lgjgk", layout: layout)
         XCTAssertEqual(e.cursor, 4)
     }
 
-    func testKOnPreviousParagraphLastRow() {
+    func testGKOnPreviousParagraphLastRow() {
         let layout = WrapLayout(width: 4)
-        let e = vim("abcdefghij\n█X", keys: "k", layout: layout)
+        let e = vim("abcdefghij\n█X", keys: "gk", layout: layout)
         XCTAssertEqual(e.cursor, 8)
     }
 
@@ -188,9 +188,9 @@ final class MotionTests: XCTestCase {
         let layout = WrapLayout(width: 4)
         let e = vim("█abcdefghij", keys: "$", layout: layout)
         XCTAssertEqual(e.cursor, 3)
-        e.type("j")
+        e.type("gj")
         XCTAssertEqual(e.cursor, 7)
-        e.type("j")
+        e.type("gj")
         XCTAssertEqual(e.cursor, 9)
         e.type("0")
         XCTAssertEqual(e.cursor, 8)
@@ -206,14 +206,103 @@ final class MotionTests: XCTestCase {
 
     func testBufferLineMotions() {
         let layout = WrapLayout(width: 4)
-        let down = vim("█abcdefghij\nXYZ", keys: "gj", layout: layout)
+        let down = vim("█abcdefghij\nXYZ", keys: "j", layout: layout)
+        XCTAssertEqual(down.buffer.lineIndex(containing: down.cursor), 1)
         XCTAssertEqual(down.cursor, 11)
-        let column = vim("a█bcdefghij\nXYZW", keys: "gj", layout: layout)
+        let column = vim("a█bcdefghij\nXYZW", keys: "j", layout: layout)
+        XCTAssertEqual(column.buffer.column(of: column.cursor), 1)
         XCTAssertEqual(column.cursor, 12)
+        let visual = vim("█abcdefghij\nXYZ", keys: "gj", layout: layout)
+        XCTAssertEqual(visual.buffer.lineIndex(containing: visual.cursor), 0)
+        XCTAssertEqual(visual.cursor, 4)
         let up = vim("abcdef█ghij", keys: "g0", layout: layout)
         XCTAssertEqual(up.cursor, 0)
         up.type("g$")
         XCTAssertEqual(up.cursor, 9)
+    }
+
+    func testDesiredColumnClampsAndRestores() {
+        XCTAssertVim(
+            "abcde█fghij\nab\nABCDEFGHIJ",
+            keys: "jj",
+            "abcdefghij\nab\nABCDE█FGHIJ"
+        )
+        XCTAssertVim(
+            "abcde█fghij\nab\nABCDEFGHIJ",
+            keys: "jjkk",
+            "abcde█fghij\nab\nABCDEFGHIJ"
+        )
+        XCTAssertVim(
+            "abcde█fghij\n\nABCDEFGHIJ",
+            keys: "jj",
+            "abcdefghij\n\nABCDE█FGHIJ"
+        )
+    }
+
+    func testCountJumpsLogicalLines() {
+        XCTAssertVim("█a\nb\nc\nd\ne\nf\ng", keys: "5j", "a\nb\nc\nd\ne\n█f\ng")
+        XCTAssertVim("a\nb\nc\nd\ne\n█f\ng", keys: "5k", "█a\nb\nc\nd\ne\nf\ng")
+        let clamped = vim("█a\nb\nc", keys: "9j")
+        XCTAssertEqual(clamped.buffer.lineIndex(containing: clamped.cursor), 2)
+        XCTAssertEqual(clamped.buffer.column(of: clamped.cursor), 0)
+        let stuck = vim("a\nb\n█c", keys: "j")
+        XCTAssertTrue(stuck.type("j").beep)
+        XCTAssertEqual(stuck.buffer.lineIndex(containing: stuck.cursor), 2)
+    }
+
+    func testHorizontalMotionResetsDesiredColumn() {
+        // j clamps onto "ab". h resets the desired column to 0, so the next j does not restore column 5.
+        XCTAssertVim(
+            "abcde█fghij\nab\nABCDEFGHIJ",
+            keys: "jhj",
+            "abcdefghij\nab\n█ABCDEFGHIJ"
+        )
+    }
+
+    func testEditResetsDesiredColumn() {
+        XCTAssertVim(
+            "abcde█fghij\nab\nABCDEFGHIJ",
+            keys: "jxj",
+            "abcdefghij\na\n█ABCDEFGHIJ"
+        )
+    }
+
+    func testDollarSetsEndColumnAcrossLines() {
+        XCTAssertVim("█abc\nwxyz\nqq", keys: "$jj", "abc\nwxyz\nq█q")
+        XCTAssertVim("█abc\nwxyz\nqqqq", keys: "$jhj", "abc\nwxyz\nqq█qq")
+        let cleared = vim("█abc\nwxyz\nqqqq", keys: "$jh")
+        cleared.type("j")
+        XCTAssertEqual(cleared.buffer.lineIndex(containing: cleared.cursor), 2)
+        XCTAssertEqual(cleared.buffer.column(of: cleared.cursor), 2)
+    }
+
+    func testWrappedLineIsOneJ() {
+        let layout = WrapLayout(width: 4)
+        let moved = vim("a█bcdefghij\nXYZW", keys: "j", layout: layout)
+        XCTAssertEqual(moved.buffer.lineIndex(containing: moved.cursor), 1)
+        XCTAssertEqual(moved.buffer.column(of: moved.cursor), 1)
+        moved.type("k")
+        XCTAssertEqual(moved.buffer.lineIndex(containing: moved.cursor), 0)
+        XCTAssertEqual(moved.buffer.column(of: moved.cursor), 1)
+        let once = vim("█abcdefghij\nZ", keys: "j", layout: layout)
+        XCTAssertEqual(once.buffer.lineIndex(containing: once.cursor), 1)
+        XCTAssertEqual(once.buffer.column(of: once.cursor), 0)
+        once.type("5j")
+        XCTAssertEqual(once.buffer.lineIndex(containing: once.cursor), 1)
+    }
+
+    func testJKeepsTheGraphemeColumn() {
+        let engine = Engine(text: "a😀x\nb😀y")
+        engine.type("l")
+        XCTAssertEqual(engine.buffer.column(of: engine.cursor), 1)
+        XCTAssertEqual(engine.buffer.substring(engine.buffer.graphemeSpan(containing: engine.cursor)), "😀")
+        engine.type("j")
+        XCTAssertEqual(engine.buffer.lineIndex(containing: engine.cursor), 1)
+        XCTAssertEqual(engine.buffer.column(of: engine.cursor), 1)
+        XCTAssertEqual(engine.buffer.substring(engine.buffer.graphemeSpan(containing: engine.cursor)), "😀")
+        engine.type("k")
+        XCTAssertEqual(engine.buffer.lineIndex(containing: engine.cursor), 0)
+        XCTAssertEqual(engine.buffer.column(of: engine.cursor), 1)
     }
 
     func testDjStaysOnBufferLines() {

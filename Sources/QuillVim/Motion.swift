@@ -25,11 +25,13 @@ public enum FindKind: Equatable, Sendable {
 public enum MotionKind: Equatable, Sendable {
     case left
     case right
+    /// Next logical line. `j`. One buffer line, at the remembered character column.
     case down
+    /// Previous logical line. `k`.
     case up
-    /// Next buffer line. `gj`. Operators on `j` use this too.
+    /// Next screen row. `gj`.
     case bufferDown
-    /// Previous buffer line. `gk`.
+    /// Previous screen row. `gk`.
     case bufferUp
     case word
     case wordEnd
@@ -75,8 +77,7 @@ enum MotionResolver {
         layout: any TextLayout,
         find: (FindKind, Character)? = nil,
         searchPattern: String? = nil,
-        searchForward: Bool = true,
-        operatorPending: Bool = false
+        searchForward: Bool = true
     ) -> ResolvedMotion {
         let n = max(1, count)
         switch kind {
@@ -85,15 +86,13 @@ enum MotionResolver {
         case .right:
             return horizontal(buffer, delta: n, inclusive: false)
         case .down:
-            if operatorPending { return bufferVertical(buffer, delta: n) }
-            return screenVertical(buffer, layout: layout, delta: n)
-        case .up:
-            if operatorPending { return bufferVertical(buffer, delta: -n) }
-            return screenVertical(buffer, layout: layout, delta: -n)
-        case .bufferDown:
             return bufferVertical(buffer, delta: n)
-        case .bufferUp:
+        case .up:
             return bufferVertical(buffer, delta: -n)
+        case .bufferDown:
+            return screenVertical(buffer, layout: layout, delta: n)
+        case .bufferUp:
+            return screenVertical(buffer, layout: layout, delta: -n)
         case .word:
             return wordMotion(buffer, count: n, kind: .start, big: false, backward: false)
         case .wordEnd:
@@ -190,6 +189,7 @@ enum MotionResolver {
         return .move(dest, inclusive: inclusive)
     }
 
+    /// `gj` / `gk`. One screen row. The remembered column stays a character column.
     private static func screenVertical(
         _ buffer: TextBuffer,
         layout: any TextLayout,
@@ -206,23 +206,17 @@ enum MotionResolver {
         return .move(dest)
     }
 
-    /// Buffer-line vertical motion. Linewise, so `dj` and `gj` delete whole lines.
+    /// `j` / `k`. Exactly one logical line, at the remembered character column.
+    /// A count that runs past the buffer stops on the last line it can reach.
+    /// Linewise, so `dj` deletes whole lines.
     private static func bufferVertical(_ buffer: TextBuffer, delta: Int) -> ResolvedMotion {
         if buffer.isEmpty { return .fail(0) }
         let line = buffer.lineIndex(containing: buffer.cursor)
-        let target = line + delta
-        if target < 0 || target >= buffer.lineCount {
-            return .fail(buffer.cursor)
-        }
-        let content = buffer.lineContentRange(at: target)
-        let pos: Int
-        if content.isEmpty {
-            pos = content.lowerBound
-        } else if TextBuffer.isEndColumn(buffer.preferredColumn) {
-            pos = content.upperBound - 1
-        } else {
-            pos = content.lowerBound + min(buffer.preferredColumn, content.count - 1)
-        }
+        let last = buffer.lineCount - 1
+        if delta > 0, line >= last { return .fail(buffer.cursor) }
+        if delta < 0, line <= 0 { return .fail(buffer.cursor) }
+        let target = min(max(0, line + delta), last)
+        let pos = buffer.caretOffset(onLine: target, preferredColumn: buffer.preferredColumn)
         return .move(pos, linewise: true)
     }
 

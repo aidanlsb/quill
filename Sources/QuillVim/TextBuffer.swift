@@ -3,10 +3,10 @@
 public struct TextBuffer: Equatable {
     private var rope: Rope
     public var cursor: Int
-    /// Buffer column remembered across vertical motion.
-    /// `endColumn` means the end of each row (`$`).
+    /// Character column remembered across `j` / `k` (`curswant`).
+    /// This is a buffer column, never a pixel x. `endColumn` means end of line.
     public var preferredColumn: Int
-    /// Larger than any real line. Vertical motion treats this as the row's end.
+    /// Larger than any real line. `$` stores this so the next `j` / `k` hugs the end.
     public static let endColumn = Int.max / 4
     public private(set) var lineStarts: [Int]
     public private(set) var anchors: [Anchor]
@@ -169,6 +169,24 @@ public struct TextBuffer: Equatable {
     public func column(of offset: Int) -> Int {
         let line = lineIndex(containing: offset)
         return max(0, min(offset, count) - lineStarts[line])
+    }
+
+    /// Caret on `line` for a remembered character column.
+    /// A short line clamps to its last character. An empty line sits on the newline.
+    /// The caller keeps the desired column so a later longer line can restore it.
+    public func caretOffset(onLine line: Int, preferredColumn: Int) -> Int {
+        let content = lineContentRange(at: line)
+        if content.isEmpty { return content.lowerBound }
+        if Self.isEndColumn(preferredColumn) {
+            return lastCharacterOffset(onLine: line)
+        }
+        let clamped = min(max(0, preferredColumn), content.count - 1)
+        let raw = content.lowerBound + clamped
+        let start = graphemeSpan(containing: raw).lowerBound
+        if start < content.lowerBound || start >= content.upperBound {
+            return content.lowerBound
+        }
+        return start
     }
 
     public static func isEndColumn(_ column: Int) -> Bool {

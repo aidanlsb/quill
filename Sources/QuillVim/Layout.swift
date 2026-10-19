@@ -36,13 +36,7 @@ public final class LogicalLineLayout: TextLayout, Sendable {
         if target == line && delta != 0 {
             return offset
         }
-        let content = buffer.lineContentRange(at: target)
-        if content.isEmpty { return content.lowerBound }
-        if TextBuffer.isEndColumn(preferredColumn) {
-            return content.upperBound - 1
-        }
-        let col = min(preferredColumn, content.count - 1)
-        return content.lowerBound + max(0, col)
+        return buffer.caretOffset(onLine: target, preferredColumn: preferredColumn)
     }
 
     public func screenLineStart(at offset: Int, in buffer: TextBuffer) -> Int {
@@ -58,7 +52,7 @@ public final class LogicalLineLayout: TextLayout, Sendable {
     }
 }
 
-/// Wraps a buffer line every `width` characters. Lets tests cover display-line j/k.
+/// Wraps a buffer line every `width` characters. Lets tests cover display-line `gj` / `gk`.
 public final class WrapLayout: TextLayout {
     public var width: Int
 
