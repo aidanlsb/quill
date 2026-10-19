@@ -11,6 +11,7 @@
 - `grep` records one content search of that fixture.
 - `directory` records one directory snapshot.
 - `file` records reading the 10k-line fixture from disk.
+- `imageIndex` records finding 100 `![alt](path)` markers. `imageRefresh` records laying out that note's previews. `imageKeystroke` and `imageMotion` record typing and `j` on it.
 
 ## How to get to it (user POV)
 

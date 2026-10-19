@@ -162,6 +162,14 @@ extension AppModel {
             self?.presentCodeActions()
         }
         register(
+            id: "view.toggleImages",
+            name: "Toggle Images",
+            category: "View",
+            showsInMenu: true
+        ) { [weak self] in
+            self?.toggleImages()
+        }
+        register(
             id: "view.focus",
             name: "Focus Mode",
             category: "View",

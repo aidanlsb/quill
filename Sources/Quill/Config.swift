@@ -17,6 +17,8 @@ struct QuillConfig: Equatable {
     var shiftWidth: Int
     /// Pad the GFM table under the cursor when leaving insert mode. `:TableFormat` always works.
     var formatTablesOnInsertLeave: Bool
+    /// Draw `![alt](path)` as a preview under the source line. The markdown stays plain text.
+    var images: Bool
 
     static let `default` = QuillConfig(
         leader: " ",
@@ -28,7 +30,8 @@ struct QuillConfig: Equatable {
         font: "",
         theme: .system,
         shiftWidth: 2,
-        formatTablesOnInsertLeave: false
+        formatTablesOnInsertLeave: false,
+        images: true
     )
 
     static func load() -> QuillConfig {
@@ -119,6 +122,7 @@ struct QuillConfig: Equatable {
         let theme = try themeChoice(table["theme"]) ?? QuillConfig.default.theme
         let shift = try int(table["shiftWidth"]) ?? QuillConfig.default.shiftWidth
         let formatTables = try bool(table["formatTablesOnInsertLeave"]) ?? QuillConfig.default.formatTablesOnInsertLeave
+        let images = try bool(table["images"]) ?? QuillConfig.default.images
         return QuillConfig(
             leader: leader,
             leaderMaps: maps,
@@ -129,7 +133,8 @@ struct QuillConfig: Equatable {
             font: font,
             theme: theme,
             shiftWidth: shift,
-            formatTablesOnInsertLeave: formatTables
+            formatTablesOnInsertLeave: formatTables,
+            images: images
         )
     }
 
@@ -226,6 +231,7 @@ struct QuillConfig: Equatable {
             "theme": .string(theme.rawValue),
             "shiftWidth": .int(shiftWidth),
             "formatTablesOnInsertLeave": .bool(formatTablesOnInsertLeave),
+            "images": .bool(images),
         ]
         if fontSize.rounded() == fontSize {
             table["fontSize"] = .int(Int(fontSize))
@@ -263,6 +269,7 @@ struct QuillConfig: Equatable {
             let shift = try c.decodeIfPresent(Int.self, forKey: .shiftWidth) ?? QuillConfig.default.shiftWidth
             let formatTables = try c.decodeIfPresent(Bool.self, forKey: .formatTablesOnInsertLeave)
                 ?? QuillConfig.default.formatTablesOnInsertLeave
+            let images = try c.decodeIfPresent(Bool.self, forKey: .images) ?? QuillConfig.default.images
             config = QuillConfig(
                 leader: leader,
                 leaderMaps: maps,
@@ -273,13 +280,14 @@ struct QuillConfig: Equatable {
                 font: font,
                 theme: theme,
                 shiftWidth: shift,
-                formatTablesOnInsertLeave: formatTables
+                formatTablesOnInsertLeave: formatTables,
+                images: images
             )
         }
 
         enum CodingKeys: String, CodingKey {
             case leader, leaderMaps, shellCommands, lsp, columnWidth, fontSize, font, theme, shiftWidth
-            case formatTablesOnInsertLeave
+            case formatTablesOnInsertLeave, images
         }
     }
 
