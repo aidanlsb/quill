@@ -198,23 +198,17 @@ enum AppPerf {
     }
 
     private static func host(_ text: String) -> (view: VimTextView, window: NSWindow) {
-        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
-        scroll.hasVerticalScroller = true
-        let tv = VimTextView.make()
-        tv.commonInit()
         let engine = Engine(text: text)
-        tv.engine = engine
-        engine.layout = tv.layoutAdapter
-        scroll.documentView = tv
+        let hosted = VimTextView.host(engine: engine)
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
             styleMask: [.titled, .resizable],
             backing: .buffered,
             defer: false
         )
-        window.contentView = scroll
+        window.contentView = hosted.scroll
         window.makeKeyAndOrderFront(nil)
-        return (tv, window)
+        return (hosted.view, window)
     }
 
     private static func millis(_ body: () -> Void) -> Double {

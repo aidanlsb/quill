@@ -28,9 +28,9 @@ Preconditions:
 - Doctor printed the release binary you are about to run.
 - No other smoke is using that same log path. Each run overwrites `artifacts/verify-quill/smoke.log`.
 
-- **Run the smoke.** Run `Scripts/verify-quill --bin "$bin"`. The process exits 0.
-- **Read the image result.** Open `artifacts/verify-quill/smoke.log`. It contains `quill smoke passed` and a `quill smoke image gap=` line. It does not contain `image local`, `image missing`, `image storage`, `image j`, `image k`, `image keystroke`, or `images config`.
-- **Proof.** The log file is still at `artifacts/verify-quill/smoke.log` after the process exits. `QUILL_PERF=1` also prints `imageIndexMs`, `imageRefreshMs`, `imageKeystrokeMs`, and `imageMotionMs` for a note of 100 images.
+- **Run the tests.** `ImageTests` in `QuillAppTests` covers the preview, the placeholder, `j` / `k`, undo, and the config toggle. `Scripts/verify-quill --bin "$bin"` runs them, then the launch smoke.
+- **Read the image result.** `artifacts/verify-quill/app-tests.log` shows `ImageTests` passing and a `quill smoke image gap=` line. `artifacts/verify-quill/smoke.log` contains `quill smoke passed`. The test log does not contain `image local`, `image missing`, `image storage`, `image j`, `image k`, `image keystroke`, or `images config`.
+- **Proof.** Both logs are still in `artifacts/verify-quill/` after the process exits. `QUILL_PERF=1` also prints `imageIndexMs`, `imageRefreshMs`, `imageKeystrokeMs`, and `imageMotionMs` for a note of 100 images.
 
 ## Gotchas
 

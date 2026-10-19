@@ -27,8 +27,8 @@ Preconditions:
 - Doctor printed the release binary you are about to run.
 - No other smoke is using that same log path. Each run overwrites `artifacts/verify-quill/smoke.log`.
 
-- **Run the smoke.** Run `Scripts/verify-quill --bin "$bin"`. The process exits 0.
-- **Read the palette result.** Open `artifacts/verify-quill/smoke.log`. It contains `quill smoke passed`. It does not contain `palette query`, `palette results`, `palette shortcut`, `palette focus`, `palette escape`, or `palette recent`.
+- **Run the tests.** `PaletteTests` opens the command palette, filters Focus Mode, and runs it. `Scripts/verify-quill --bin "$bin"` runs it, then the launch smoke.
+- **Read the palette result.** `artifacts/verify-quill/app-tests.log` shows `PaletteTests` passing. `artifacts/verify-quill/smoke.log` contains `quill smoke passed`. The test log does not contain `palette query`, `palette results`, `palette shortcut`, `palette focus`, `palette escape`, or `palette recent`.
 - **Proof.** The log file is still at `artifacts/verify-quill/smoke.log` after the process exits.
 
 ## Gotchas

@@ -23,8 +23,8 @@ Preconditions:
 - Doctor printed the release binary.
 - No other smoke is using that same log path. Each run overwrites `artifacts/verify-quill/smoke.log`.
 
-- **Run the smoke.** Run `Scripts/verify-quill --bin "$bin"`. The process exits 0.
-- **Read the measure result.** Open `artifacts/verify-quill/smoke.log`. It contains `quill smoke passed`. It does not contain `column narrow`, `column wide`, `column inset`, `column clip`, `column caret`, or `directory resize`.
+- **Run the tests.** `ColumnTests` covers the narrow column, the wide column, and the directory listing as the window resizes. `Scripts/verify-quill --bin "$bin"` runs it, then the launch smoke.
+- **Read the measure result.** `artifacts/verify-quill/app-tests.log` shows `ColumnTests` passing. `artifacts/verify-quill/smoke.log` contains `quill smoke passed`. The test log does not contain `column narrow`, `column wide`, `column inset`, `column clip`, `column caret`, or `directory resize`.
 - **Proof.** The log file is still at `artifacts/verify-quill/smoke.log` after the process exits.
 
 ## Gotchas

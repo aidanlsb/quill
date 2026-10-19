@@ -198,7 +198,34 @@ final class VimTextView: NSTextView {
         commonInit()
     }
 
-    func commonInit() {
+    /// The only way to create an editor view bound to an engine.
+    /// `EditorView`, `AppPerf`, and tests use it.
+    static func host(
+        engine: Engine,
+        frame: NSRect = NSRect(x: 0, y: 0, width: 800, height: 600)
+    ) -> (scroll: NSScrollView, view: VimTextView) {
+        let scroll = NSScrollView(frame: frame)
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = false
+        scroll.borderType = .noBorder
+        scroll.drawsBackground = false
+        scroll.autohidesScrollers = true
+        let tv = VimTextView.make()
+        // setFrameSize measures the buffer. Bind the engine first, and give the
+        // text container the clip width before any caller copies the text in.
+        // A zero-width container traps TextKit on a long line.
+        tv.engine = engine
+        engine.layout = tv.layoutAdapter
+        tv.commonInit()
+        tv.minSize = NSSize(width: 0, height: 0)
+        tv.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        scroll.documentView = tv
+        tv.frame = frame
+        tv.updateInsets()
+        return (scroll, tv)
+    }
+
+    private func commonInit() {
         layoutAdapter.textView = self
         imagePreviews.attach(self)
         usesFontPanel = false
@@ -221,8 +248,8 @@ final class VimTextView: NSTextView {
         autoresizingMask = [.width]
     }
 
-    /// TextKit 2 view. The stock content storage holds the whole note.
-    static func make(frame: NSRect = .zero) -> VimTextView {
+    /// TextKit 2 view. Callers use `host(engine:frame:)`.
+    private static func make(frame: NSRect = .zero) -> VimTextView {
         let view = VimTextView(usingTextLayoutManager: true)
         if frame != .zero {
             view.frame = frame
@@ -424,10 +451,13 @@ final class VimTextView: NSTextView {
             return
         }
         if hasMarkedText() || event.characters?.isEmpty != false {
+            // A synthetic event with no window crashes NSTextView's key binding.
+            if event.window == nil { return }
             super.keyDown(with: event)
             return
         }
         guard let key = KeyEvent(nsEvent: event) else {
+            if event.window == nil { return }
             super.keyDown(with: event)
             return
         }
@@ -1125,9 +1155,17 @@ final class VimTextView: NSTextView {
         // A fragment at or below that row is the real line, including wrap.
         let row = rowHeight()
         let line = engine.buffer.lineIndex(containing: clampUTF16(engine.cursor))
+        let lineCount = max(1, engine.buffer.lineCount)
+        // TextKit's laid-out height can exceed one `rowHeight` per buffer line
+        // (select-all, wrap, leading). A stale fragment then sits near the short
+        // estimate and `G` stops above the end.
+        let inset = textContainerInset.height * 2
+        let estimatedSpan = CGFloat(lineCount) * row + imagePreviews.reservedHeight
+        let extra = max(0, bounds.height - inset - estimatedSpan)
+        let progress = CGFloat(line) / CGFloat(max(lineCount - 1, 1))
         let estimated = NSRect(
             x: 0,
-            y: textContainerOrigin.y + CGFloat(line) * row + imagePreviews.heightBefore(line: line),
+            y: textContainerOrigin.y + CGFloat(line) * row + imagePreviews.heightBefore(line: line) + extra * progress,
             width: 1,
             height: row
         )
@@ -1207,6 +1245,7 @@ final class VimTextView: NSTextView {
         // tall headings are taller than one row each, so whatever TextKit has
         // already laid out (`usageBounds` reads, it does not lay out) can only
         // raise the estimate. Without it the frame ends above a wrapped caret.
+        guard let engine else { return max(clip, bounds.height) }
         let rows = max(1, engine.buffer.lineCount)
         var content = CGFloat(rows) * rowHeight() + inset + imagePreviews.reservedHeight
         if let used = textLayoutManager?.usageBoundsForTextContainer, used.height > 0 {
@@ -1545,21 +1584,10 @@ struct EditorView: NSViewRepresentable {
     var revision: Int
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scroll = NSScrollView()
-        scroll.hasVerticalScroller = true
-        scroll.hasHorizontalScroller = false
-        scroll.borderType = .noBorder
-        scroll.drawsBackground = false
-        scroll.autohidesScrollers = true
-        let tv = VimTextView.make()
-        tv.commonInit()
-        tv.engine = model.engine
-        tv.layoutAdapter.textView = tv
-        model.engine.layout = tv.layoutAdapter
+        let hosted = VimTextView.host(engine: model.engine)
+        let scroll = hosted.scroll
+        let tv = hosted.view
         tv.vimDelegate = context.coordinator
-        tv.minSize = NSSize(width: 0, height: 0)
-        tv.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        scroll.documentView = tv
         context.coordinator.textView = tv
         context.coordinator.model = model
         tv.columnWidth = model.theme.columnWidth

@@ -27,13 +27,13 @@ Preconditions:
 - Doctor printed the release binary you are about to run.
 - No other smoke is using that same log path. Each run overwrites `artifacts/verify-quill/smoke.log`.
 
-- **Run the smoke.** Run `Scripts/verify-quill --bin "$bin"`. The process exits 0.
-- **Read the picker result.** Open `artifacts/verify-quill/smoke.log`. It contains `quill smoke passed`. It does not contain `picker query`, `picker placeholder`, `picker caret`, `picker filter`, `picker highlight`, `picker mode`, `grep query`, `grep results`, or `grep highlight`.
+- **Run the tests.** `PickerTests` types into the file picker and waits on `picker.items` for grep. `Scripts/verify-quill --bin "$bin"` runs it, then the launch smoke.
+- **Read the picker result.** `artifacts/verify-quill/app-tests.log` shows `PickerTests` passing. `artifacts/verify-quill/smoke.log` contains `quill smoke passed`. The test log does not contain `picker query`, `picker placeholder`, `picker caret`, `picker filter`, `picker highlight`, `picker mode`, `grep query`, `grep results`, or `grep highlight`.
 - **Proof.** The log file is still at `artifacts/verify-quill/smoke.log` after the process exits.
 
 ## Gotchas
 
 - The smoke calls `handlePicker` with the same key values the picker key view builds. It does not post OS keyboard events.
 - The fixture is a temporary directory with `notes.md` (`alpha notes`) and `ideas.md` (`beta ideas`). It does not index the home folder.
-- Grep is debounced. The check waits until the query field reads `alpha` and the hit list has settled.
+- Grep is debounced. The check waits until `picker.items` changes and the query field reads `alpha`.
 - Linux `swift test` covers picker key handling and highlight ranges. It does not draw the field. This host cannot run the smoke if it is not macOS.
