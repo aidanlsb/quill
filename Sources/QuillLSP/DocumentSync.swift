@@ -74,7 +74,6 @@ public actor LanguageServerManager {
     }
 
     private var clients: [ConnectionKey: LSPClient] = [:]
-    private var crashes: [ConnectionKey: Int] = [:]
     private var openURIs: [ConnectionKey: Set<String>] = [:]
 
     public init() {}
@@ -101,17 +100,6 @@ public actor LanguageServerManager {
         clients[key]
     }
 
-    public func noteCrash(_ key: ConnectionKey) {
-        crashes[key, default: 0] += 1
-        clients[key]?.stop()
-    }
-
-    /// Backoff after a crash: 0.25s, 0.5s, 1s, … capped at 8s.
-    public func restartDelay(_ key: ConnectionKey) -> TimeInterval {
-        let n = crashes[key] ?? 0
-        return min(8, pow(2, Double(max(0, n - 1))) * 0.25)
-    }
-
     public func trackOpen(key: ConnectionKey, uri: String) {
         openURIs[key, default: []].insert(uri)
     }
@@ -122,11 +110,5 @@ public actor LanguageServerManager {
 
     public func isOpen(key: ConnectionKey, uri: String) -> Bool {
         openURIs[key]?.contains(uri) ?? false
-    }
-
-    public func stopAll() {
-        for client in clients.values { client.stop() }
-        clients.removeAll()
-        openURIs.removeAll()
     }
 }

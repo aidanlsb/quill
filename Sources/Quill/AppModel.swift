@@ -30,7 +30,6 @@ final class AppModel {
     /// Editor mode and cursor to restore when the command palette closes.
     var paletteMode: Mode?
     var paletteCursor: Int?
-    /// QuillWorkspace has its own `CommandRegistry`; the palette uses QuillSearch's.
     let commands = QuillSearch.CommandRegistry()
     var pendingOps: [FSOperation] = []
     var showConfirm = false
@@ -57,7 +56,6 @@ final class AppModel {
     private var confirmOverwrite = false
     private var docVersion = 1
     private var sync = DocumentSync()
-    private var fsClipboard: [DirEntry] = []
     private var appearanceObserver: NSKeyValueObservation?
     private let servers = LanguageServerManager()
     private let searchSession = SearchSession()
@@ -125,8 +123,6 @@ final class AppModel {
             scheme: choice
         )
     }
-
-    var modeName: String { engine.mode.displayName }
 
     func open(url: URL) {
         if let target = LaunchRequest.target(from: url) {
@@ -347,7 +343,6 @@ final class AppModel {
             message = error.localizedDescription
             return
         }
-        fsClipboard.removeAll()
         pendingOps = []
         showConfirm = false
         if let url = fileURL, isDirectory { loadDirectory(url) }
