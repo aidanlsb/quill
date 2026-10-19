@@ -276,7 +276,12 @@ final class VimTextView: NSTextView {
             return
         }
         let columnChanged = abs(currentColumn - target.column) > 0.5
-        defer { if columnChanged { refitTables() } }
+        defer {
+            if columnChanged {
+                refitTables()
+                if hadInsets { revealCaretIfHidden() }
+            }
+        }
         let caretBefore = (hadInsets && columnChanged) ? caretDocumentMidY() : nil
         updatingInsets = true
         textContainerInset = NSSize(width: target.inset, height: target.vertical)
@@ -1122,6 +1127,15 @@ final class VimTextView: NSTextView {
         guard abs(origin.y - visible.origin.y) > 0.5 || abs(origin.x - visible.origin.x) > 0.5 else { return }
         clip.setBoundsOrigin(origin)
         scroll.reflectScrolledClipView(clip)
+    }
+
+    /// Rewrapping moves the caret's row. The anchor above keeps it where it was
+    /// on screen when it can measure it; this catches the case where it cannot.
+    private func revealCaretIfHidden() {
+        guard let clip = enclosingScrollView?.contentView, engine != nil,
+              let caret = caretRect(forcingLayout: true) else { return }
+        guard !clip.bounds.insetBy(dx: -0.5, dy: -0.5).contains(caret) else { return }
+        revealCaret()
     }
 
     func halfPageLines() -> Int {

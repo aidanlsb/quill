@@ -985,7 +985,10 @@ enum AppSmoke {
             caretFailures += 1
             if caretFailures <= 6 {
                 let position = engine.buffer.position(of: engine.cursor)
-                failures.append("overflow: caret \(caret) after \(label) at \(position.line):\(position.utf16Column) is \(problem)")
+                failures.append(
+                    "overflow: caret \(caret) after \(label) at \(position.line):\(position.utf16Column) is \(problem); "
+                        + "view \(tv.frame.size) column \(tv.textContainer?.size.width ?? 0)"
+                )
             }
         }
 
@@ -1082,10 +1085,15 @@ enum AppSmoke {
         let midLine = engine.buffer.lineIndex(containing: mid.range.lowerBound)
         _ = engine.type(":\(midLine + 1)<CR>")
         tv.syncFromEngine()
+        caretOnScreen(":\(midLine + 1)")
         resizeEditor(window, scroll: scroll, width: 900, height: 300)
         midAlignment("widened", expectPadded: true)
+        tv.viewDidEndLiveResize()
+        caretOnScreen("widened, live resize ended")
         resizeEditor(window, scroll: scroll, width: 360, height: 300)
         midAlignment("narrowed", expectPadded: false)
+        tv.viewDidEndLiveResize()
+        caretOnScreen("narrowed, live resize ended")
     }
 
     private static func utf16Length(_ text: String) -> Int {
