@@ -197,7 +197,9 @@ echo "verify-quill: perf evidence $perf_log"
 check_cli_windows() {
   local bin="$1"
   local parent dest app_bin helper work note
-  parent="$(mktemp -d "${TMPDIR:-/tmp}/quill-cli.XXXXXX")"
+  # Resolved, so it matches the executable path ps reports: no "T//" from a
+  # TMPDIR with a trailing slash, and /private/var rather than /var.
+  parent="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/quill-cli.XXXXXX")" && pwd -P)"
   dest="$parent/Quill.app"
   app_bin="$dest/Contents/MacOS/Quill"
   helper="$parent/onscreen-window"
