@@ -1,33 +1,39 @@
 import Foundation
+import QuillText
 
 /// Turns the engine's ordered UTF-16 edits into LSP `contentChanges`.
-/// Incremental ranges are expressed against the text before each edit.
+/// Incremental ranges are expressed against the text before each edit. The line
+/// index is updated with each edit, so a keystroke does not re-scan the document.
 public struct DocumentSync: Equatable, Sendable {
     public var version: Int
     public private(set) var text: String
+    public private(set) var lines: LineIndex
     public private(set) var pending: [LSPContentChange]
 
     public init(text: String = "", version: Int = 0) {
         self.text = text
+        self.lines = LineIndex(text)
         self.version = version
         self.pending = []
     }
 
     public mutating func reset(text: String) {
         self.text = text
+        lines = LineIndex(text)
         pending.removeAll()
         version += 1
     }
 
     public mutating func apply(edits: [(range: Range<Int>, replacement: String)]) {
         for edit in edits {
-            let start = LSPPosition.position(utf16Offset: edit.range.lowerBound, in: text)
-            let end = LSPPosition.position(utf16Offset: edit.range.upperBound, in: text)
+            let lower = min(max(0, edit.range.lowerBound), lines.utf16Count)
+            let range = lower..<min(max(lower, edit.range.upperBound), lines.utf16Count)
             pending.append(LSPContentChange(
-                range: LSPRange(start: start, end: end),
+                range: LSPRange(start: LSPPosition(lines.position(of: range.lowerBound)), end: LSPPosition(lines.position(of: range.upperBound))),
                 text: edit.replacement
             ))
-            text = Self.replace(text, range: edit.range, with: edit.replacement)
+            Self.replace(&text, range: range, with: edit.replacement)
+            lines.replace(range, with: edit.replacement)
         }
         if !edits.isEmpty { version += 1 }
     }
@@ -46,13 +52,12 @@ public struct DocumentSync: Equatable, Sendable {
         return (version, changes)
     }
 
-    static func replace(_ text: String, range: Range<Int>, with replacement: String) -> String {
-        let units = Array(text.utf16)
-        let lower = min(max(0, range.lowerBound), units.count)
-        let upper = min(max(lower, range.upperBound), units.count)
-        let prefix = String(decoding: units[..<lower], as: UTF16.self)
-        let suffix = String(decoding: units[upper...], as: UTF16.self)
-        return prefix + replacement + suffix
+    /// `range` is in UTF-16 units and must not split a surrogate pair.
+    static func replace(_ text: inout String, range: Range<Int>, with replacement: String) {
+        let units = text.utf16
+        let lower = units.index(units.startIndex, offsetBy: range.lowerBound)
+        let upper = units.index(lower, offsetBy: range.count)
+        text.replaceSubrange(lower..<upper, with: replacement)
     }
 }
 
@@ -69,7 +74,6 @@ public actor LanguageServerManager {
     }
 
     private var clients: [ConnectionKey: LSPClient] = [:]
-    private var crashes: [ConnectionKey: Int] = [:]
     private var openURIs: [ConnectionKey: Set<String>] = [:]
 
     public init() {}
@@ -96,17 +100,6 @@ public actor LanguageServerManager {
         clients[key]
     }
 
-    public func noteCrash(_ key: ConnectionKey) {
-        crashes[key, default: 0] += 1
-        clients[key]?.stop()
-    }
-
-    /// Backoff after a crash: 0.25s, 0.5s, 1s, … capped at 8s.
-    public func restartDelay(_ key: ConnectionKey) -> TimeInterval {
-        let n = crashes[key] ?? 0
-        return min(8, pow(2, Double(max(0, n - 1))) * 0.25)
-    }
-
     public func trackOpen(key: ConnectionKey, uri: String) {
         openURIs[key, default: []].insert(uri)
     }
@@ -117,11 +110,5 @@ public actor LanguageServerManager {
 
     public func isOpen(key: ConnectionKey, uri: String) -> Bool {
         openURIs[key]?.contains(uri) ?? false
-    }
-
-    public func stopAll() {
-        for client in clients.values { client.stop() }
-        clients.removeAll()
-        openURIs.removeAll()
     }
 }

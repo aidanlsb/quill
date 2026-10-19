@@ -169,13 +169,14 @@ struct QuillTheme {
         return font.isFixedPitch ? font : monoFont
     }
 
-    /// Table lines do not wrap. A wide row clips at the column instead of breaking the grid.
+    /// A row wider than the column wraps like any other line. Clipping hid the
+    /// end of the row and let the caret walk off the right edge of the column.
     @MainActor
     func tableParagraphStyle() -> NSParagraphStyle {
         let para = NSMutableParagraphStyle()
         para.lineHeightMultiple = lineHeight
         para.paragraphSpacing = 0
-        para.lineBreakMode = .byClipping
+        para.lineBreakMode = .byWordWrapping
         para.allowsDefaultTighteningForTruncation = false
         return para
     }
@@ -223,7 +224,8 @@ enum MarkdownStyler {
         caret: Int = 0,
         focusParagraph: Range<Int>? = nil,
         diagnostics: [(NSRange, Int)] = [],
-        tables: [TableBlock]? = nil
+        tables: [TableBlock]? = nil,
+        tableColumnWidth: CGFloat? = nil
     ) {
         let ns = storage.string as NSString
         let full = NSRange(location: 0, length: ns.length)
@@ -264,7 +266,8 @@ enum MarkdownStyler {
             focus: focus,
             focusRange: focusRange,
             spans: spans,
-            tables: discovered
+            tables: discovered,
+            columnWidth: tableColumnWidth
         )
         for (range, severity) in diagnostics {
             let marked = NSIntersectionRange(range, limit)
@@ -346,165 +349,5 @@ enum MarkdownStyler {
         case .body:
             break
         }
-    }
-
-    static func restyleLegacy(_ storage: NSTextStorage, theme: QuillTheme, diagnostics: [(NSRange, Int)] = []) {
-        let text = storage.string
-        let full = NSRange(location: 0, length: (text as NSString).length)
-        storage.beginEditing()
-        storage.setAttributes(theme.bodyAttributes, range: full)
-
-        var inFence = false
-        var inFrontmatter = text.hasPrefix("---")
-        var frontmatterClosed = false
-        let ns = text as NSString
-        var lineStart = 0
-        while lineStart <= ns.length {
-            let lineEnd = ns.rangeOfCharacter(from: .newlines, options: [], range: NSRange(location: lineStart, length: ns.length - lineStart)).location
-            let end = lineEnd == NSNotFound ? ns.length : lineEnd
-            let lineRange = NSRange(location: lineStart, length: end - lineStart)
-            let line = ns.substring(with: lineRange)
-
-            if inFrontmatter, !frontmatterClosed {
-                storage.addAttribute(.foregroundColor, value: theme.dimColor, range: lineRange)
-                storage.addAttribute(.font, value: theme.monoFont, range: lineRange)
-                if lineStart > 0, line == "---" {
-                    inFrontmatter = false
-                    frontmatterClosed = true
-                }
-                lineStart = end + (lineEnd == NSNotFound ? 1 : 1)
-                if lineEnd == NSNotFound { break }
-                continue
-            }
-
-            if line.hasPrefix("```") {
-                inFence.toggle()
-                storage.addAttribute(.foregroundColor, value: theme.syntaxColor, range: lineRange)
-                storage.addAttribute(.font, value: theme.monoFont, range: lineRange)
-                lineStart = end + 1
-                if lineEnd == NSNotFound { break }
-                continue
-            }
-
-            if inFence {
-                storage.addAttribute(.font, value: theme.monoFont, range: lineRange)
-                storage.addAttribute(.foregroundColor, value: theme.codeColor, range: lineRange)
-                lineStart = end + 1
-                if lineEnd == NSNotFound { break }
-                continue
-            }
-
-            if let heading = headingMatch(line) {
-                let font = theme.headingFonts[min(heading.level - 1, theme.headingFonts.count - 1)]
-                storage.addAttribute(.font, value: font, range: lineRange)
-                let marks = NSRange(location: lineRange.location, length: heading.level)
-                storage.addAttribute(.foregroundColor, value: theme.syntaxColor, range: marks)
-            }
-
-            applyInline(ns, lineRange: lineRange, theme: theme, storage: storage)
-
-            if lineEnd == NSNotFound { break }
-            lineStart = end + 1
-        }
-
-        for (range, severity) in diagnostics {
-            guard NSMaxRange(range) <= storage.length else { continue }
-            let color: NSColor = severity <= 1 ? .systemRed : .systemOrange
-            storage.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: range)
-            storage.addAttribute(.underlineColor, value: color, range: range)
-        }
-        storage.endEditing()
-    }
-
-    private static func headingMatch(_ line: String) -> (level: Int, title: String)? {
-        var i = 0
-        let chars = Array(line)
-        while i < chars.count, chars[i] == "#" { i += 1 }
-        guard i >= 1, i <= 6, i < chars.count, chars[i] == " " else { return nil }
-        return (i, String(chars[(i + 1)...]))
-    }
-
-    private static func applyInline(_ ns: NSString, lineRange: NSRange, theme: QuillTheme, storage: NSTextStorage) {
-        let patterns: [(String, (NSTextCheckingResult, NSString) -> Void)] = []
-        _ = patterns
-        highlight(ns, lineRange: lineRange, pattern: #"`([^`]+)`"#, storage: storage) { result in
-            storage.addAttribute(.font, value: theme.monoFont, range: result.range)
-            storage.addAttribute(.foregroundColor, value: theme.codeColor, range: result.range)
-            if result.numberOfRanges > 1 {
-                dimMarks(result, inner: 1, storage: storage, color: theme.syntaxColor)
-            }
-        }
-        highlight(ns, lineRange: lineRange, pattern: #"\*\*([^*]+)\*\*"#, storage: storage) { result in
-            storage.addAttribute(.font, value: NSFontManager.shared.convert(theme.bodyFont, toHaveTrait: .boldFontMask), range: result.range(at: 1))
-            dimMarks(result, inner: 1, storage: storage, color: theme.syntaxColor)
-        }
-        highlight(ns, lineRange: lineRange, pattern: #"(?<!\*)\*([^*]+)\*(?!\*)"#, storage: storage) { result in
-            storage.addAttribute(.obliqueness, value: 0.15, range: result.range(at: 1))
-            dimMarks(result, inner: 1, storage: storage, color: theme.syntaxColor)
-        }
-        highlight(ns, lineRange: lineRange, pattern: #"\[\[[^\]]+\]\]"#, storage: storage) { result in
-            storage.addAttribute(.foregroundColor, value: theme.linkColor, range: result.range)
-        }
-        highlight(ns, lineRange: lineRange, pattern: #"^\s*([-*+]|\d+\.)\s"#, storage: storage) { result in
-            storage.addAttribute(.foregroundColor, value: theme.syntaxColor, range: result.range)
-        }
-        highlight(ns, lineRange: lineRange, pattern: #"\[[ xX]\]"#, storage: storage) { result in
-            storage.addAttribute(.font, value: theme.monoFont, range: result.range)
-            storage.addAttribute(.foregroundColor, value: theme.syntaxColor, range: result.range)
-        }
-    }
-
-    private static func dimMarks(_ result: NSTextCheckingResult, inner: Int, storage: NSTextStorage, color: NSColor) {
-        let full = result.range
-        let innerRange = result.range(at: inner)
-        let left = NSRange(location: full.location, length: innerRange.location - full.location)
-        let right = NSRange(location: NSMaxRange(innerRange), length: NSMaxRange(full) - NSMaxRange(innerRange))
-        storage.addAttribute(.foregroundColor, value: color, range: left)
-        storage.addAttribute(.foregroundColor, value: color, range: right)
-    }
-
-    private static func highlight(
-        _ ns: NSString,
-        lineRange: NSRange,
-        pattern: String,
-        storage: NSTextStorage,
-        apply: (NSTextCheckingResult) -> Void
-    ) {
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return }
-        regex.enumerateMatches(in: ns as String, options: [], range: lineRange) { match, _, _ in
-            if let match { apply(match) }
-        }
-    }
-}
-
-enum Wikilink {
-    static func at(cursor: Int, in text: String) -> String? {
-        let chars = Array(text)
-        guard !chars.isEmpty else { return nil }
-        var i = min(cursor, chars.count - 1)
-        var start: Int?
-        while i >= 1 {
-            if chars[i] == "]" && chars[i - 1] == "]" { return nil }
-            if chars[i] == "[" && chars[i - 1] == "[" {
-                start = i + 1
-                break
-            }
-            i -= 1
-        }
-        guard let start else { return nil }
-        var end = start
-        while end < chars.count, chars[end] != "]" {
-            end += 1
-        }
-        return String(chars[start..<end])
-    }
-
-    static func prefixBeforeCursor(_ text: String, cursor: Int) -> String? {
-        let idx = min(cursor, text.count)
-        let prefix = String(text.prefix(idx))
-        guard let open = prefix.range(of: "[[", options: .backwards) else { return nil }
-        let inner = prefix[open.upperBound...]
-        if inner.contains("]") { return nil }
-        return String(inner)
     }
 }

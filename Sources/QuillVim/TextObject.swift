@@ -86,30 +86,33 @@ enum TextObjectResolver {
 
     private static func word(_ buffer: TextBuffer, inner: Bool, big: Bool) -> (Range<Int>, RangeStyle)? {
         if buffer.isEmpty { return nil }
-        let cursor = min(buffer.cursor, max(0, buffer.count - 1))
+        let cursor = buffer.clampedCursor(min(buffer.cursor, buffer.graphemeStart(before: buffer.count)), normalMode: false)
+        func next(_ off: Int) -> Int { buffer.nextGrapheme(after: off) }
+        func previous(_ off: Int) -> Int { buffer.graphemeStart(before: off) }
+        func isNewline(_ off: Int) -> Bool { buffer.charClass(at: off) == .newline }
         let onBlank = isBlank(buffer, cursor)
 
         var start = cursor
         var end = cursor
 
         if onBlank {
-            while start > 0, isBlank(buffer, start - 1), buffer.character(at: start - 1) != "\n" {
-                start -= 1
+            while start > 0, isBlank(buffer, previous(start)), !isNewline(previous(start)) {
+                start = previous(start)
             }
-            while end < buffer.count, isBlank(buffer, end), buffer.character(at: end) != "\n" {
-                end += 1
+            while end < buffer.count, isBlank(buffer, end), !isNewline(end) {
+                end = next(end)
             }
             if inner {
                 return (start..<end, .characterwise)
             }
             // aw on whitespace includes the following word
             var w = end
-            while w < buffer.count, isBlank(buffer, w) { w += 1 }
+            while w < buffer.count, isBlank(buffer, w) { w = next(w) }
             if w < buffer.count {
                 let cls = buffer.charClass(at: w)
-                w += 1
+                w = next(w)
                 while w < buffer.count, matches(buffer.charClass(at: w), cls, big: big) {
-                    w += 1
+                    w = next(w)
                 }
                 end = w
             }
@@ -117,27 +120,27 @@ enum TextObjectResolver {
         }
 
         let cls = buffer.charClass(at: cursor)
-        while start > 0, matches(buffer.charClass(at: start - 1), cls, big: big) {
-            start -= 1
+        while start > 0, matches(buffer.charClass(at: previous(start)), cls, big: big) {
+            start = previous(start)
         }
-        end = cursor + 1
+        end = next(cursor)
         while end < buffer.count, matches(buffer.charClass(at: end), cls, big: big) {
-            end += 1
+            end = next(end)
         }
         if inner {
             return (start..<end, .characterwise)
         }
         // trailing whitespace (not crossing newline), else leading
         var trail = end
-        while trail < buffer.count, isBlank(buffer, trail), buffer.character(at: trail) != "\n" {
-            trail += 1
+        while trail < buffer.count, isBlank(buffer, trail), !isNewline(trail) {
+            trail = next(trail)
         }
         if trail > end {
             return (start..<trail, .characterwise)
         }
         var lead = start
-        while lead > 0, isBlank(buffer, lead - 1), buffer.character(at: lead - 1) != "\n" {
-            lead -= 1
+        while lead > 0, isBlank(buffer, previous(lead)), !isNewline(previous(lead)) {
+            lead = previous(lead)
         }
         return (lead..<end, .characterwise)
     }
@@ -149,17 +152,18 @@ enum TextObjectResolver {
 
     private static func sentence(_ buffer: TextBuffer, inner: Bool) -> (Range<Int>, RangeStyle)? {
         if buffer.isEmpty { return nil }
+        func next(_ off: Int) -> Int { buffer.nextGrapheme(after: off) }
         var s = buffer.cursor
         // Walk back to previous sentence end, then skip whitespace for start.
-        var i = min(buffer.cursor, max(0, buffer.count - 1))
+        var i = buffer.clampedCursor(min(buffer.cursor, buffer.graphemeStart(before: buffer.count)), normalMode: false)
         while i > 0, !MotionResolver.isSentenceEnd(buffer, at: i) {
-            i -= 1
+            i = buffer.graphemeStart(before: i)
         }
         if MotionResolver.isSentenceEnd(buffer, at: i) {
-            s = i + 1
+            s = next(i)
             while s < buffer.count {
                 let ch = buffer.character(at: s)
-                if ch == " " || ch == "\t" || ch == "\n" { s += 1; continue }
+                if ch == " " || ch == "\t" || ch == "\n" { s = next(s); continue }
                 break
             }
         } else {
@@ -167,19 +171,19 @@ enum TextObjectResolver {
         }
         var e = buffer.cursor
         while e < buffer.count, !MotionResolver.isSentenceEnd(buffer, at: e) {
-            e += 1
+            e = next(e)
         }
         if e < buffer.count, MotionResolver.isSentenceEnd(buffer, at: e) {
-            e += 1
+            e = next(e)
             while e < buffer.count {
                 let ch = buffer.character(at: e)
-                if ch == ")" || ch == "]" || ch == "\"" || ch == "'" { e += 1; continue }
+                if ch == ")" || ch == "]" || ch == "\"" || ch == "'" { e = next(e); continue }
                 break
             }
             if !inner {
                 while e < buffer.count {
                     let ch = buffer.character(at: e)
-                    if ch == " " || ch == "\t" || ch == "\n" { e += 1; continue }
+                    if ch == " " || ch == "\t" || ch == "\n" { e = next(e); continue }
                     break
                 }
             }
@@ -188,37 +192,24 @@ enum TextObjectResolver {
         return (s..<e, .characterwise)
     }
 
+    /// `ip` is the run of lines sharing the cursor line's blankness. `ap` adds the
+    /// run after it, or for a paragraph at the end of the buffer the blanks before it.
     private static func paragraph(_ buffer: TextBuffer, inner: Bool) -> (Range<Int>, RangeStyle)? {
         if buffer.isEmpty { return nil }
-        var line = buffer.lineIndex(containing: buffer.cursor)
-        while line > 0, !buffer.isBlankLine(line - 1) {
-            line -= 1
-        }
-        if buffer.isBlankLine(line) && inner {
-            // inner paragraph on a blank line is the blank run
-            let start = line
-            var end = line
-            while end + 1 < buffer.lineCount, buffer.isBlankLine(end + 1) {
-                end += 1
-            }
-            return (buffer.linesRange(from: start, through: end), .linewise)
-        }
-        if buffer.isBlankLine(line) {
-            line += 1
-        }
+        let last = buffer.lastLine
+        let line = min(buffer.lineIndex(containing: buffer.cursor), last)
+        let blank = buffer.isBlankLine(line)
         var startLine = line
-        while startLine > 0, !buffer.isBlankLine(startLine - 1) {
-            startLine -= 1
-        }
-        var endLine = startLine
-        while endLine + 1 < buffer.lineCount, !buffer.isBlankLine(endLine + 1) {
-            endLine += 1
-        }
+        while startLine > 0, buffer.isBlankLine(startLine - 1) == blank { startLine -= 1 }
+        var endLine = line
+        while endLine < last, buffer.isBlankLine(endLine + 1) == blank { endLine += 1 }
         if !inner {
-            if startLine > 0 {
-                startLine -= 1
-            } else if endLine + 1 < buffer.lineCount {
+            if endLine < last {
                 endLine += 1
+                while endLine < last, buffer.isBlankLine(endLine + 1) != blank { endLine += 1 }
+            } else if !blank, startLine > 0 {
+                startLine -= 1
+                while startLine > 0, buffer.isBlankLine(startLine - 1) { startLine -= 1 }
             }
         }
         return (buffer.linesRange(from: startLine, through: endLine), .linewise)
@@ -232,14 +223,7 @@ enum TextObjectResolver {
         let line = buffer.lineIndex(containing: buffer.cursor)
         let content = buffer.lineContentRange(at: line)
         guard !content.isEmpty else { return nil }
-        var opens: [Int] = []
-        var i = content.lowerBound
-        while i < content.upperBound {
-            if buffer.character(at: i) == quote {
-                opens.append(i)
-            }
-            i += 1
-        }
+        let opens = buffer.graphemes(in: content).filter { $0.character == quote }.map(\.span.lowerBound)
         guard opens.count >= 2 else { return nil }
         let cursor = buffer.cursor
         var pair: (Int, Int)?
@@ -257,10 +241,12 @@ enum TextObjectResolver {
             pair = (opens[opens.count - 2], last)
         }
         guard let (a, b) = pair, b > a else { return nil }
+        let afterOpen = buffer.nextGrapheme(after: a)
+        let afterClose = buffer.nextGrapheme(after: b)
         if inner {
-            return ((a + 1)..<b, .characterwise)
+            return (afterOpen..<b, .characterwise)
         }
-        return (a..<(b + 1), .characterwise)
+        return (a..<afterClose, .characterwise)
     }
 
     private static func brackets(
@@ -270,15 +256,15 @@ enum TextObjectResolver {
         inner: Bool
     ) -> (Range<Int>, RangeStyle)? {
         if buffer.isEmpty { return nil }
-        let cursor = min(buffer.cursor, max(0, buffer.count - 1))
+        let cursor = buffer.clampedCursor(min(buffer.cursor, buffer.graphemeStart(before: buffer.count)), normalMode: false)
         var depth = 0
         var start: Int?
         var i = cursor
         // If on the closing bracket, start just inside.
         if buffer.character(at: i) == close, i > 0 {
-            i -= 1
+            i = buffer.graphemeStart(before: i)
         }
-        while i >= 0 {
+        while true {
             let ch = buffer.character(at: i)
             if ch == close { depth += 1 }
             else if ch == open {
@@ -289,11 +275,11 @@ enum TextObjectResolver {
                 depth -= 1
             }
             if i == 0 { break }
-            i -= 1
+            i = buffer.graphemeStart(before: i)
         }
         guard let openAt = start else { return nil }
         depth = 0
-        var j = openAt + 1
+        var j = buffer.nextGrapheme(after: openAt)
         var end: Int?
         while j < buffer.count {
             let ch = buffer.character(at: j)
@@ -305,12 +291,12 @@ enum TextObjectResolver {
                 }
                 depth -= 1
             }
-            j += 1
+            j = buffer.nextGrapheme(after: j)
         }
         guard let closeAt = end else { return nil }
         if inner {
-            return ((openAt + 1)..<closeAt, .characterwise)
+            return (buffer.nextGrapheme(after: openAt)..<closeAt, .characterwise)
         }
-        return (openAt..<(closeAt + 1), .characterwise)
+        return (openAt..<buffer.nextGrapheme(after: closeAt), .characterwise)
     }
 }

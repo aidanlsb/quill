@@ -111,9 +111,6 @@ public struct EngineResult: Equatable, Sendable {
     public static let noop = EngineResult(didChangeText: false, beep: false, actions: [])
 }
 
-/// One keystroke (or one committed insert session's worth of undo). `handle` returns this.
-public typealias Transaction = EngineResult
-
 public struct TextEdit: Equatable, Sendable {
     public var range: Range<Int>
     public var replacement: String

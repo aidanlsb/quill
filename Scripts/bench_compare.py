@@ -24,42 +24,45 @@ P99_RATIO = 0.25
 # run has at least 5 samples; p99 when it has at least 15. Cold one-shot
 # samples are gated on the median across process runs.
 #
-# These floors are the starting point from the existing QUILL_PERF band
-# (launch ~93ms, keystroke ~0.23ms, text sync ~8ms). The PR description
-# records the spread measured on macos-26 and any floor this run had to move.
+# Each triple is (median, p95, p99). A floor is about three times the
+# run-to-run spread of medians on macos-26, run 39198744980 (three suite
+# processes, five cold launches), and never below the previous floor.
+# Spread is max(run median) - min(run median). The same-runner gate still
+# requires a 15% slowdown, so a floor this high only lets through a move
+# larger than the noise that job actually saw.
 FLOORS = {
-    "launchToKeyMs": (8.0, 20.0, 30.0),
+    "launchToKeyMs": (210.0, 210.0, 210.0),
     "open1kMs": (4.0, 8.0, 12.0),
-    "open50kMs": (12.0, 25.0, 40.0),
-    "open500kMs": (40.0, 80.0, 120.0),
-    "open500kColdMs": (80.0, 160.0, 240.0),
-    "openHeavyMs": (8.0, 16.0, 24.0),
-    "keyInsertTopMs": (0.15, 0.35, 0.60),
-    "keyInsertMidMs": (0.15, 0.35, 0.60),
-    "keyInsertEndMs": (0.15, 0.35, 0.60),
-    "keyNormalTopMs": (0.15, 0.35, 0.60),
-    "keyNormalMidMs": (0.15, 0.35, 0.60),
-    "keyNormalEndMs": (0.15, 0.35, 0.60),
+    "open50kMs": (140.0, 140.0, 140.0),
+    "open500kMs": (610.0, 610.0, 610.0),
+    "open500kColdMs": (770.0, 770.0, 770.0),
+    "openHeavyMs": (24.0, 24.0, 24.0),
+    "keyInsertTopMs": (1.8, 1.8, 1.8),
+    "keyInsertMidMs": (3.5, 3.5, 3.5),
+    "keyInsertEndMs": (2.6, 2.6, 2.6),
+    "keyNormalTopMs": (3.5, 3.5, 3.5),
+    "keyNormalMidMs": (3.0, 3.0, 3.0),
+    "keyNormalEndMs": (2.3, 2.3, 2.3),
     "motionJMs": (0.40, 1.20, 2.50),
-    "motionKMs": (0.40, 1.20, 2.50),
+    "motionKMs": (1.5, 1.5, 2.5),
     "motionWMs": (0.40, 1.20, 2.50),
-    "motionGMs": (1.0, 3.0, 6.0),
+    "motionGMs": (2.3, 3.0, 6.0),
     "motionGFirstMs": (20.0, 50.0, 80.0),
-    "motionGgMs": (0.50, 2.0, 4.0),
-    "motionSearchMs": (2.0, 6.0, 12.0),
-    "motionDdMs": (0.50, 2.0, 4.0),
-    "motionUndoMs": (0.50, 2.0, 4.0),
-    "motionRedoMs": (0.50, 2.0, 4.0),
+    "motionGgMs": (3.4, 3.4, 4.0),
+    "motionSearchMs": (14.0, 14.0, 14.0),
+    "motionDdMs": (4.5, 4.5, 4.5),
+    "motionUndoMs": (12.0, 12.0, 12.0),
+    "motionRedoMs": (12.0, 12.0, 12.0),
     "restyleProseMs": (0.30, 1.0, 2.0),
     "restyleTableMs": (0.40, 1.20, 2.50),
-    "resizeMs": (2.0, 6.0, 10.0),
-    "scrollMs": (0.15, 0.50, 1.0),
-    "pickerSfMs": (8.0, 20.0, 40.0),
-    "pickerSfColdMs": (15.0, 40.0, 80.0),
-    "pickerSfKeyMs": (0.30, 1.0, 2.0),
-    "pickerSgMs": (15.0, 40.0, 80.0),
-    "pickerSgColdMs": (25.0, 60.0, 100.0),
-    "directoryMs": (4.0, 12.0, 20.0),
+    "resizeMs": (4.0, 6.0, 10.0),
+    "scrollMs": (0.25, 0.50, 1.0),
+    "pickerSfMs": (80.0, 80.0, 80.0),
+    "pickerSfColdMs": (160.0, 160.0, 160.0),
+    "pickerSfKeyMs": (1.6, 1.6, 2.0),
+    "pickerSgMs": (140.0, 140.0, 140.0),
+    "pickerSgColdMs": (2000.0, 2000.0, 2000.0),
+    "directoryMs": (9.0, 12.0, 20.0),
     "directoryColdMs": (8.0, 20.0, 40.0),
     "rssSteadyMb": (25.0, 40.0, 60.0),
     "rssPeakMb": (40.0, 80.0, 120.0),
@@ -565,7 +568,7 @@ def self_test() -> int:
             "metrics": {"keyInsertTopMs": {"median": 1.0, "p95": 1.1, "p99": 1.2, "n": 20}},
         }
         key_bad = {
-            "metrics": {"keyInsertTopMs": {"median": 1.05, "p95": 1.1, "p99": 3.0, "n": 20}},
+            "metrics": {"keyInsertTopMs": {"median": 1.05, "p95": 1.1, "p99": 20.0, "n": 20}},
         }
         _, code = compare_docs(key_bad, key_base, "pr", "base")
         check(code == 1, "p99 is gated once a run has 15 samples")

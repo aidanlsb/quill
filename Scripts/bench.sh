@@ -46,6 +46,45 @@ require_darwin() {
   fi
 }
 
+# Bash 3.2 does not abort on a failing assignment, so the build runs in the
+# current shell and writes the product path to a file. Compiler output stays
+# in the log instead of being swallowed by a command substitution.
+swift_release_bin() {
+  local package="$1"
+  local log="$2"
+  local pathfile="$3"
+  local status=0
+  mkdir -p "$(dirname "$log")" "$(dirname "$pathfile")"
+  set +e
+  swift build -c release --product Quill -Xswiftc -strict-concurrency=complete --package-path "$package" >"$log" 2>&1
+  status=$?
+  set -e
+  if [[ "$status" -ne 0 ]]; then
+    echo "bench: swift build failed ($status). Log: $log" >&2
+    cat "$log" >&2
+    exit "$status"
+  fi
+  local shown
+  set +e
+  shown="$(swift build -c release --product Quill -Xswiftc -strict-concurrency=complete --package-path "$package" --show-bin-path 2>>"$log")"
+  status=$?
+  set -e
+  if [[ "$status" -ne 0 ]]; then
+    echo "bench: show-bin-path failed ($status). Log: $log" >&2
+    cat "$log" >&2
+    exit "$status"
+  fi
+  shown="$(printf '%s\n' "$shown" | tail -n 1)"
+  local product="${shown}/Quill"
+  if [[ ! -x "$product" ]]; then
+    echo "bench: binary is not executable: $product" >&2
+    echo "bench: build log follows" >&2
+    cat "$log" >&2
+    exit 1
+  fi
+  printf '%s\n' "$product" >"$pathfile"
+}
+
 ensure_bin() {
   if [[ -n "$bin" ]]; then
     if [[ ! -x "$bin" ]]; then
@@ -55,13 +94,9 @@ ensure_bin() {
     return
   fi
   echo "bench: building release Quill"
-  local built
-  built="$(swift build -c release --product Quill -Xswiftc -strict-concurrency=complete --show-bin-path)"
-  bin="${built}/Quill"
-  if [[ ! -x "$bin" ]]; then
-    echo "bench: binary is not executable: $bin" >&2
-    exit 1
-  fi
+  local pathfile="$root/artifacts/bench/bin-path.txt"
+  swift_release_bin "$root" "$root/artifacts/bench/build.log" "$pathfile"
+  bin="$(cat "$pathfile")"
 }
 
 wait_pid() {
@@ -142,6 +177,11 @@ run_many() {
   local app="$1"
   local fixtures="$2"
   local dest="$3"
+  if [[ "$quick" -eq 0 ]]; then
+    echo "bench: warmup suite (discarded)"
+    run_app "$app" "$dest/warmup.json" suite "$fixtures" 1260
+    rm -f "$dest/warmup.json" "$dest/warmup.json.log"
+  fi
   local i=1
   while [[ "$i" -le "$launch_runs" ]]; do
     echo "bench: launch ${i}/${launch_runs}"
@@ -274,13 +314,10 @@ cmd_ci() {
   git worktree add --detach "$bench_work" "$base_sha"
   python3 "$root/Scripts/bench_compare.py" overlay --repo "$bench_work"
   echo "bench: building base $base_sha"
-  local built base_bin
-  built="$(cd "$bench_work" && swift build -c release --product Quill -Xswiftc -strict-concurrency=complete --show-bin-path)"
-  base_bin="${built}/Quill"
-  if [[ ! -x "$base_bin" ]]; then
-    echo "bench: base binary is not executable: $base_bin" >&2
-    exit 1
-  fi
+  local base_bin pathfile
+  pathfile="$root/artifacts/bench/base-bin-path.txt"
+  swift_release_bin "$bench_work" "$root/artifacts/bench/base-build.log" "$pathfile"
+  base_bin="$(cat "$pathfile")"
   QUILL_BENCH_SHA="$base_sha"
   export QUILL_BENCH_SHA
   local base_runs="$root/artifacts/bench/base-runs"

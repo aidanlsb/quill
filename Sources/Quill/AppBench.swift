@@ -491,11 +491,10 @@ enum AppBench {
 
     private static func place(_ view: VimTextView, line: Int) {
         let index = contentLine(near: line, in: view)
-        let start = view.engine.buffer.lineStarts[index]
-        let end = view.engine.buffer.lineEnd(at: index)
-        var offset = start
-        if end >= start + 2 {
-            offset = start + 2
+        let range = view.engine.buffer.lineContentRange(at: index)
+        var offset = range.lowerBound
+        if range.count >= 2 {
+            offset = range.lowerBound + 2
         }
         view.engine.mode = .normal
         // Drop a half-parsed operator or search so the next sample starts clean.
@@ -510,9 +509,8 @@ enum AppBench {
         var index = min(max(0, line), count - 1)
         var step = 0
         while step < 40 {
-            let start = view.engine.buffer.lineStarts[index]
-            let end = view.engine.buffer.lineEnd(at: index)
-            if end - start >= 4 { return index }
+            let range = view.engine.buffer.lineContentRange(at: index)
+            if range.count >= 4 { return index }
             if index + 1 >= count { break }
             index += 1
             step += 1

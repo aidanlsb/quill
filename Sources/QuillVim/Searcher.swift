@@ -30,46 +30,54 @@ enum Searcher {
         forward: Bool,
         wrap: Bool
     ) -> Int? {
-        let hay = Array(folded(text, ignoreCase: ignoresCase(pattern)).utf16)
-        let needle = Array(folded(pattern, ignoreCase: ignoresCase(pattern)).utf16)
-        guard !needle.isEmpty, needle.count <= hay.count else { return nil }
+        let starts = literalMatches(in: text, pattern: pattern).map(\.lowerBound)
         if forward {
-            let start = min(max(0, from + 1), hay.count)
-            if let hit = scan(hay, needle, from: start, through: hay.count) { return hit }
-            if wrap, let hit = scan(hay, needle, from: 0, through: min(start, hay.count)) { return hit }
-        } else {
-            let before = min(max(0, from), hay.count)
-            if let hit = scanBackward(hay, needle, from: before, limit: 0) { return hit }
-            if wrap, let hit = scanBackward(hay, needle, from: hay.count, limit: before) { return hit }
+            if let hit = starts.first(where: { $0 > from }) { return hit }
+            return wrap ? starts.first : nil
         }
-        return nil
+        if let hit = starts.last(where: { $0 < from }) { return hit }
+        return wrap ? starts.last : nil
     }
 
-    private static func scan(_ hay: [UInt16], _ needle: [UInt16], from: Int, through end: Int) -> Int? {
-        var i = from
-        while i + needle.count <= end && i + needle.count <= hay.count {
-            if matches(hay, needle, at: i) { return i }
-            i += 1
+    /// Every place `pattern` occurs in `text` as UTF-16 ranges of `text`, overlapping
+    /// ones included, each starting and ending on a grapheme boundary. With smartcase
+    /// both sides are lowercased per grapheme; that can change UTF-16 lengths (`İ`
+    /// becomes `i̇`), so hits map back through the folded text's origins.
+    static func literalMatches(in text: String, pattern: String) -> [Range<Int>] {
+        let ignoreCase = ignoresCase(pattern)
+        let hay = Folded(text, ignoreCase: ignoreCase)
+        let needle = Folded(pattern, ignoreCase: ignoreCase).units
+        guard !needle.isEmpty, needle.count <= hay.units.count else { return [] }
+        var out: [Range<Int>] = []
+        for i in 0...(hay.units.count - needle.count) where hay.isBoundary[i] && hay.isBoundary[i + needle.count] {
+            if hay.units[i..<(i + needle.count)].elementsEqual(needle) {
+                out.append(hay.origin[i]..<hay.origin[i + needle.count])
+            }
         }
-        return nil
+        return out
     }
 
-    private static func scanBackward(_ hay: [UInt16], _ needle: [UInt16], from: Int, limit: Int) -> Int? {
-        var i = min(from, hay.count - needle.count + 1) - 1
-        while i >= limit {
-            if i >= 0, matches(hay, needle, at: i) { return i }
-            i -= 1
+    private struct Folded {
+        var units: [UInt16] = []
+        /// UTF-16 offset in the source of the grapheme each unit came from; one extra entry for the end.
+        var origin: [Int] = []
+        /// Whether a unit starts a grapheme; one extra `true` for the end.
+        var isBoundary: [Bool] = []
+
+        init(_ text: String, ignoreCase: Bool) {
+            var at = 0
+            for character in text {
+                let folded = ignoreCase ? character.lowercased() : String(character)
+                for (k, unit) in folded.utf16.enumerated() {
+                    units.append(unit)
+                    origin.append(at)
+                    isBoundary.append(k == 0)
+                }
+                at += character.utf16.count
+            }
+            origin.append(at)
+            isBoundary.append(true)
         }
-        return nil
-    }
-
-    private static func matches(_ hay: [UInt16], _ needle: [UInt16], at: Int) -> Bool {
-        for offset in 0..<needle.count where hay[at + offset] != needle[offset] { return false }
-        return true
-    }
-
-    private static func folded(_ text: String, ignoreCase: Bool) -> String {
-        ignoreCase ? text.lowercased() : text
     }
 
     private static func regexFind(

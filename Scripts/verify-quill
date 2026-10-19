@@ -61,6 +61,43 @@ mkdir -p "$root/artifacts/verify-quill"
 log="$root/artifacts/verify-quill/smoke.log"
 : > "$log"
 
+# A Swift trap leaves only "Trace/BPT trap" in the log. ReportCrash writes the
+# stack to an .ips file a few seconds later; print the faulting thread.
+print_crash_report() {
+  local since="$1"
+  local dir="$HOME/Library/Logs/DiagnosticReports"
+  local report=""
+  local i=0
+  while [[ "$i" -lt 20 ]]; do
+    report="$(find "$dir" -maxdepth 1 -name 'Quill*.ips' -newer "$since" 2>/dev/null | head -n 1 || true)"
+    if [[ -n "$report" ]]; then
+      break
+    fi
+    sleep 1
+    i=$((i + 1))
+  done
+  if [[ -z "$report" ]]; then
+    echo "verify-quill: no crash report in $dir" >&2
+    return 0
+  fi
+  cp "$report" "$root/artifacts/verify-quill/" 2>/dev/null || true
+  echo "verify-quill: crash report $report" >&2
+  python3 - "$report" >&2 <<'PY' || true
+import json, sys
+text = open(sys.argv[1]).read()
+body = json.loads(text[text.index("\n") + 1:])
+print("exception:", json.dumps(body.get("exception", {})))
+asi = body.get("asi")
+if asi:
+    print("asi:", json.dumps(asi))
+images = body.get("usedImages", [])
+thread = body.get("threads", [])[body.get("faultingThread", 0)]
+for n, frame in enumerate(thread.get("frames", [])[:40]):
+    image = images[frame.get("imageIndex", 0)].get("name", "?") if images else "?"
+    print("%2d %-24s %s +%s" % (n, image, frame.get("symbol", "?"), frame.get("symbolLocation", "?")))
+PY
+}
+
 QUILL_SMOKE=1 "$bin" >"$log" 2>&1 &
 pid=$!
 status=0
@@ -92,6 +129,7 @@ fi
 if [[ "$status" -ne 0 ]]; then
   echo "verify-quill: smoke failed (status $status). Log: $log" >&2
   cat "$log" >&2 || true
+  print_crash_report "$log"
   exit "$status"
 fi
 
@@ -142,6 +180,7 @@ fi
 if [[ "$perf_status" -ne 0 ]]; then
   echo "verify-quill: perf failed (status $perf_status). Log: $perf_log" >&2
   cat "$perf_log" >&2 || true
+  print_crash_report "$perf_log"
   exit "$perf_status"
 fi
 if ! grep -F -q "quill perf done" "$perf_log"; then
@@ -152,3 +191,205 @@ fi
 echo "verify-quill: perf"
 grep -F "quill perf " "$perf_log" || true
 echo "verify-quill: perf evidence $perf_log"
+
+# Installed-style `quill` against a bundle built from this binary.
+# Asserts an onscreen document window via CGWindowList (not Accessibility).
+check_cli_windows() {
+  local bin="$1"
+  local parent dest app_bin helper work note
+  # Resolved, so it matches the executable path ps reports: no "T//" from a
+  # TMPDIR with a trailing slash, and /private/var rather than /var.
+  parent="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/quill-cli.XXXXXX")" && pwd -P)"
+  dest="$parent/Quill.app"
+  app_bin="$dest/Contents/MacOS/Quill"
+  helper="$parent/onscreen-window"
+  work="$parent/work"
+  bundle_pids() {
+    ps -ax -o pid=,command= | awk -v needle="$app_bin" 'index($0, needle) { print $1 }'
+  }
+  cleanup_cli() {
+    local pid
+    local pids
+    pids="$(bundle_pids)"
+    for pid in $pids; do
+      kill "$pid" 2>/dev/null || true
+    done
+    sleep 0.3
+    pids="$(bundle_pids)"
+    for pid in $pids; do
+      kill -9 "$pid" 2>/dev/null || true
+    done
+    rm -rf "$parent"
+  }
+  trap cleanup_cli EXIT
+
+  mkdir -p "$dest/Contents/MacOS" "$dest/Contents/Resources" "$work/notes"
+  cp "$bin" "$app_bin"
+  cp "$root/Sources/Quill/Info.plist" "$dest/Contents/Info.plist"
+  chmod +x "$app_bin"
+  xattr -cr "$dest" 2>/dev/null || true
+  if command -v codesign >/dev/null 2>&1; then
+    codesign --force --sign - "$dest"
+  fi
+  local lsregister="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+  if [[ -x "$lsregister" ]]; then
+    "$lsregister" -f "$dest" >/dev/null 2>&1 || true
+  fi
+  swiftc -O -o "$helper" "$root/Scripts/onscreen-window.swift"
+
+  note="$work/README.md"
+  printf 'alpha\nbeta\n' > "$note"
+  mkdir -p "$work/notes"
+
+  quit_bundle() {
+    local pid
+    local pids
+    pids="$(bundle_pids)"
+    for pid in $pids; do
+      kill "$pid" 2>/dev/null || true
+    done
+    local i=0
+    while [[ "$i" -lt 20 ]]; do
+      pids="$(bundle_pids)"
+      if [[ -z "$pids" ]]; then
+        return 0
+      fi
+      sleep 0.25
+      i=$((i + 1))
+    done
+    for pid in $pids; do
+      kill -9 "$pid" 2>/dev/null || true
+    done
+    sleep 0.3
+  }
+
+  wait_for_window() {
+    local i=0 pid pids
+    while [[ "$i" -lt 30 ]]; do
+      pids="$(bundle_pids)"
+      for pid in $pids; do
+        if "$helper" "$pid"; then
+          echo "$pid"
+          return 0
+        fi
+      done
+      sleep 0.5
+      i=$((i + 1))
+    done
+    return 1
+  }
+
+  fail_windows() {
+    local label="$1"
+    echo "verify-quill: no onscreen window for $label" >&2
+    "$helper" --list >&2 || true
+    ps -ax -o pid=,command= | awk 'index($0, "Quill") { print }' >&2 || true
+    return 1
+  }
+
+  run_cold() {
+    local label="$1"
+    shift
+    quit_bundle
+    echo "verify-quill: cli cold $label"
+    if ! QUILL_APP="$dest" "$root/Scripts/quill" "$@"; then
+      echo "verify-quill: launcher failed for cold $label" >&2
+      return 1
+    fi
+    local pid
+    if ! pid="$(wait_for_window)"; then
+      fail_windows "cold $label"
+      return 1
+    fi
+    echo "verify-quill: cli cold $label window pid $pid"
+  }
+
+  run_warm() {
+    local label="$1"
+    shift
+    local before
+    before="$(bundle_pids | head -n 1 || true)"
+    echo "verify-quill: cli warm $label"
+    if ! QUILL_APP="$dest" "$root/Scripts/quill" "$@"; then
+      echo "verify-quill: launcher failed for warm $label" >&2
+      return 1
+    fi
+    local pid
+    if ! pid="$(wait_for_window)"; then
+      fail_windows "warm $label"
+      return 1
+    fi
+    if [[ -n "$before" ]] && kill -0 "$before" 2>/dev/null; then
+      if ! "$helper" "$before"; then
+        echo "verify-quill: warm $label hid pid $before" >&2
+        "$helper" --list >&2 || true
+        return 1
+      fi
+    fi
+    echo "verify-quill: cli warm $label window pid $pid"
+  }
+
+  run_wait() {
+    local label="$1"
+    local need="$2"
+    local launcher pid pids count ready i
+    echo "verify-quill: cli $label"
+    QUILL_APP="$dest" "$root/Scripts/quill" --wait "$note" &
+    launcher=$!
+    i=0
+    while [[ "$i" -lt 30 ]]; do
+      pids="$(bundle_pids)"
+      count=0
+      ready=0
+      for pid in $pids; do
+        count=$((count + 1))
+        if "$helper" "$pid"; then
+          ready=$((ready + 1))
+        fi
+      done
+      if [[ "$count" -ge "$need" && "$ready" -ge "$need" ]]; then
+        echo "verify-quill: cli $label windows $ready"
+        quit_bundle
+        wait "$launcher" 2>/dev/null || true
+        return 0
+      fi
+      sleep 0.5
+      i=$((i + 1))
+    done
+    kill "$launcher" 2>/dev/null || true
+    fail_windows "$label"
+    quit_bundle
+    wait "$launcher" 2>/dev/null || true
+    return 1
+  }
+
+  local status=0
+  run_cold "no-args" || status=1
+  if [[ "$status" -eq 0 ]]; then run_cold "file" "$note" || status=1; fi
+  if [[ "$status" -eq 0 ]]; then run_cold "dir" "$work/notes" || status=1; fi
+  if [[ "$status" -eq 0 ]]; then run_cold "plus" +4 "$note" || status=1; fi
+  if [[ "$status" -eq 0 ]]; then run_cold "line-col" "$note:2:1" || status=1; fi
+  if [[ "$status" -eq 0 ]]; then
+    quit_bundle
+    run_wait "cold --wait" 1 || status=1
+  fi
+  if [[ "$status" -eq 0 ]]; then
+    quit_bundle
+    run_cold "warm-base" || status=1
+  fi
+  if [[ "$status" -eq 0 ]]; then run_warm "file" "$note" || status=1; fi
+  if [[ "$status" -eq 0 ]]; then run_warm "dir" "$work/notes" || status=1; fi
+  if [[ "$status" -eq 0 ]]; then run_warm "plus" +4 "$note" || status=1; fi
+  if [[ "$status" -eq 0 ]]; then run_warm "line-col" "$note:2:1" || status=1; fi
+  if [[ "$status" -eq 0 ]]; then run_warm "no-args" || status=1; fi
+  if [[ "$status" -eq 0 ]]; then run_wait "warm --wait" 2 || status=1; fi
+
+  trap - EXIT
+  cleanup_cli
+  if [[ "$status" -ne 0 ]]; then
+    exit 1
+  fi
+  echo "verify-quill: cli windows passed"
+}
+
+check_cli_windows "$bin"

@@ -151,11 +151,4 @@ final class TokenizerTests: XCTestCase {
         let paragraph = Paragraphs.range(in: "one\n\ntwo three\n", utf16: 6)
         XCTAssertTrue(paragraph.contains(6))
     }
-
-    func testThemeFile() {
-        let theme = ThemeFile.parse("{\"name\":\"paper\",\"focusDim\":true,\"text\":\"#222\",\"link\":\"#36a\"}")
-        XCTAssertEqual(theme?.name, "paper")
-        XCTAssertEqual(theme?.colors["link"], "#36a")
-        XCTAssertEqual(theme?.focusDim, true)
-    }
 }

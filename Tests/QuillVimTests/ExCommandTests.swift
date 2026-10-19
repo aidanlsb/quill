@@ -38,7 +38,7 @@ final class ExCommandTests: XCTestCase {
         let all = engine.type(":%tableformat<CR>")
         XCTAssertEqual(
             all.actions,
-            [.formatTables(startLine: 0, endLine: engine.buffer.lineCount - 1, quiet: false)]
+            [.formatTables(startLine: 0, endLine: 2, quiet: false)]
         )
         let bad = engine.type(":TableFormat extra<CR>")
         XCTAssertTrue(bad.beep)

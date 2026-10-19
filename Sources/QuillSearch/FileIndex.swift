@@ -1,4 +1,5 @@
 import Foundation
+import QuillText
 
 public struct GrepHit: Equatable, Sendable {
     public var path: String
@@ -41,7 +42,7 @@ public struct IgnoreRules: Equatable, Sendable {
         var patterns: [String] = []
         func absorb(_ url: URL, prefix: String) {
             guard let data = try? String(contentsOf: url, encoding: .utf8) else { return }
-            for line in data.split(separator: "\n", omittingEmptySubsequences: false) {
+            for line in LineIndex.contents(of: data) {
                 var trimmed = line.trimmingCharacters(in: .whitespaces)
                 if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
                 if !prefix.isEmpty, !trimmed.hasPrefix("!") {
@@ -236,7 +237,7 @@ public enum ContentSearch {
         if query.isEmpty { return [] }
         var hits: [GrepHit] = []
         for file in files {
-            let lines = file.contents.split(separator: "\n", omittingEmptySubsequences: false)
+            let lines = LineIndex.contents(of: file.contents)
             for (idx, line) in lines.enumerated() {
                 if line.localizedCaseInsensitiveContains(query) {
                     let snippet = String(line).trimmingCharacters(in: .whitespaces)
@@ -287,7 +288,7 @@ public enum ContentSearch {
     /// `rg --vimgrep` lines are `path:line:column:text`. Paths are made relative to `root`.
     public static func parseVimgrep(_ text: String, root: String, limit: Int) -> [GrepHit] {
         var hits: [GrepHit] = []
-        for raw in text.split(separator: "\n", omittingEmptySubsequences: true) {
+        for raw in LineIndex.contents(of: text) where !raw.isEmpty {
             guard let hit = parseVimgrepLine(String(raw), root: root) else { continue }
             hits.append(hit)
             if hits.count >= limit { break }

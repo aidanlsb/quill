@@ -62,6 +62,26 @@ final class TableTests: XCTestCase {
         XCTAssertEqual(wide.trailingPad, 0)
     }
 
+    func testAlignedWidthIsTheWidestPaddedRow() {
+        let text = "| A | B |\n| - | - |\n| short | x |\n| " + String(repeating: "w", count: 40) + " | y |\n"
+        let block = MarkdownTables.blocks(in: text)[0]
+        let units = Array(text.utf16)
+        let widest = block.rows.map { row in
+            String(decoding: units[row.range], as: UTF16.self).count
+                + row.cells.reduce(0) { $0 + $1.leadingPad + $1.trailingPad }
+        }
+        XCTAssertEqual(block.alignedColumns, widest.max())
+        XCTAssertEqual(Set(widest).count, 1, "every padded row has the same width")
+        XCTAssertTrue(block.alignsWithin(columns: block.alignedColumns))
+        XCTAssertFalse(block.alignsWithin(columns: block.alignedColumns - 1))
+    }
+
+    func testAlignedWidthCountsWideCharactersAsTwoCells() {
+        let block = MarkdownTables.blocks(in: "| 日本 | b |\n| -- | - |\n| ab | c |\n")[0]
+        XCTAssertEqual(block.rows[2].cells[0].trailingPad, 2, "\" 日本 \" is 6 cells, \" ab \" is 4")
+        XCTAssertEqual(block.alignedColumns, 12, "the header row: 1 + 6 + 1 + 3 + 1")
+    }
+
     func testFormatPadsAndIsIdempotent() {
         let source = "| Name | Qty |\n| :--- | --: |\n| Ada Lovelace | 1 |\n| Linus | 12 |\n"
         let plan = MarkdownTables.plan(in: source, scope: .document, cursor: 0)

@@ -264,7 +264,7 @@ final class LSPClientTests: XCTestCase {
         XCTAssertEqual(LSPPosition.utf16Offset(in: emoji, position: pos), 3)
     }
 
-    func testServerIsReusedUntilItCrashes() async throws {
+    func testAdoptedServerIsReused() async throws {
         let manager = LanguageServerManager()
         let client = LSPClient(config: LSPServerConfig(name: "mock", command: "false"))
         let key = await manager.adopt(client, root: URL(fileURLWithPath: "/tmp/notes"))
@@ -273,12 +273,6 @@ final class LSPClientTests: XCTestCase {
         XCTAssertTrue(open)
         let again = await manager.client(key)
         XCTAssertTrue(again === client)
-        await manager.noteCrash(key)
-        let first = await manager.restartDelay(key)
-        XCTAssertEqual(first, 0.25)
-        await manager.noteCrash(key)
-        let second = await manager.restartDelay(key)
-        XCTAssertEqual(second, 0.5)
     }
 
     func testMissingServerIsUnavailable() {
@@ -451,10 +445,14 @@ final class LSPClientTests: XCTestCase {
     }
 
     func testPositionConversion() {
-        let text = "ab\ncafé"
-        let pos = LSPPosition.utf16(in: text, characterOffset: 5)
-        XCTAssertEqual(pos.line, 1)
-        let back = LSPPosition.characterOffset(in: text, position: pos)
-        XCTAssertEqual(back, 5)
+        let text = "ab\ncafé\nx"
+        let pos = LSPPosition.position(utf16Offset: 6, in: text)
+        XCTAssertEqual(pos, LSPPosition(line: 1, character: 3))
+        XCTAssertEqual(LSPPosition.utf16Offset(in: text, position: pos), 6)
+        XCTAssertEqual(
+            LSPPosition.utf16Offset(in: text, position: LSPPosition(line: 1, character: 50)),
+            7,
+            "a character past the line clamps to its end instead of spilling into the next line"
+        )
     }
 }

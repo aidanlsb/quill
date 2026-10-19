@@ -1,4 +1,5 @@
 import Foundation
+import QuillText
 
 /// One entry in a directory listing buffer. Directories are displayed with a trailing `/`.
 public struct DirEntry: Equatable, Sendable {
@@ -112,7 +113,7 @@ public enum DirectoryListing {
     }
 
     public static func parse(_ text: String) -> [ParsedDirLine] {
-        text.split(separator: "\n", omittingEmptySubsequences: false)
+        LineIndex.contents(of: text)
             .map { ParsedDirLine(String($0)) }
             .filter { !$0.name.isEmpty }
     }

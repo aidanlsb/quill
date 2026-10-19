@@ -6,6 +6,7 @@ import QuillFS
 import QuillLSP
 import QuillMarkdown
 import QuillSearch
+import QuillText
 import QuillVim
 import QuillWorkspace
 
@@ -29,7 +30,6 @@ final class AppModel {
     /// Editor mode and cursor to restore when the command palette closes.
     var paletteMode: Mode?
     var paletteCursor: Int?
-    /// QuillWorkspace has its own `CommandRegistry`; the palette uses QuillSearch's.
     let commands = QuillSearch.CommandRegistry()
     var pendingOps: [FSOperation] = []
     var showConfirm = false
@@ -56,7 +56,6 @@ final class AppModel {
     private var confirmOverwrite = false
     private var docVersion = 1
     private var sync = DocumentSync()
-    private var fsClipboard: [DirEntry] = []
     private var appearanceObserver: NSKeyValueObservation?
     private let servers = LanguageServerManager()
     private let searchSession = SearchSession()
@@ -65,7 +64,7 @@ final class AppModel {
     private var grepTask: Task<Void, Never>?
     private var hoverGeneration = 0
     private var lspURI: String?
-    private var pendingJumps: [String: (line: Int?, column: Int?)] = [:]
+    private var pendingJumps: [String: LaunchTarget] = [:]
     private var codeActions: [CodeAction] = []
     var pendingNavigation: PendingNavigation?
     var themeIdentity = 0
@@ -125,8 +124,6 @@ final class AppModel {
         )
     }
 
-    var modeName: String { engine.mode.displayName }
-
     func open(url: URL) {
         if let target = LaunchRequest.target(from: url) {
             openTarget(target)
@@ -144,13 +141,11 @@ final class AppModel {
     func openTarget(_ target: LaunchTarget) {
         let path = LaunchRequest.standardized(target.path)
         if LaunchRequest.sameFile(open: fileURL?.path, isDirectory: isDirectory, target: path) {
-            if let line = target.line {
-                jumpToLine(line, column: target.column)
-            }
+            jump(to: target)
             return
         }
         if target.line != nil {
-            pendingJumps[path] = (line: target.line, column: target.column)
+            pendingJumps[path] = target
         } else {
             pendingJumps.removeValue(forKey: path)
         }
@@ -348,7 +343,6 @@ final class AppModel {
             message = error.localizedDescription
             return
         }
-        fsClipboard.removeAll()
         pendingOps = []
         showConfirm = false
         if let url = fileURL, isDirectory { loadDirectory(url) }
@@ -436,7 +430,7 @@ final class AppModel {
 
     func goToDefinition() {
         if let url = fileURL, lspURI != nil {
-            let pos = LSPPosition.position(utf16Offset: engine.cursor, in: engine.text)
+            let pos = LSPPosition(engine.buffer.position(of: engine.cursor))
             let uri = url.absoluteString
             Task {
                 let clients = await serversForCurrentFile()
@@ -445,7 +439,8 @@ final class AppModel {
                         self.openTarget(LaunchTarget(
                             path: dest.path,
                             line: first.range.start.line + 1,
-                            column: first.range.start.character + 1
+                            column: first.range.start.character + 1,
+                            columnUnit: .utf16
                         ))
                         return
                     }
@@ -519,26 +514,34 @@ final class AppModel {
                 applyCodeAction(action)
             } else {
                 codeActions = []
-                openPickerPayload(item.payload)
+                openPickerPayload(item.payload, columnUnit: kind == .references ? .utf16 : .character)
             }
         }
     }
 
-    func openPickerPayload(_ payload: String) {
+    func openPickerPayload(_ payload: String, columnUnit: LaunchTarget.ColumnUnit = .character) {
         let split = LaunchRequest.splitLocation(payload)
-        openTarget(LaunchTarget(path: split.path, line: split.line, column: split.column))
+        openTarget(LaunchTarget(path: split.path, line: split.line, column: split.column, columnUnit: columnUnit))
     }
 
-    func jumpToLine(_ line: Int, column: Int? = nil) {
-        let index = max(0, line - 1)
-        guard index < engine.buffer.lineCount else { return }
-        let start = engine.buffer.lineStarts[index]
-        var offset = start
-        if let column, column > 1 {
-            offset = start + column - 1
+    private func jump(to target: LaunchTarget) {
+        guard let line = target.line else { return }
+        jumpToLine(line, column: target.column, unit: target.columnUnit)
+    }
+
+    /// `line` and `column` are 1-based; a line past the end goes to the last, as `vim +N` does.
+    /// A character column lands on that grapheme whatever its UTF-16 width; a UTF-16
+    /// column (from a language server) snaps to the grapheme holding that unit.
+    func jumpToLine(_ line: Int, column: Int? = nil, unit: LaunchTarget.ColumnUnit = .character) {
+        let index = min(max(0, line - 1), engine.buffer.lastLine)
+        let col = max(1, column ?? 1) - 1
+        let offset: Int
+        switch unit {
+        case .character:
+            offset = engine.buffer.offset(line: index, graphemeColumn: col)
+        case .utf16:
+            offset = engine.buffer.offset(of: TextPosition(line: index, utf16Column: col))
         }
-        let content = engine.buffer.lineContentRange(at: index)
-        if offset > content.upperBound { offset = content.upperBound }
         engine.moveCursor(to: offset)
         revision += 1
         pickerTick += 1
@@ -549,7 +552,7 @@ final class AppModel {
             message = "No language server"
             return
         }
-        let position = LSPPosition.position(utf16Offset: engine.cursor, in: engine.text)
+        let position = LSPPosition(engine.buffer.position(of: engine.cursor))
         let uri = url.absoluteString
         let text = engine.text
         Task {
@@ -591,15 +594,14 @@ final class AppModel {
             message = "No language server"
             return
         }
-        let text = engine.text
         let range: LSPRange
         if let selection = engine.visualSelection {
             range = LSPRange(
-                start: LSPPosition.position(utf16Offset: selection.lowerBound, in: text),
-                end: LSPPosition.position(utf16Offset: selection.upperBound, in: text)
+                start: LSPPosition(engine.buffer.position(of: selection.lowerBound)),
+                end: LSPPosition(engine.buffer.position(of: selection.upperBound))
             )
         } else {
-            let position = LSPPosition.position(utf16Offset: engine.cursor, in: text)
+            let position = LSPPosition(engine.buffer.position(of: engine.cursor))
             range = LSPRange(start: position, end: position)
         }
         let uri = url.absoluteString
@@ -639,8 +641,8 @@ final class AppModel {
 
     func nsDiagnosticRanges() -> [(NSRange, Int)] {
         diagnostics.map { diag in
-            let start = LSPPosition.utf16Offset(in: engine.text, position: diag.range.start)
-            let end = LSPPosition.utf16Offset(in: engine.text, position: diag.range.end)
+            let start = engine.buffer.offset(of: diag.range.start.textPosition)
+            let end = engine.buffer.offset(of: diag.range.end.textPosition)
             return (NSRange(location: start, length: max(0, end - start)), diag.severity)
         }
     }
@@ -746,37 +748,26 @@ final class AppModel {
 
     private func listingLines() -> [ListingLine] {
         var lines: [ListingLine] = []
-        var offset = 0
-        let text = engine.text
-        let parts = text.split(separator: "\n", omittingEmptySubsequences: false)
-        for raw in parts {
-            let line = String(raw)
+        for (line, anchor) in engine.buffer.directoryEntryLines() {
             let parsed = ParsedDirLine(line)
-            let end = offset + line.utf16.count
-            let anchor = engine.buffer.anchors(in: offset..<(end + 1)).first { anchor in
-                if case .directoryEntry = anchor.kind { return true }
-                return false
-            }
-            if !parsed.name.isEmpty {
-                if let anchor, case .directoryEntry(let path, _, let transfer) = anchor.kind {
-                    let kind: LineTransfer
-                    switch transfer {
-                    case .identity: kind = .identity
-                    case .move: kind = .move
-                    case .copy: kind = .copy
-                    }
-                    lines.append(ListingLine(
-                        name: parsed.name,
-                        isDirectory: parsed.isDirectory,
-                        entryID: anchor.id.raw,
-                        sourcePath: path,
-                        transfer: kind
-                    ))
-                } else {
-                    lines.append(ListingLine(name: parsed.name, isDirectory: parsed.isDirectory))
+            if parsed.name.isEmpty { continue }
+            if let anchor, case .directoryEntry(let path, _, let transfer) = anchor.kind {
+                let kind: LineTransfer
+                switch transfer {
+                case .identity: kind = .identity
+                case .move: kind = .move
+                case .copy: kind = .copy
                 }
+                lines.append(ListingLine(
+                    name: parsed.name,
+                    isDirectory: parsed.isDirectory,
+                    entryID: anchor.id.raw,
+                    sourcePath: path,
+                    transfer: kind
+                ))
+            } else {
+                lines.append(ListingLine(name: parsed.name, isDirectory: parsed.isDirectory))
             }
-            offset = end + 1
         }
         return lines
     }
@@ -932,7 +923,7 @@ final class AppModel {
         }
         hoverGeneration += 1
         let generation = hoverGeneration
-        let pos = LSPPosition.position(utf16Offset: engine.cursor, in: engine.text)
+        let pos = LSPPosition(engine.buffer.position(of: engine.cursor))
         let uri = url.absoluteString
         Task {
             let clients = await serversForCurrentFile()
@@ -950,17 +941,21 @@ final class AppModel {
 
     private func applyPendingJump(for url: URL) {
         let path = url.standardizedFileURL.path
-        guard let jump = pendingJumps.removeValue(forKey: path), let line = jump.line else { return }
-        jumpToLine(line, column: jump.column)
+        guard let target = pendingJumps.removeValue(forKey: path) else { return }
+        jump(to: target)
     }
 
     private func referencePreview(_ location: Location, currentURI: String, text: String) -> String {
         let same = location.uri == currentURI || location.fileURL?.path == fileURL?.path
         guard same else { return location.fileURL?.path ?? location.uri }
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        let lines = LineIndex(text)
         let line = location.range.start.line
-        guard line >= 0, line < lines.count else { return "" }
-        return String(lines[line])
+        guard line >= 0, line < lines.lineCount else { return "" }
+        let content = lines.line(line).content
+        let units = text.utf16
+        let lower = units.index(units.startIndex, offsetBy: content.lowerBound)
+        let upper = units.index(lower, offsetBy: content.count)
+        return String(units[lower..<upper]) ?? ""
     }
 
     private func applyCodeAction(_ action: CodeAction) {
