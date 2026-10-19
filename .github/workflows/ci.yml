@@ -129,6 +129,17 @@ jobs:
             base=main
           fi
           pr="${{ github.event.pull_request.number }}"
+          # A push measures this commit against main's tip. If main has moved
+          # past the commit, that comparison is a different editor, not the
+          # bench. The pull_request job checks out the merge and is the one
+          # that compares equal trees.
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            git fetch --no-tags origin "refs/heads/${base}:refs/remotes/origin/${base}"
+            if ! git merge-base --is-ancestor "origin/${base}" HEAD; then
+              echo "bench: origin/${base} is not in this commit. The pull_request job compares the merge."
+              exit 0
+            fi
+          fi
           if [[ -n "$pr" ]]; then
             Scripts/bench.sh ci --bin "$bin" --base-ref "$base" --pr "$pr"
           else

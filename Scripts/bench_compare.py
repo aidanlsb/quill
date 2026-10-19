@@ -66,7 +66,9 @@ FLOORS = {
     "pickerSgMs": (140.0, 140.0, 140.0),
     "pickerSgColdMs": (2000.0, 2000.0, 2000.0),
     "directoryMs": (9.0, 12.0, 20.0),
-    "directoryColdMs": (8.0, 20.0, 40.0),
+    # Cold directory open on identical trees (run 39203003991) moved by 17ms,
+    # with a per-run spread of about 15ms. Three times that spread is 45ms.
+    "directoryColdMs": (50.0, 50.0, 50.0),
     "rssSteadyMb": (25.0, 40.0, 60.0),
     "rssPeakMb": (40.0, 80.0, 120.0),
 }

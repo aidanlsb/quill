@@ -67,7 +67,7 @@ The numbers below are from run `39198744980` on `macos-26` (host `VirtualMac2,1`
 | `k`, `G` / `gg`, search, `dd` / undo / redo | 1.5–14ms | Up to 4.6ms. The first `G` stayed at 20ms; this run's first `G` only spread by 0.1ms. |
 | File picker | 80ms steady, 160ms cold, 1.6ms per key | 25ms, 52ms, and 0.5ms. |
 | Grep picker | 140ms steady, 2000ms cold | 44ms steady. The cold sample spread by 649ms (233–881ms) because the first process pays to read the fixture. |
-| Directory | 9ms steady, 8ms cold | 2.7ms and 1.4ms. |
+| Directory | 9ms steady, 50ms cold | Steady spread was 2.7ms. The cold open on identical trees in run 39203003991 moved by 17ms (spread about 15ms), so the cold floor is three times that spread. |
 | RSS | 25MB steady, 40MB peak | 1.4MB and 5.7MB. The older floors already cleared that. |
 
 The job summary and a PR comment (marker `<!-- quill-bench -->`) print the table and the run-to-run spread. Copy that table into the pull request description under `## Bench`.
