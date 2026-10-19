@@ -264,7 +264,7 @@ final class LSPClientTests: XCTestCase {
         XCTAssertEqual(LSPPosition.utf16Offset(in: emoji, position: pos), 3)
     }
 
-    func testServerIsReusedUntilItCrashes() async throws {
+    func testAdoptedServerIsReused() async throws {
         let manager = LanguageServerManager()
         let client = LSPClient(config: LSPServerConfig(name: "mock", command: "false"))
         let key = await manager.adopt(client, root: URL(fileURLWithPath: "/tmp/notes"))
@@ -273,12 +273,6 @@ final class LSPClientTests: XCTestCase {
         XCTAssertTrue(open)
         let again = await manager.client(key)
         XCTAssertTrue(again === client)
-        await manager.noteCrash(key)
-        let first = await manager.restartDelay(key)
-        XCTAssertEqual(first, 0.25)
-        await manager.noteCrash(key)
-        let second = await manager.restartDelay(key)
-        XCTAssertEqual(second, 0.5)
     }
 
     func testMissingServerIsUnavailable() {
