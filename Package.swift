@@ -8,6 +8,7 @@ let package = Package(
         .macOS(.v14),
     ],
     products: [
+        .library(name: "QuillText", targets: ["QuillText"]),
         .library(name: "QuillVim", targets: ["QuillVim"]),
         .library(name: "QuillLSP", targets: ["QuillLSP"]),
         .library(name: "QuillFS", targets: ["QuillFS"]),
@@ -18,27 +19,37 @@ let package = Package(
     ],
     targets: [
         .target(
+            name: "QuillText",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .target(
             name: "QuillVim",
+            dependencies: ["QuillText"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .target(
             name: "QuillLSP",
+            dependencies: ["QuillText"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .target(
             name: "QuillFS",
+            dependencies: ["QuillText"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .target(
             name: "QuillSearch",
+            dependencies: ["QuillText"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .target(
             name: "QuillMarkdown",
+            dependencies: ["QuillText"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .target(
             name: "QuillWorkspace",
+            dependencies: ["QuillText"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .target(
@@ -46,8 +57,13 @@ let package = Package(
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(
+            name: "QuillTextTests",
+            dependencies: ["QuillText"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .testTarget(
             name: "QuillVimTests",
-            dependencies: ["QuillVim"],
+            dependencies: ["QuillVim", "QuillText"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(
@@ -90,7 +106,7 @@ package.products.append(
 package.targets.append(
     .executableTarget(
         name: "Quill",
-        dependencies: ["QuillVim", "QuillLSP", "QuillFS", "QuillSearch", "QuillMarkdown", "QuillWorkspace", "QuillTOML"],
+        dependencies: ["QuillText", "QuillVim", "QuillLSP", "QuillFS", "QuillSearch", "QuillMarkdown", "QuillWorkspace", "QuillTOML"],
         path: "Sources/Quill",
         exclude: ["Info.plist"],
         swiftSettings: [.swiftLanguageMode(.v6)]

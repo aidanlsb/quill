@@ -1,3 +1,5 @@
+import QuillText
+
 /// GitHub-flavored tables as plain-text blocks. Vim motions keep using the
 /// characters in the buffer. `blocks` describes how to paint a table.
 /// `plan` rewrites those characters so the pipes line up.
@@ -79,12 +81,28 @@ public struct TableBlock: Equatable, Sendable {
     public var indent: String
     public var columns: [TableColumn]
     public var rows: [TableRow]
+    /// Display cells in the widest row once every cell is padded to its column.
+    public var alignedColumns: Int
 
-    public init(range: Range<Int>, indent: String, columns: [TableColumn], rows: [TableRow]) {
+    public init(
+        range: Range<Int>,
+        indent: String,
+        columns: [TableColumn],
+        rows: [TableRow],
+        alignedColumns: Int = 0
+    ) {
         self.range = range
         self.indent = indent
         self.columns = columns
         self.rows = rows
+        self.alignedColumns = alignedColumns
+    }
+
+    /// Padding a cell is drawn as extra advance on one character, and a line
+    /// cannot break inside a character. A padded table wider than the column
+    /// would draw past it, so it is shown as typed and its rows wrap instead.
+    public func alignsWithin(columns available: Int) -> Bool {
+        alignedColumns <= available
     }
 }
 
@@ -240,6 +258,7 @@ private struct RawRow {
     var cells: [RawCell]
     var pipes: [Range<Int>]
     var specs: [TableColumn]?
+    var columns: Int
 }
 
 private func blockMask(lines: [LineSplit.Line], text: String) -> [Bool] {
@@ -302,7 +321,9 @@ private func makeBlock(
     }
     var tableRows: [TableRow] = []
     tableRows.reserveCapacity(rows.count)
+    var alignedColumns = 0
     for (raw, role) in rows {
+        var padded = raw.columns
         var cells: [TableCell] = []
         cells.reserveCapacity(raw.cells.count)
         for (index, cell) in raw.cells.enumerated() {
@@ -323,6 +344,7 @@ private func makeBlock(
                 leading += trailing
                 trailing = 0
             }
+            padded += leading + trailing
             cells.append(TableCell(
                 raw: cell.raw,
                 text: cell.text,
@@ -333,13 +355,15 @@ private func makeBlock(
                 trailingPad: trailing
             ))
         }
+        alignedColumns = max(alignedColumns, padded)
         tableRows.append(TableRow(role: role, range: raw.range, cells: cells, pipes: raw.pipes))
     }
     return TableBlock(
         range: lines[first].start..<lines[last].end,
         indent: rows.first?.0.indent ?? "",
         columns: columns,
-        rows: tableRows
+        rows: tableRows,
+        alignedColumns: alignedColumns
     )
 }
 
@@ -541,7 +565,8 @@ private func parseContent(_ source: String, lineStart: Int) -> RawRow? {
         range: lineStart..<contentEnd,
         cells: cells,
         pipes: pipes,
-        specs: specs
+        specs: specs,
+        columns: DisplayWidth.columns(of: source)
     )
 }
 
@@ -579,7 +604,7 @@ private func makeCell(source: String, rawLocal: Range<Int>, pipe: Int?, lineStar
         text: shift(textLocal, by: lineStart),
         trimmed: trimmed,
         precedingPipe: pipe.map { lineStart + $0 },
-        columns: rawString.count
+        columns: DisplayWidth.columns(of: rawString)
     )
 }
 

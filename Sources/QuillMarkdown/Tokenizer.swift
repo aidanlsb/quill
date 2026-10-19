@@ -1,3 +1,5 @@
+import QuillText
+
 /// Semantic markdown spans. The app maps these onto a theme; this module stays
 /// free of AppKit and Foundation so styling can be tested on Linux.
 public enum MarkdownToken: Equatable, Sendable {
@@ -588,43 +590,23 @@ enum LineSplit {
         var isBlank: Bool
     }
 
+    /// Markdown lines: `LineIndex` lines up to its `lastLine`, so a final `\n`
+    /// ends the last line instead of adding an empty one. `text` excludes the `\n`.
     static func lines(in text: String) -> [Line] {
-        if text.isEmpty { return [] }
-        var result: [Line] = []
-        var startIndex = text.startIndex
-        var startUTF16 = 0
-        var index = text.startIndex
-        while index < text.endIndex {
-            if text[index] == "\n" {
-                let slice = text[startIndex..<index]
-                let line = String(slice)
-                let endUTF16 = startUTF16 + line.utf16.count + 1
-                result.append(Line(text: line, start: startUTF16, end: endUTF16, isBlank: blank(line)))
-                startUTF16 = endUTF16
-                index = text.index(after: index)
-                startIndex = index
-                continue
-            }
-            index = text.index(after: index)
-        }
-        if startIndex < text.endIndex {
-            let line = String(text[startIndex..<text.endIndex])
-            result.append(Line(
-                text: line,
-                start: startUTF16,
-                end: startUTF16 + line.utf16.count,
-                isBlank: blank(line)
-            ))
-        }
-        return result
+        var cursor = Cursor(text)
+        return bounds(in: text).map { materialize(text, $0, cursor: &cursor) }
     }
 
     struct Bounds {
         var start: Int
+        /// Offset of the line's `\n`, or `end` when it has none.
+        var contentEnd: Int
         var end: Int
         var isBlank: Bool
     }
 
+    /// Walks forward through `text` in UTF-16 units, so a slice never stops inside
+    /// a grapheme that straddles a line break.
     struct Cursor {
         var index: String.Index
         var utf16: Int
@@ -635,50 +617,35 @@ enum LineSplit {
         }
 
         mutating func slice(_ text: String, start: Int, end: Int) -> String {
-            while utf16 < start, index < text.endIndex {
-                utf16 += text[index].utf16.count
-                index = text.index(after: index)
-            }
-            let begin = index
-            var cursor = index
-            var pos = utf16
-            while pos < end, cursor < text.endIndex {
-                pos += text[cursor].utf16.count
-                cursor = text.index(after: cursor)
-            }
-            index = cursor
-            utf16 = pos
-            return String(text[begin..<cursor])
+            let units = text.utf16
+            let begin = units.index(index, offsetBy: start - utf16)
+            let finish = units.index(begin, offsetBy: end - start)
+            index = finish
+            utf16 = end
+            return String(text[begin..<finish])
         }
     }
 
     static func bounds(in text: String) -> [Bounds] {
         if text.isEmpty { return [] }
-        var result: [Bounds] = []
-        var lineStart = 0
-        var utf16 = 0
-        var lineBlank = true
-        for character in text {
-            if character == "\n" {
-                let end = utf16 + 1
-                result.append(Bounds(start: lineStart, end: end, isBlank: lineBlank))
-                utf16 = end
-                lineStart = end
-                lineBlank = true
-                continue
+        let index = LineIndex(text)
+        var units = text.utf16.makeIterator()
+        return (0...index.lastLine).map { number in
+            let line = index.line(number)
+            var isBlank = true
+            for _ in line.start..<line.contentEnd {
+                let unit = units.next()
+                if unit != 32, unit != 9 { isBlank = false }
             }
-            if character != " ", character != "\t" { lineBlank = false }
-            utf16 += character.utf16.count
+            if line.hasNewline { _ = units.next() }
+            return Bounds(start: line.start, contentEnd: line.contentEnd, end: line.end, isBlank: isBlank)
         }
-        if lineStart < utf16 {
-            result.append(Bounds(start: lineStart, end: utf16, isBlank: lineBlank))
-        }
-        return result
     }
 
     static func materialize(_ text: String, _ bounds: Bounds, cursor: inout Cursor) -> Line {
-        let raw = cursor.slice(text, start: bounds.start, end: bounds.end)
-        let content = raw.hasSuffix("\n") ? String(raw.dropLast()) : raw
+        let content = cursor.slice(text, start: bounds.start, end: bounds.contentEnd)
+        cursor.utf16 = bounds.end
+        cursor.index = text.utf16.index(cursor.index, offsetBy: bounds.end - bounds.contentEnd)
         return Line(text: content, start: bounds.start, end: bounds.end, isBlank: bounds.isBlank)
     }
 

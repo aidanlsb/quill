@@ -9,13 +9,16 @@ extension MarkdownStyler {
         focus: Bool,
         focusRange: Range<Int>,
         spans: [TokenSpan],
-        tables: [TableBlock]
+        tables: [TableBlock],
+        columnWidth: CGFloat?
     ) {
         let length = storage.length
         guard length > 0, !tables.isEmpty else { return }
         let advance = monoAdvance(theme.monoFont)
         let headerFont = theme.tableHeaderFont()
+        let fitColumns = columnWidth.map { Self.fitColumns(width: $0, advance: advance) }
         for block in tables {
+            let aligned = fitColumns.map { block.alignsWithin(columns: $0) } ?? true
             for row in block.rows {
                 let content = nsRange(row.range, length: length)
                 guard content.length > 0, NSIntersectionRange(content, limit).length > 0 else { continue }
@@ -26,6 +29,7 @@ extension MarkdownStyler {
                     theme: theme,
                     storage: storage,
                     dimmed: dimmed,
+                    aligned: aligned,
                     advance: advance,
                     headerFont: headerFont,
                     spans: spans,
@@ -41,6 +45,7 @@ extension MarkdownStyler {
         theme: QuillTheme,
         storage: NSTextStorage,
         dimmed: Bool,
+        aligned: Bool,
         advance: CGFloat,
         headerFont: NSFont,
         spans: [TokenSpan],
@@ -74,7 +79,7 @@ extension MarkdownStyler {
                 storage.addAttribute(.font, value: headerFont, range: range)
             }
         }
-        for cell in row.cells {
+        for cell in row.cells where aligned {
             if cell.leadingPad > 0, let pipe = cell.precedingPipe {
                 let range = nsRange(pipe..<(pipe + 1), length: length)
                 guard range.length == 1 else { continue }
@@ -118,7 +123,12 @@ extension MarkdownStyler {
         return NSRange(location: content.location, length: content.length + 1)
     }
 
-    private static func monoAdvance(_ font: NSFont) -> CGFloat {
+    /// Mono cells that fit in `width`, with one spare for the semibold header.
+    static func fitColumns(width: CGFloat, advance: CGFloat) -> Int {
+        max(0, Int(floor(width / max(advance, 1))) - 1)
+    }
+
+    static func monoAdvance(_ font: NSFont) -> CGFloat {
         let width = ("0" as NSString).size(withAttributes: [.font: font]).width
         return max(width, 1)
     }

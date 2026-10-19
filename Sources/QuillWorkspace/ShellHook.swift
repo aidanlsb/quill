@@ -1,4 +1,5 @@
 import Foundation
+import QuillText
 
 /// What a configured shell command asked Quill to do with its output.
 public enum HookResult: Equatable, Sendable {
@@ -22,7 +23,7 @@ public enum ShellHook {
     }
 
     private static func lastNonEmptyLine(_ text: String) -> String? {
-        let lines = text.split(whereSeparator: \.isNewline).map {
+        let lines = LineIndex.contents(of: text).map {
             $0.trimmingCharacters(in: .whitespaces)
         }
         var index = lines.count

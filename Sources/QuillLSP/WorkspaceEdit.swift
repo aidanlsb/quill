@@ -1,4 +1,5 @@
 import Foundation
+import QuillText
 
 public struct LSPTextEdit: Equatable, Sendable {
     public var range: LSPRange
@@ -76,9 +77,10 @@ public struct WorkspaceEdit: Equatable, Sendable {
                 collected.append(contentsOf: edits)
             }
         }
+        let lines = LineIndex(text)
         let mapped = collected.map { edit -> BufferEdit in
-            let start = LSPPosition.utf16Offset(in: text, position: edit.range.start)
-            let end = LSPPosition.utf16Offset(in: text, position: edit.range.end)
+            let start = lines.offset(of: edit.range.start.textPosition)
+            let end = lines.offset(of: edit.range.end.textPosition)
             let lower = min(start, end)
             let upper = max(start, end)
             return BufferEdit(range: lower..<upper, replacement: edit.newText)

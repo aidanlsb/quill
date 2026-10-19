@@ -12,6 +12,12 @@ set -euo pipefail
 resolve_app() {
   local here
   here="$(cd "$(dirname "$0")" && pwd)"
+  # verify-quill points this at the bundle it just built. An installed copy
+  # must not steal that check.
+  if [[ -n "${QUILL_APP:-}" ]]; then
+    echo "$QUILL_APP"
+    return
+  fi
   if [[ -d "/Applications/Quill.app" ]]; then
     echo "/Applications/Quill.app"
   elif [[ -d "$here/../dist/Quill.app" ]]; then

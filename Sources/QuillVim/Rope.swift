@@ -1,7 +1,7 @@
 /// Weight-balanced implicit treap of ~1 KB chunks.
 /// Offsets are UTF-16 code units, matching NSString, TextKit, and LSP.
-/// Each node summarizes the UTF-16 length and newline count of its subtree,
-/// so index, line, and edit operations are O(log n).
+/// Each node summarizes the UTF-16 length of its subtree, so index and edit
+/// operations are O(log n). Lines live in `LineIndex`, not here.
 public struct Rope: Equatable {
     static let chunkUTF16 = 1024
 
@@ -11,9 +11,7 @@ public struct Rope: Equatable {
         var right: Node?
         var text: String
         var utf16: Int = 0
-        var newlines: Int = 0
         var pieceUTF16: Int = 0
-        var pieceNewlines: Int = 0
 
         init(text: String, priority: UInt64) {
             self.text = text
@@ -23,11 +21,7 @@ public struct Rope: Equatable {
 
         func recompute() {
             pieceUTF16 = text.utf16.count
-            var nl = 0
-            for unit in text.utf16 where unit == 10 { nl += 1 }
-            pieceNewlines = nl
             utf16 = (left?.utf16 ?? 0) + pieceUTF16 + (right?.utf16 ?? 0)
-            newlines = (left?.newlines ?? 0) + pieceNewlines + (right?.newlines ?? 0)
         }
 
         func deepCopy() -> Node {
@@ -63,7 +57,6 @@ public struct Rope: Equatable {
     }
 
     public var utf16Count: Int { storage.root?.utf16 ?? 0 }
-    public var newlineCount: Int { storage.root?.newlines ?? 0 }
     public var isEmpty: Bool { utf16Count == 0 }
 
     public var content: String {

@@ -451,10 +451,14 @@ final class LSPClientTests: XCTestCase {
     }
 
     func testPositionConversion() {
-        let text = "ab\ncafé"
-        let pos = LSPPosition.utf16(in: text, characterOffset: 5)
-        XCTAssertEqual(pos.line, 1)
-        let back = LSPPosition.characterOffset(in: text, position: pos)
-        XCTAssertEqual(back, 5)
+        let text = "ab\ncafé\nx"
+        let pos = LSPPosition.position(utf16Offset: 6, in: text)
+        XCTAssertEqual(pos, LSPPosition(line: 1, character: 3))
+        XCTAssertEqual(LSPPosition.utf16Offset(in: text, position: pos), 6)
+        XCTAssertEqual(
+            LSPPosition.utf16Offset(in: text, position: LSPPosition(line: 1, character: 50)),
+            7,
+            "a character past the line clamps to its end instead of spilling into the next line"
+        )
     }
 }

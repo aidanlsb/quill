@@ -1,4 +1,5 @@
 import Foundation
+import QuillText
 
 public enum LineEnding: Equatable, Sendable {
     case lf
@@ -70,7 +71,7 @@ public enum TextCodec {
         guard let text = String(data: data, encoding: .utf8) else {
             throw Failure.invalidUTF8
         }
-        return Decoded(text: text.replacingOccurrences(of: "\r\n", with: "\n"), ending: ending(of: text))
+        return Decoded(text: LineIndex.normalizingNewlines(text), ending: ending(of: text))
     }
 
     public static func encode(_ text: String, ending: LineEnding) -> Data {
