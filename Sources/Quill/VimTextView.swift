@@ -21,24 +21,35 @@ final class TextKit2Layout: ScreenLayout, @unchecked Sendable {
         }
     }
 
-    /// Document ranges of the line fragments of the paragraph that starts at
-    /// `line.start`. `characterRange` is relative to its layout fragment.
-    /// `ScreenModel` clips these to the line and rejects anything that does not
-    /// tile it, so a stale or partial layout degrades to one row, never a jump.
+    /// Document ranges of the line fragments of `line`. `characterRange` is
+    /// relative to its layout fragment. A buffer line ends only at `\n`, but TextKit
+    /// also starts a paragraph at U+2029, so one buffer line can span several layout
+    /// fragments; all of them up to `contentEnd` are read. `ScreenModel` clips these
+    /// to the line and rejects anything that does not tile it, so a stale or partial
+    /// layout degrades to one row, never a jump.
     private func rows(of line: BufferLine, in buffer: TextBuffer) -> [Range<Int>]? {
         guard !line.isEmpty, viewMatches(buffer), let tv = textView, let lm = tv.textLayoutManager else { return nil }
-        ensureLayout(at: line.start, layout: lm)
         let doc = lm.documentRange.location
-        guard let location = lm.location(doc, offsetBy: line.start),
-              let fragment = lm.textLayoutFragment(for: location) else { return nil }
-        let fragmentStart = lm.offset(from: doc, to: fragment.rangeInElement.location)
-        guard fragmentStart != NSNotFound else { return nil }
-        return fragment.textLineFragments.compactMap { row in
-            let range = row.characterRange
-            guard range.location != NSNotFound, range.length > 0 else { return nil }
-            let start = fragmentStart + range.location
-            return start..<(start + range.length)
+        var rows: [Range<Int>] = []
+        var at = line.start
+        while at < line.contentEnd {
+            ensureLayout(at: at, layout: lm)
+            guard let location = lm.location(doc, offsetBy: at),
+                  let fragment = lm.textLayoutFragment(for: location) else { return nil }
+            let fragmentStart = lm.offset(from: doc, to: fragment.rangeInElement.location)
+            let fragmentEnd = lm.offset(from: doc, to: fragment.rangeInElement.endLocation)
+            guard fragmentStart != NSNotFound, fragmentEnd != NSNotFound, fragmentStart <= at, fragmentEnd > at else {
+                return rows.isEmpty ? nil : rows
+            }
+            for row in fragment.textLineFragments {
+                let range = row.characterRange
+                guard range.location != NSNotFound, range.length > 0 else { continue }
+                let start = fragmentStart + range.location
+                rows.append(start..<(start + range.length))
+            }
+            at = fragmentEnd
         }
+        return rows
     }
 
     /// Screen rows belong to the view only while it still holds this buffer.
@@ -1028,7 +1039,7 @@ final class VimTextView: NSTextView {
         guard index >= 0, index < ns.length else { return nil }
         let range = ns.rangeOfComposedCharacterSequence(at: index)
         let chunk = ns.substring(with: range)
-        if chunk == "\n" || chunk == "\r" || chunk == "\t" || chunk == " " { return nil }
+        if chunk == "\n" || chunk == "\t" || chunk == " " { return nil }
         return chunk
     }
 
@@ -1125,7 +1136,7 @@ final class VimTextView: NSTextView {
             if length > 0 {
                 let previous = length - 1
                 let unit = ns.character(at: previous)
-                if unit != 10 && unit != 13 {
+                if unit != LineIndex.newline {
                     return (storage.attribute(.font, at: previous, effectiveRange: nil) as? NSFont) ?? fallback
                 }
             }
@@ -1133,10 +1144,9 @@ final class VimTextView: NSTextView {
         }
         var probe = min(max(0, index), length - 1)
         let unit = ns.character(at: probe)
-        if (unit == 10 || unit == 13), probe > 0 {
+        if unit == LineIndex.newline, probe > 0 {
             let previous = probe - 1
-            let prev = ns.character(at: previous)
-            if prev != 10 && prev != 13 {
+            if ns.character(at: previous) != LineIndex.newline {
                 probe = previous
             }
         }
@@ -1155,7 +1165,7 @@ final class VimTextView: NSTextView {
         if index < ns.length {
             let range = ns.rangeOfComposedCharacterSequence(at: index)
             let chunk = ns.substring(with: range)
-            if chunk != "\n", chunk != "\r", chunk != "\t" {
+            if chunk != "\n", chunk != "\t" {
                 let width = (chunk as NSString).size(withAttributes: [.font: font]).width
                 if width >= 0.5 { return ceil(width) }
             }
@@ -1276,8 +1286,7 @@ final class VimTextView: NSTextView {
         let length = ns.length
         guard length > 0 else { return nil }
         func isNewline(_ at: Int) -> Bool {
-            let unit = ns.character(at: at)
-            return unit == 10 || unit == 13
+            ns.character(at: at) == LineIndex.newline
         }
         if index < length, !isNewline(index) {
             return segment(ns.rangeOfComposedCharacterSequence(at: index), layout: lm).map { ($0.frame.minX, $0.baseline) }

@@ -2,14 +2,23 @@ import Foundation
 
 /// A file the launcher asked Quill to open, with an optional 1-based cursor.
 public struct LaunchTarget: Equatable, Sendable {
+    /// What `column` counts. People and `file:line:col` tools count characters;
+    /// language servers count UTF-16 units.
+    public enum ColumnUnit: Equatable, Sendable {
+        case character
+        case utf16
+    }
+
     public var path: String
     public var line: Int?
     public var column: Int?
+    public var columnUnit: ColumnUnit
 
-    public init(path: String, line: Int? = nil, column: Int? = nil) {
+    public init(path: String, line: Int? = nil, column: Int? = nil, columnUnit: ColumnUnit = .character) {
         self.path = path
         self.line = line
         self.column = column
+        self.columnUnit = columnUnit
     }
 }
 

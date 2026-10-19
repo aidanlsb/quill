@@ -1,5 +1,6 @@
 import AppKit
 import QuillFS
+import QuillText
 import QuillVim
 
 /// One buffer line paired with the directory anchor that save will see.
@@ -94,36 +95,25 @@ enum DirectoryStyleBuilder {
 
     @MainActor
     static func lines(from buffer: TextBuffer) -> [DirectoryBufferLine] {
-        var lines: [DirectoryBufferLine] = []
-        var offset = 0
-        let parts = buffer.text.split(separator: "\n", omittingEmptySubsequences: false)
-        for raw in parts {
-            let line = String(raw)
-            let end = offset + line.utf16.count
-            let anchor = buffer.anchors(in: offset..<(end + 1)).first { anchor in
-                if case .directoryEntry = anchor.kind { return true }
-                return false
-            }
+        buffer.directoryEntryLines().map { entry in
+            let (line, anchor) = entry
             if let anchor, case .directoryEntry(let path, let isDir, let transfer) = anchor.kind {
-                lines.append(DirectoryBufferLine(
+                return DirectoryBufferLine(
                     text: line,
                     anchorID: anchor.id.raw,
                     sourcePath: path,
                     sourceIsDirectory: isDir,
                     transfer: transfer
-                ))
-            } else {
-                lines.append(DirectoryBufferLine(
-                    text: line,
-                    anchorID: nil,
-                    sourcePath: nil,
-                    sourceIsDirectory: false,
-                    transfer: nil
-                ))
+                )
             }
-            offset = end + 1
+            return DirectoryBufferLine(
+                text: line,
+                anchorID: nil,
+                sourcePath: nil,
+                sourceIsDirectory: false,
+                transfer: nil
+            )
         }
-        return lines
     }
 
     static func label(for mark: DirectoryMark) -> String? {
@@ -201,24 +191,13 @@ enum DirectoryStyler {
         if full.length > 0 {
             storage.setAttributes(attributes(theme), range: full)
         }
-        var lineIndex = 0
-        var start = 0
-        while start <= ns.length {
-            let newline = ns.rangeOfCharacter(
-                from: .newlines,
-                options: [],
-                range: NSRange(location: start, length: ns.length - start)
-            )
-            let end = newline.location == NSNotFound ? ns.length : newline.location
-            let range = NSRange(location: start, length: max(0, end - start))
-            if lineIndex < style.lines.count, range.length > 0 {
-                let line = style.lines[lineIndex]
-                storage.addAttribute(.font, value: theme.directoryFont, range: range)
-                storage.addAttribute(.foregroundColor, value: foreground(line, theme: theme), range: range)
-            }
-            lineIndex += 1
-            if newline.location == NSNotFound { break }
-            start = end + max(newline.length, 1)
+        let lines = LineIndex(storage.string)
+        for (index, line) in style.lines.enumerated() where index < lines.lineCount {
+            let content = lines.line(index).content
+            if content.isEmpty { continue }
+            let range = NSRange(location: content.lowerBound, length: content.count)
+            storage.addAttribute(.font, value: theme.directoryFont, range: range)
+            storage.addAttribute(.foregroundColor, value: foreground(line, theme: theme), range: range)
         }
         storage.endEditing()
     }

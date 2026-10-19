@@ -61,7 +61,7 @@ final class AppModel {
     private var grepTask: Task<Void, Never>?
     private var hoverGeneration = 0
     private var lspURI: String?
-    private var pendingJumps: [String: (line: Int?, column: Int?)] = [:]
+    private var pendingJumps: [String: LaunchTarget] = [:]
     private var codeActions: [CodeAction] = []
     var pendingNavigation: PendingNavigation?
     var themeIdentity = 0
@@ -139,13 +139,11 @@ final class AppModel {
     func openTarget(_ target: LaunchTarget) {
         let path = LaunchRequest.standardized(target.path)
         if LaunchRequest.sameFile(open: fileURL?.path, isDirectory: isDirectory, target: path) {
-            if let line = target.line {
-                jumpToLine(line, column: target.column)
-            }
+            jump(to: target)
             return
         }
         if target.line != nil {
-            pendingJumps[path] = (line: target.line, column: target.column)
+            pendingJumps[path] = target
         } else {
             pendingJumps.removeValue(forKey: path)
         }
@@ -457,7 +455,8 @@ final class AppModel {
                         self.openTarget(LaunchTarget(
                             path: dest.path,
                             line: first.range.start.line + 1,
-                            column: first.range.start.character + 1
+                            column: first.range.start.character + 1,
+                            columnUnit: .utf16
                         ))
                         return
                     }
@@ -517,22 +516,34 @@ final class AppModel {
                 applyCodeAction(action)
             } else {
                 codeActions = []
-                openPickerPayload(item.payload)
+                openPickerPayload(item.payload, columnUnit: kind == .references ? .utf16 : .character)
             }
         }
     }
 
-    func openPickerPayload(_ payload: String) {
+    func openPickerPayload(_ payload: String, columnUnit: LaunchTarget.ColumnUnit = .character) {
         let split = LaunchRequest.splitLocation(payload)
-        openTarget(LaunchTarget(path: split.path, line: split.line, column: split.column))
+        openTarget(LaunchTarget(path: split.path, line: split.line, column: split.column, columnUnit: columnUnit))
     }
 
-    /// `line` and `column` are 1-based. The column counts characters (graphemes),
-    /// so `note.md:3:5` lands on the fifth character whatever its UTF-16 width.
-    func jumpToLine(_ line: Int, column: Int? = nil) {
-        let index = max(0, line - 1)
-        guard index < engine.buffer.lineCount else { return }
-        let offset = engine.buffer.offset(line: index, graphemeColumn: max(1, column ?? 1) - 1)
+    private func jump(to target: LaunchTarget) {
+        guard let line = target.line else { return }
+        jumpToLine(line, column: target.column, unit: target.columnUnit)
+    }
+
+    /// `line` and `column` are 1-based; a line past the end goes to the last, as `vim +N` does.
+    /// A character column lands on that grapheme whatever its UTF-16 width; a UTF-16
+    /// column (from a language server) snaps to the grapheme holding that unit.
+    func jumpToLine(_ line: Int, column: Int? = nil, unit: LaunchTarget.ColumnUnit = .character) {
+        let index = min(max(0, line - 1), engine.buffer.lastLine)
+        let col = max(1, column ?? 1) - 1
+        let offset: Int
+        switch unit {
+        case .character:
+            offset = engine.buffer.offset(line: index, graphemeColumn: col)
+        case .utf16:
+            offset = engine.buffer.offset(of: TextPosition(line: index, utf16Column: col))
+        }
         engine.moveCursor(to: offset)
         revision += 1
         pickerTick += 1
@@ -739,37 +750,26 @@ final class AppModel {
 
     private func listingLines() -> [ListingLine] {
         var lines: [ListingLine] = []
-        var offset = 0
-        let text = engine.text
-        let parts = text.split(separator: "\n", omittingEmptySubsequences: false)
-        for raw in parts {
-            let line = String(raw)
+        for (line, anchor) in engine.buffer.directoryEntryLines() {
             let parsed = ParsedDirLine(line)
-            let end = offset + line.utf16.count
-            let anchor = engine.buffer.anchors(in: offset..<(end + 1)).first { anchor in
-                if case .directoryEntry = anchor.kind { return true }
-                return false
-            }
-            if !parsed.name.isEmpty {
-                if let anchor, case .directoryEntry(let path, _, let transfer) = anchor.kind {
-                    let kind: LineTransfer
-                    switch transfer {
-                    case .identity: kind = .identity
-                    case .move: kind = .move
-                    case .copy: kind = .copy
-                    }
-                    lines.append(ListingLine(
-                        name: parsed.name,
-                        isDirectory: parsed.isDirectory,
-                        entryID: anchor.id.raw,
-                        sourcePath: path,
-                        transfer: kind
-                    ))
-                } else {
-                    lines.append(ListingLine(name: parsed.name, isDirectory: parsed.isDirectory))
+            if parsed.name.isEmpty { continue }
+            if let anchor, case .directoryEntry(let path, _, let transfer) = anchor.kind {
+                let kind: LineTransfer
+                switch transfer {
+                case .identity: kind = .identity
+                case .move: kind = .move
+                case .copy: kind = .copy
                 }
+                lines.append(ListingLine(
+                    name: parsed.name,
+                    isDirectory: parsed.isDirectory,
+                    entryID: anchor.id.raw,
+                    sourcePath: path,
+                    transfer: kind
+                ))
+            } else {
+                lines.append(ListingLine(name: parsed.name, isDirectory: parsed.isDirectory))
             }
-            offset = end + 1
         }
         return lines
     }
@@ -943,8 +943,8 @@ final class AppModel {
 
     private func applyPendingJump(for url: URL) {
         let path = url.standardizedFileURL.path
-        guard let jump = pendingJumps.removeValue(forKey: path), let line = jump.line else { return }
-        jumpToLine(line, column: jump.column)
+        guard let target = pendingJumps.removeValue(forKey: path) else { return }
+        jump(to: target)
     }
 
     private func referencePreview(_ location: Location, currentURI: String, text: String) -> String {

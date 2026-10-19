@@ -134,6 +134,19 @@ public struct TextBuffer: Equatable {
         anchors.filter { range.contains($0.offset) }
     }
 
+    /// Every line's text (as `lineCount` counts lines) with the first directory-entry
+    /// anchor on it, the anchor sitting anywhere from the line start through its newline.
+    public func directoryEntryLines() -> [(text: String, anchor: Anchor?)] {
+        (0..<lineCount).map { index in
+            let line = lines.line(index)
+            let anchor = anchors(in: line.start..<(line.contentEnd + 1)).first { anchor in
+                if case .directoryEntry = anchor.kind { return true }
+                return false
+            }
+            return (substring(line.content), anchor)
+        }
+    }
+
     // MARK: Lines
 
     public func lineIndex(containing offset: Int) -> Int {
