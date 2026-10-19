@@ -27,6 +27,7 @@ final class EditorHarness {
     init(model: AppModel, size: NSSize = NSSize(width: 800, height: 600)) {
         engine = model.engine
         (scroll, view, window) = Self.makeWindow(engine: model.engine, size: size)
+        model.editor = view
         view.columnWidth = model.theme.columnWidth
         view.isDirectoryBuffer = model.isDirectory
         view.directoryURL = model.isDirectory ? model.fileURL : nil

@@ -70,7 +70,7 @@ final class EditFunnelTests: XCTestCase {
     }
 
     func testTypingWithoutAServerDoesNotCreateALink() {
-        let before = LSPDocumentLink.creationCount
+        let before = LSPLink.creationCount
         let model = AppModel()
         let view = attach(model)
         view.keyDown(with: key("i"))
@@ -80,7 +80,7 @@ final class EditFunnelTests: XCTestCase {
         XCTAssertEqual(model.engine.text, String(repeating: "a", count: 100))
         XCTAssertEqual(view.string, model.engine.text)
         XCTAssertFalse(model.hasLanguageServer)
-        XCTAssertEqual(LSPDocumentLink.creationCount, before)
+        XCTAssertEqual(LSPLink.creationCount, before)
     }
 
     func testShowHoverUsesDiagnosticsThenNothing() {
@@ -307,14 +307,14 @@ final class EditFunnelTests: XCTestCase {
         text: String,
         onNotify: @escaping (String, JSONValue?) -> Void = { _, _ in },
         onRequest: @escaping (String, JSONValue?) -> JSONValue
-    ) throws -> (LSPDocumentLink, LSPClient) {
+    ) throws -> (LSPLink, LSPClient) {
         let transport = ScriptedTransport()
         transport.onRequest = onRequest
         transport.onNotify = onNotify
         let session = JSONRPCSession(transport: transport)
         let client = LSPClient(config: LSPServerConfig(name: "mock", command: "false"))
         try client.attach(session: session, rootURI: "file:///tmp")
-        let link = LSPDocumentLink(uri: "file:///tmp/note.md", text: text, version: 1)
+        let link = LSPLink(uri: "file:///tmp/note.md", text: text, version: 1)
         link.attach([client])
         return (link, client)
     }

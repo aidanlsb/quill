@@ -7,11 +7,15 @@ import QuillSearch
 struct PickerPanel: View {
     var model: AppModel
 
+    private var opened: PickerSession? {
+        if case .picker(let session) = model.prompt { session } else { nil }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            if let picker = model.picker {
-                prompt(picker)
-                results(picker)
+            if let opened {
+                prompt(opened.picker)
+                results(opened)
                 if let preview = picker.selected?.preview, !preview.isEmpty {
                     Text(preview)
                         .font(.system(size: model.theme.monoFont.pointSize, design: .monospaced))
@@ -80,14 +84,15 @@ struct PickerPanel: View {
         .padding(.top, QuillMetrics.verticalInset)
     }
 
-    private func results(_ picker: PickerEngine) -> some View {
+    private func results(_ opened: PickerSession) -> some View {
+        let picker = opened.picker
         let theme = model.theme
-        let style: PickerHighlight.Style = model.pickerKind == .grep ? .literal : .fuzzy
+        let style: PickerHighlight.Style = opened.kind == .grep ? .literal : .fuzzy
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(picker.items.enumerated()), id: \.element.payload) { index, item in
-                        row(item, index: index, picker: picker, style: style, theme: theme)
+                        row(item, index: index, picker: picker, kind: opened.kind, style: style, theme: theme)
                             .id(item.payload)
                     }
                 }
@@ -106,11 +111,12 @@ struct PickerPanel: View {
         _ item: PickerItem,
         index: Int,
         picker: PickerEngine,
+        kind: PickerKind,
         style: PickerHighlight.Style,
         theme: QuillTheme
     ) -> some View {
         let selected = index == picker.selectedIndex
-        let commands = model.pickerKind == .commands
+        let commands = kind == .commands
         let titleColor = item.dimmed ? theme.dimColor : theme.textColor
         return HStack(alignment: .firstTextBaseline, spacing: 16) {
             PickerLineField(
@@ -173,7 +179,7 @@ struct PickerPanel: View {
     }
 
     private var queryPlaceholder: String {
-        switch model.pickerKind {
+        switch opened?.kind {
         case .files: "File name"
         case .grep: "Pattern"
         case .references: "Reference"
