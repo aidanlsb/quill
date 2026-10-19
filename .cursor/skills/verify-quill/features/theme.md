@@ -26,8 +26,8 @@ Preconditions:
 - Doctor printed the release binary you are about to run.
 - No other smoke is using that same log path. Each run overwrites `artifacts/verify-quill/smoke.log`.
 
-- **Run the smoke.** Run `Scripts/verify-quill --bin "$bin"`. The process exits 0.
-- **Read the theme result.** Open `artifacts/verify-quill/smoke.log`. It contains `quill smoke passed`. It does not contain `theme dark`, `theme command`, `theme toggle`, `theme name`, `leader tt`, `theme memory`, or `theme config`.
+- **Run the tests.** `ThemeTests` checks colors, theme memory, and config decoding. `:theme` and `<leader>tt` run on Linux in `ExCommandTests.testThemeCommandAndLeaderToggle`. `Scripts/verify-quill --bin "$bin"` runs `ThemeTests`, then the launch smoke.
+- **Read the theme result.** `artifacts/verify-quill/app-tests.log` shows `ThemeTests` passing. `artifacts/verify-quill/smoke.log` contains `quill smoke passed`. The test log does not contain `theme dark`, `theme memory`, or `theme config`.
 - **Proof.** The log file is still at `artifacts/verify-quill/smoke.log` after the process exits.
 
 ## Gotchas

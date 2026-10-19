@@ -266,12 +266,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        // Smoke, the perf probe, and the benchmark open their own windows
-        // before the SwiftUI window exists, then release them. Closing that
-        // last window must not terminate the process mid-check. Those modes
-        // exit on their own.
+        // The perf probe and the benchmark order a window out. Closing that
+        // last window must not terminate the process before they finish.
+        // The launch smoke exits on its own and does not open throwaway windows.
         let env = ProcessInfo.processInfo.environment
-        return env["QUILL_SMOKE"] != "1" && env["QUILL_PERF"] != "1" && env["QUILL_BENCH"] != "1"
+        return env["QUILL_PERF"] != "1" && env["QUILL_BENCH"] != "1"
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

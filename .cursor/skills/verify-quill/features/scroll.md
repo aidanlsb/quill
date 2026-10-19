@@ -25,14 +25,14 @@ Preconditions:
 - Doctor printed the release binary.
 - The smoke is the drive. Do not send a separate `j` through `osascript`.
 
-- **Run the smoke.** Run `Scripts/verify-quill --bin "$bin"`. Exit code is 0.
-- **Read the motion result.** `artifacts/verify-quill/smoke.log` contains `quill smoke passed`. It does not contain `j stopped on line`, `j did not scroll`, `trackpad scroll`, `G left the viewport`, `gg left the viewport`, `Ctrl-d moved`, `Ctrl-u moved`, `wrapped paragraph`, `j left the paragraph`, `j did not advance`, `j jumped`, `k returned`, `screen $`, or `g$`.
+- **Run the tests.** `ScrollTests` covers trackpad scrolling, `j`, `G`, `gg`, and half-page motions. `LineModelViewTests` covers wrapped screen rows. `Scripts/verify-quill --bin "$bin"` runs them, then the launch smoke.
+- **Read the motion result.** `artifacts/verify-quill/app-tests.log` shows those classes passing. `artifacts/verify-quill/smoke.log` contains `quill smoke passed`. The test log does not contain `j stopped on line`, `j did not scroll`, `trackpad scroll`, `G left the viewport`, `gg left the viewport`, `Ctrl-d moved`, `Ctrl-u moved`, `long note`, or `search landed`.
 - **On failure, read the measurements.** A `FAIL` line includes line, column, cursor, buffer line count, text-view line count, visual line count, document height, clip height, and origin.
 - **Proof.** Keep `artifacts/verify-quill/smoke.log`.
 
 ## Gotchas
 
 - `j` that stops on line 1 used to leave the origin at 0. Both failures are the same bug. A log that only mentions the origin is incomplete.
-- The smoke's `j` goes through `engine.handle`, which is the path `keyDown` uses after it builds a `KeyEvent`. It is not an `NSEvent` posted to the window.
+- `ScrollTests` sends `j` through `keyDown` as an `NSEvent`. It does not post the event to the window.
 - Linux tests of `j` use logical lines. They stay green when TextKit line lookup is wrong.
 - `gg` puts the first line on screen. The clip origin can sit just below the top margin, so it is not required to be 0.

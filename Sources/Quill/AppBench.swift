@@ -350,26 +350,21 @@ enum AppBench {
     // MARK: Editor driving
 
     private static func host() -> (view: VimTextView, scroll: NSScrollView, window: NSWindow) {
-        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 960, height: 760))
-        scroll.hasVerticalScroller = true
-        let tv = VimTextView.make()
-        tv.commonInit()
         let engine = Engine(text: "")
-        tv.engine = engine
-        engine.layout = tv.layoutAdapter
         engine.formatTablesOnInsertLeave = false
-        scroll.documentView = tv
+        let frame = NSRect(x: 0, y: 0, width: 960, height: 760)
+        let hosted = VimTextView.host(engine: engine, frame: frame)
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 960, height: 760),
+            contentRect: frame,
             styleMask: [.titled, .resizable],
             backing: .buffered,
             defer: false
         )
-        window.contentView = scroll
+        window.contentView = hosted.scroll
         window.makeKeyAndOrderFront(nil)
-        tv.columnWidth = 640
-        tv.applyTheme(QuillTheme.current(), focus: false)
-        return (tv, scroll, window)
+        hosted.view.columnWidth = 640
+        hosted.view.applyTheme(QuillTheme.current(), focus: false)
+        return (hosted.view, hosted.scroll, window)
     }
 
     private static func releaseEditor() {

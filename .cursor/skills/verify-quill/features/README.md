@@ -13,16 +13,15 @@ This directory is the maintained source for verifying Quill's user-facing editor
 ## Driving conventions
 
 - One command covers the map: `Scripts/verify-quill --bin "$bin"`.
-- Each run is a new process and a new temporary directory.
-- The harness calls `engine.handle` with the same key events as `keyDown`. It does not post OS key events.
-- Treat a line starting with `FAIL` as a failed feature. The rest of the log is not a pass for that feature.
+- `QuillAppTests` sends `NSEvent`s through `keyDown`. It does not post OS key events. Each feature names its test class below.
+- The launch process is separate. A line starting with `FAIL` in `smoke.log`, or an XCTest failure in `app-tests.log`, fails that feature.
 - A log that contains `quill smoke watchdog: exiting 2` is a failed launch. Smoke did not finish within 20 seconds.
-- Leave `artifacts/verify-quill/smoke.log` in place.
+- Leave `artifacts/verify-quill/` in place.
 
 ## Proof and skip reporting
 
-- The proof file is `artifacts/verify-quill/smoke.log`.
-- It must contain `quill smoke passed`.
+- Proof is `artifacts/verify-quill/app-tests.log` (XCTest for that feature's class) and `artifacts/verify-quill/smoke.log`.
+- `smoke.log` must contain `quill smoke passed`.
 - Record which feature file you were checking. A single log can fail one feature and still mention the others.
 - Linux cannot run this harness. Report that host as unverified, not as a pass.
 - Do not report `swift test` as a substitute for a feature in this map.

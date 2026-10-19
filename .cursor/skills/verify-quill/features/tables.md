@@ -28,8 +28,8 @@ Preconditions:
 - Doctor printed the release binary you are about to run.
 - No other smoke is using that same log path. Each run overwrites `artifacts/verify-quill/smoke.log`.
 
-- **Run the smoke.** Run `Scripts/verify-quill --bin "$bin"`. The process exits 0.
-- **Read the table result.** Open `artifacts/verify-quill/smoke.log`. It contains `quill smoke passed`. It does not contain `table detect`, `table align`, `table pipe`, `table header`, `table body`, `table background`, `table rule`, `table rows wrap`, `table row ink`, `overflow`, `table command`, `table format config`, `table viewport`, or `table edit`.
+- **Run the tests.** `TableStyleTests` covers styling, wrapping, overflow, and the viewport. Detection, padding, and `:TableFormat` run on Linux in `TableTests` and `ExCommandTests.testTableFormatCommand`. `Scripts/verify-quill --bin "$bin"` runs `TableStyleTests`, then the launch smoke.
+- **Read the table result.** `artifacts/verify-quill/app-tests.log` shows `TableStyleTests` passing. `artifacts/verify-quill/smoke.log` contains `quill smoke passed`. The test log does not contain `table pipe`, `table header`, `table body`, `table background`, `table rule`, `table rows wrap`, `table row ink`, `overflow`, `table format config`, `table viewport`, or `table edit`.
 - **Proof.** The log file is still at `artifacts/verify-quill/smoke.log` after the process exits.
 
 ## Gotchas

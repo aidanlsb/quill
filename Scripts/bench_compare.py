@@ -460,13 +460,21 @@ def spread_cell(entry: dict | None) -> str:
 def overlay_text(text: str) -> str:
     text = insert_call(text, "AppPerf.noteKeyWindow()", "AppBench.noteKeyWindow()")
     text = insert_call(text, "AppPerf.launchDidFinish()", "AppBench.launchDidFinish()")
-    if 'env["QUILL_BENCH"]' not in text:
-        old = 'env["QUILL_SMOKE"] != "1" && env["QUILL_PERF"] != "1"'
-        new = old + ' && env["QUILL_BENCH"] != "1"'
-        if old not in text:
-            raise SystemExit("overlay: terminate check not found in QuillApp.swift")
-        text = text.replace(old, new, 1)
-    return text
+    if '["QUILL_BENCH"]' in text:
+        return text
+    old = 'env["QUILL_SMOKE"] != "1" && env["QUILL_PERF"] != "1"'
+    if old in text:
+        return text.replace(old, old + ' && env["QUILL_BENCH"] != "1"', 1)
+    # The launch smoke no longer opens a throwaway window, so the check is
+    # only the perf probe. The bench still orders its window out.
+    newer = 'ProcessInfo.processInfo.environment["QUILL_PERF"] != "1"'
+    if newer in text:
+        return text.replace(
+            newer,
+            newer + ' && ProcessInfo.processInfo.environment["QUILL_BENCH"] != "1"',
+            1,
+        )
+    raise SystemExit("overlay: terminate check not found in QuillApp.swift")
 
 
 def insert_call(text: str, existing: str, addition: str) -> str:
@@ -601,6 +609,14 @@ def self_test() -> int:
         check(patched.count("AppBench.launchDidFinish()") == 1, "overlay inserts the launch hook")
         check('env["QUILL_BENCH"]' in patched, "overlay keeps the bench process alive")
         check(overlay_text(patched) == patched, "overlay is idempotent")
+        current = (
+            "AppPerf.noteKeyWindow()\n"
+            "AppPerf.launchDidFinish()\n"
+            'return ProcessInfo.processInfo.environment["QUILL_PERF"] != "1"\n'
+        )
+        current_patched = overlay_text(current)
+        check('["QUILL_BENCH"]' in current_patched, "overlay keeps the bench alive on the perf-only check")
+        check(overlay_text(current_patched) == current_patched, "overlay of the perf-only check is idempotent")
 
     source = Path(__file__).read_text(encoding="utf-8")
     imports = set(IMPORT_LINE.findall(source))

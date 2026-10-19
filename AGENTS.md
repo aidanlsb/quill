@@ -6,7 +6,8 @@ Quill is fast, simple, and keyboard driven. Its only job is a great markdown edi
 
 | Rule | What enforces it |
 |---|---|
-| Linux green is not done; macOS build + verify-quill smoke must pass | `.github/workflows/ci.yml` job `macos` builds with `-strict-concurrency=complete` and runs `Scripts/verify-quill`. The recipe is `.cursor/skills/verify-quill/`. |
+| Linux green is not done; macOS build + verify-quill smoke must pass | `.github/workflows/ci.yml` job `macos` builds with `-strict-concurrency=complete`, runs `swift test` (including `QuillAppTests`), and runs `Scripts/verify-quill` (the launch smoke). The recipe is `.cursor/skills/verify-quill/`. |
+| Wire editor views only through `VimTextView.host(engine:frame:)` | `Scripts/check_boundaries.py` rejects `VimTextView.make(` / `.commonInit()` outside `VimTextView.swift`. |
 | No nonisolated mutable static | `Scripts/check-concurrency-fixture.sh` typechecks the historical `AppSmoke.started` and requires the Swift 6 error. The macos job also passes `-strict-concurrency=complete` to `swift test` and `swift build`. |
 | `nonisolated(unsafe)` and `@unchecked Sendable` need a reason | `python3 Scripts/check_boundaries.py --self-test` requires `// quill-concurrency:` within the previous 8 lines. |
 | Do not force-unwrap `NSApp` before launch | The same check rejects bare `NSApp`. Use `NSApp?` or `NSApplication.shared`. |

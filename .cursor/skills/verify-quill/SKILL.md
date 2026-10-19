@@ -1,13 +1,13 @@
 ---
 name: verify-quill
-description: "Drive the Quill macOS editor and prove the caret, scrolling, directory buffer, picker prompt, command palette, and markdown tables. Use when changing the app target, TextKit layout, vim key handling, oil-style directories, the Telescope-style picker, the command palette, or markdown table styling. The harness is QUILL_SMOKE via Scripts/verify-quill."
+description: "Drive the Quill macOS editor and prove the caret, scrolling, directory buffer, picker prompt, command palette, and markdown tables. Use when changing the app target, TextKit layout, vim key handling, oil-style directories, the Telescope-style picker, the command palette, or markdown table styling. The harness is QuillAppTests plus the QUILL_SMOKE launch check, via Scripts/verify-quill."
 ---
 
 # Verify Quill
 
 Quill is a native macOS markdown editor (SwiftUI + AppKit + TextKit 2). The user-facing surface is the app window and the `quill` launcher. Linux `swift test` does not compile the app and is not proof that the editor works.
 
-The harness is `Scripts/verify-quill`. It builds or accepts the release binary and runs it with `QUILL_SMOKE=1`. That process drives the caret, scrolling, a real temporary directory, the file and grep pickers, and markdown table styling, then exits. It is the same check the macOS CI job runs.
+The harness is `Scripts/verify-quill`. It runs `swift test --filter QuillAppTests` (unless `--bin` is set and `QUILL_SKIP_APP_TESTS=1`), then launches the release binary with `QUILL_SMOKE=1`. QuillAppTests drives the caret, scrolling, a real temporary directory, the file and grep pickers, and markdown table styling through `keyDown`. The launch smoke checks that the app comes up, the editor is wired, one keystroke changes the buffer, and a resize does not crash. CI runs the tests in its `swift test` step and the launch smoke with `QUILL_SKIP_APP_TESTS=1`.
 
 ## Launch
 
@@ -21,7 +21,7 @@ Scripts/verify-quill --bin "$bin"
 
 `Scripts/verify-quill` with no `--bin` runs that build itself, then the smoke.
 
-Ready means the process started by this command has exited 0 and `artifacts/verify-quill/smoke.log` contains the line `quill smoke passed`. A process that is merely alive is not ready: without `QUILL_SMOKE=1` the app stays open, and with it the app exits on purpose.
+Ready means QuillAppTests passed (when not skipped) and the launch process has exited 0 with `quill smoke passed` in `artifacts/verify-quill/smoke.log`. A process that is merely alive is not ready: without `QUILL_SMOKE=1` the app stays open, and with it the app exits on purpose. Test output is `artifacts/verify-quill/app-tests.log`.
 
 Smoke starts from `applicationDidFinishLaunching`, not from the window's `onAppear`. Launching the binary from a background shell does not activate the app, so SwiftUI may never show a window and `onAppear` never runs. The main thread then sits in the run loop and prints nothing. `QUILL_SMOKE=1` also activates the app and, at `applicationWillFinishLaunching`, arms a watchdog. If the process has not exited after 20 seconds, the watchdog prints whether launch finished, whether a model was attached, whether `onAppear` ran, whether smoke started, the window count, and the activation policy, then exits 2.
 
@@ -50,9 +50,7 @@ A five-second launch without `QUILL_SMOKE` is a separate check already in `.gith
 
 ## Drive
 
-`Scripts/verify-quill` sets `QUILL_SMOKE=1` and runs the binary in the foreground. The smoke builds the same `KeyEvent` values `VimTextView.keyDown` builds and calls `engine.handle`. It does not post OS keyboard events. It does measure the real `NSTextView` caret cell, the clip-view origin, an `AppModel` directory opened from a temporary folder, and the picker query field after `handlePicker`. The directory check also reads that text view's font, insets, and background, so the listing has to be monospaced and wider than the writing column. The measure check resizes one window to two widths and reads the writing inset, then does the same for the directory listing.
-
-One run covers every feature in `features/`. Read the feature file before treating a passing log as proof of that feature. A log that contains `FAIL` is a failure even if you only cared about one feature.
+`QuillAppTests` builds real `NSEvent`s and calls `VimTextView.keyDown`. It does not post OS keyboard events. One `XCTestCase` covers each feature in `features/`. The launch smoke then checks the running app. Read the feature file before treating a passing log as proof of that feature. An XCTest failure, or a launch log that contains `FAIL`, is a failure even if you only cared about one feature.
 
 ```bash
 Scripts/verify-quill --bin "$bin"
@@ -60,9 +58,12 @@ Scripts/verify-quill --bin "$bin"
 
 ## Evidence
 
-The proof file is `artifacts/verify-quill/smoke.log` (stdout and stderr of that process). It must contain `quill smoke passed` and must not contain a line starting with `FAIL`.
+Two proof files:
 
-That log is the action and the result: each failing check names the measurement (caret size, line, cursor, viewport origin, document and clip height, column inset, directory listing, picker query). A green exit code without that line is not proof.
+- `artifacts/verify-quill/app-tests.log` is the XCTest run for `QuillAppTests` (omitted when `QUILL_SKIP_APP_TESTS=1`). A pass is `QuillAppTests passed` from the script, or a green `swift test --filter` for the class named in the feature file.
+- `artifacts/verify-quill/smoke.log` is the launch process. It must contain `quill smoke passed` and must not contain a line starting with `FAIL`.
+
+A failing XCTest names the measurement (caret size, line, cursor, viewport origin, document and clip height, column inset, directory listing, picker query) in the assertion. A green exit code without `quill smoke passed` is not proof of launch.
 
 The smoke does not apply the directory rename to disk. The proof for rename is the confirmation sheet and a planned rename operation, as `features/directory.md` says. Do not claim a file on disk changed unless you observed that file.
 
