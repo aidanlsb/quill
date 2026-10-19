@@ -1,5 +1,6 @@
 import AppKit
 import QuillLSP
+import QuillSearch
 import QuillVim
 import XCTest
 @testable import Quill
