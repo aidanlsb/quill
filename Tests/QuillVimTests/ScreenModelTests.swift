@@ -132,6 +132,20 @@ final class ScreenModelTests: XCTestCase {
         XCTAssertEqual(clipped.screenLines(of: 0).map(\.range), [0..<3, 3..<6], "the newline is not part of a row")
     }
 
+    func testRowsThatChangeBetweenReadsDoNotTrap() {
+        // TextKit lays out lazily: a line read as three rows can come back as one.
+        let buffer = TextBuffer(text: "abcdefghi\nxyz")
+        let layout = FixedRowsLayout([0..<3, 3..<6, 6..<9])
+        let model = ScreenModel(buffer: buffer, layout: layout)
+        let middle = model.screenLines(of: 0)[1]
+        let last = model.screenLines(of: 0)[2]
+        layout.rows = nil
+        XCTAssertEqual(model.next(after: middle)?.bufferLine, 1)
+        XCTAssertNil(model.previous(before: last), "line 0 is now one row, and it holds `last`")
+        layout.rows = [0..<3, 3..<9]
+        XCTAssertEqual(model.previous(before: last)?.range, 0..<3)
+    }
+
     // MARK: Properties over random documents
 
     func testRowsPartitionEveryLine() {

@@ -155,17 +155,19 @@ public struct ScreenModel {
         }
     }
 
+    /// Neighbors are found by offset, not by `row.row`: a lazy layout can report
+    /// a line in more or fewer rows than it did when `row` was read.
     public func next(after row: ScreenLine) -> ScreenLine? {
-        if !row.isLastRow {
-            return screenLines(of: row.bufferLine)[row.row + 1]
+        if let below = screenLines(of: row.bufferLine).first(where: { $0.range.lowerBound >= row.range.upperBound && $0.range.lowerBound > row.range.lowerBound }) {
+            return below
         }
         guard row.bufferLine < lastReachableLine else { return nil }
         return screenLines(of: row.bufferLine + 1).first
     }
 
     public func previous(before row: ScreenLine) -> ScreenLine? {
-        if row.row > 0 {
-            return screenLines(of: row.bufferLine)[row.row - 1]
+        if let above = screenLines(of: row.bufferLine).last(where: { $0.range.upperBound <= row.range.lowerBound && $0.range.lowerBound < row.range.lowerBound }) {
+            return above
         }
         guard row.bufferLine > 0 else { return nil }
         return screenLines(of: row.bufferLine - 1).last
