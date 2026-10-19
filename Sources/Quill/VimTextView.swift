@@ -210,12 +210,14 @@ final class VimTextView: NSTextView {
         scroll.borderType = .noBorder
         scroll.drawsBackground = false
         scroll.autohidesScrollers = true
-        let tv = VimTextView.make(frame: frame)
+        let tv = VimTextView.make()
+        // setFrameSize measures the buffer. Bind the engine before the first frame.
+        tv.engine = engine
+        engine.layout = tv.layoutAdapter
         tv.commonInit()
         tv.minSize = NSSize(width: 0, height: 0)
         tv.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        tv.engine = engine
-        engine.layout = tv.layoutAdapter
+        tv.frame = frame
         scroll.documentView = tv
         return (scroll, tv)
     }
@@ -1229,6 +1231,7 @@ final class VimTextView: NSTextView {
         // tall headings are taller than one row each, so whatever TextKit has
         // already laid out (`usageBounds` reads, it does not lay out) can only
         // raise the estimate. Without it the frame ends above a wrapped caret.
+        guard let engine else { return max(clip, bounds.height) }
         let rows = max(1, engine.buffer.lineCount)
         var content = CGFloat(rows) * rowHeight() + inset + imagePreviews.reservedHeight
         if let used = textLayoutManager?.usageBoundsForTextContainer, used.height > 0 {

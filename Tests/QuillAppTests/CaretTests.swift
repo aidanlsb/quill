@@ -45,7 +45,9 @@ extension Probe {
             range: NSRange(location: headingAt, length: 7)
         )
         tv.textStorage?.addAttribute(.font, value: body, range: NSRange(location: 13, length: 1))
-        tv.textLayoutManager?.ensureLayout(for: tv.textLayoutManager!.documentRange)
+        if let manager = tv.textLayoutManager {
+            manager.ensureLayout(for: manager.documentRange)
+        }
         tv.layoutSubtreeIfNeeded()
         window.makeFirstResponder(tv)
         engine.mode = .normal
