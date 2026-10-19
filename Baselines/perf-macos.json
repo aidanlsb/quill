@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "lowerIsBetter": true,
+  "note": "Absolute medians from one machine. The PR gate does not fail on this file. It builds the pull request and the base commit on the same runner and compares those. Refresh this file with Scripts/bench.sh --update-baseline on the machine whose numbers you want to keep (the macOS CI runner, or Aidan's Mac). Thresholds live in Scripts/bench_compare.py.",
+  "recordedFrom": null,
+  "sha": "",
+  "metrics": {},
+  "noise": {}
+}

@@ -4,6 +4,11 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+  pull-requests: write
+  actions: write
+
 jobs:
   linux:
     runs-on: ubuntu-24.04
@@ -22,6 +27,7 @@ jobs:
         run: |
           Scripts/check-concurrency-fixture.sh
           python3 Scripts/check_boundaries.py --self-test
+          python3 Scripts/bench_compare.py --self-test
       - name: Shellcheck
         run: shellcheck -s bash Scripts/quill Scripts/verify-quill Scripts/*.sh
       - name: Check app icon
@@ -38,6 +44,7 @@ jobs:
         run: |
           /bin/bash --version
           /bin/bash -n Scripts/quill
+          /bin/bash -n Scripts/bench.sh
           # Fake bundle selects the -a "$APP" branch (empty wait_flag under set -u).
           mkdir -p dist/Quill.app
           stub="$(mktemp -d)"
@@ -70,6 +77,7 @@ jobs:
         run: |
           Scripts/check-concurrency-fixture.sh
           python3 Scripts/check_boundaries.py --self-test
+          python3 Scripts/bench_compare.py --self-test
       # Swift 6.2 rejects a nonisolated mutable static (`#MutableGlobalVariable`).
       # Complete checking is the Swift 6.2 default; pass it explicitly so that
       # stays a hard failure if a later toolchain loosens the default.
@@ -108,3 +116,20 @@ jobs:
           Scripts/verify-quill --bin "$bin"
           test -s artifacts/verify-quill/smoke.log
           grep -F -q "quill smoke passed" artifacts/verify-quill/smoke.log
+      - name: Perf regression gate
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bin="$(swift build -c release --product Quill -Xswiftc -strict-concurrency=complete --show-bin-path)/Quill"
+          Scripts/bench.sh ci --bin "$bin" --base-ref "${{ github.base_ref }}" --pr "${{ github.event.pull_request.number }}"
+      - name: Upload perf results
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-bench
+          if-no-files-found: ignore
+          path: |
+            artifacts/bench/pr.json
+            artifacts/bench/base.json
+            artifacts/bench/comment.md

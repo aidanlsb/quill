@@ -31,6 +31,8 @@ There is no server to keep. Teardown is the process exiting. The app watchdog ex
 
 After a passing smoke, the script runs a second process with `QUILL_PERF=1`. That process prints `quill perf <name>=<milliseconds>` lines and `quill perf done`, then exits. The log is `artifacts/verify-quill/perf.log`. It is a measurement, not a behavior pass: a missing `quill perf done` fails the script. `features/perf.md` names each number.
 
+The regression gate is a separate process, `QUILL_BENCH=1`, driven by `Scripts/bench.sh`. Smoke still owns `QUILL_PERF`. The gate compares a pull request to its base commit on the same Mac. `CONTRIBUTING.md` says how to run it locally, including on Aidan's Mac.
+
 ## Doctor
 
 ```bash

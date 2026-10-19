@@ -20,6 +20,7 @@ struct QuillApp: App {
                     WindowChrome.apply(theme: model.theme)
                     QuillTrace.event("keyWindow")
                     AppPerf.noteKeyWindow()
+                    AppBench.noteKeyWindow()
                     AppSmoke.noteWindowAppeared()
                     AppSmoke.runIfRequested(model: model)
                 }
@@ -150,14 +151,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // to start smoke, and it never runs when no window becomes key.
         AppSmoke.launchDidFinish(model: model)
         AppPerf.launchDidFinish()
+        AppBench.launchDidFinish()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        // Smoke and the perf probe open their own windows before the SwiftUI
-        // window exists, then release them. Closing that last window must not
-        // terminate the process mid-check. Those modes exit on their own.
+        // Smoke, the perf probe, and the benchmark open their own windows
+        // before the SwiftUI window exists, then release them. Closing that
+        // last window must not terminate the process mid-check. Those modes
+        // exit on their own.
         let env = ProcessInfo.processInfo.environment
-        return env["QUILL_SMOKE"] != "1" && env["QUILL_PERF"] != "1"
+        return env["QUILL_SMOKE"] != "1" && env["QUILL_PERF"] != "1" && env["QUILL_BENCH"] != "1"
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
