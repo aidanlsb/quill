@@ -904,17 +904,31 @@ enum AppSmoke {
         return report
     }
 
-    /// Wide table rows, a long code line, a long URL, and a long word in a narrow
-    /// window: nothing draws past the column, the view never scrolls sideways,
-    /// and the caret stays on screen at the end of each long line.
+    /// A table too wide to align, a small table, a long code line, a long URL,
+    /// and a long unbroken word in a narrow window. Nothing draws past the column,
+    /// the content is no wider than the viewport, the view never scrolls sideways,
+    /// and the caret stays on screen after `$`, every `l` along each long line,
+    /// and every `j` / `k` from the top to the bottom and back. A table that fits
+    /// only in a wide window aligns there and drops its padding when it narrows.
     @MainActor
     private static func checkNoHorizontalOverflow(failures: inout [String]) {
         let lines = [
             "# A heading that is long enough to wrap in a narrow column",
             "",
-            "| Name | Description |",
+            "| a | b |",
+            "| - | -: |",
+            "| x | 1 |",
+            "| y | 123 |",
+            "",
+            "| Name | Description | Qty |",
+            "| :--- | :--- | ---: |",
+            "| key | " + String(repeating: "b", count: 90) + " | 1 |",
+            "| k | short | " + String(repeating: "9", count: 30) + " |",
+            "",
+            "| Mid | Notes |",
             "| --- | --- |",
-            "| key | " + String(repeating: "b", count: 90) + " |",
+            "| a | " + String(repeating: "n", count: 40) + " |",
+            "| bb | c |",
             "",
             "```",
             "let url = \"https://example.com/" + String(repeating: "a", count: 70) + "\"",
@@ -953,33 +967,125 @@ enum AppSmoke {
         let column = tv.textContainer?.size.width ?? 0
         let clip = scroll.contentView
         check(column > 50 && column < clip.bounds.width, "overflow column \(column) clip \(clip.bounds.width)", failures: &failures)
-        if let overflow = widestInk(tv, limit: column) {
-            failures.append("overflow: ink reaches \(overflow)pt past the \(column)pt column")
+
+        var caretFailures = 0
+        func caretOnScreen(_ label: String) {
+            let caret = tv.renderedCaretRect()
+            let visible = clip.documentVisibleRect.insetBy(dx: -0.5, dy: -0.5)
+            let edge = tv.textContainerOrigin.x + (tv.textContainer?.size.width ?? 0)
+            var problem: String?
+            if !visible.contains(caret) {
+                problem = "outside the visible \(clip.documentVisibleRect)"
+            } else if caret.maxX > edge + 1 {
+                problem = "past the column edge \(edge)"
+            } else if abs(clip.bounds.origin.x) > 0.5 {
+                problem = "with the clip scrolled sideways to \(clip.bounds.origin.x)"
+            }
+            guard let problem else { return }
+            caretFailures += 1
+            if caretFailures <= 6 {
+                let position = engine.buffer.position(of: engine.cursor)
+                failures.append("overflow: caret \(caret) after \(label) at \(position.line):\(position.utf16Column) is \(problem)")
+            }
         }
-        check(tv.frame.width <= clip.bounds.width + 0.5, "overflow: view \(tv.frame.width) wider than clip \(clip.bounds.width)", failures: &failures)
+
         for (index, line) in lines.enumerated() where line.count > 30 {
             _ = engine.type(":\(index + 1)<CR>")
             tv.syncFromEngine()
-            for keys in ["g$", "0"] {
+            for keys in ["$", "g$", "0"] {
                 tv.applyResult(engine.type(keys))
-                let caret = tv.renderedCaretRect()
-                let visible = clip.documentVisibleRect.insetBy(dx: -0.5, dy: -0.5)
-                check(
-                    visible.contains(caret),
-                    "overflow: caret \(caret) after :\(index + 1) \(keys) is outside the visible \(clip.documentVisibleRect)",
-                    failures: &failures
-                )
-                check(
-                    caret.maxX <= tv.textContainerOrigin.x + column + 1,
-                    "overflow: caret \(caret) after :\(index + 1) \(keys) is past the column edge \(tv.textContainerOrigin.x + column)",
-                    failures: &failures
-                )
+                caretOnScreen(":\(index + 1) \(keys)")
+            }
+            var steps = 0
+            while steps < 400 {
+                let before = engine.cursor
+                tv.applyResult(engine.type("l"))
+                if engine.cursor == before { break }
+                steps += 1
+                caretOnScreen(":\(index + 1) l×\(steps)")
             }
         }
+
+        _ = engine.type("gg")
+        tv.syncFromEngine()
+        var rows = 0
+        for direction in ["j", "k"] {
+            var steps = 0
+            while steps < 600 {
+                let before = engine.cursor
+                tv.applyResult(engine.type(direction))
+                if engine.cursor == before { break }
+                steps += 1
+                caretOnScreen("\(direction)×\(steps)")
+            }
+            if direction == "j" { rows = steps }
+        }
+        check(rows > lines.count + 10, "overflow: j visited \(rows) rows; long lines did not wrap", failures: &failures)
+        check(engine.cursor == 0, "overflow: k did not return to the top (cursor \(engine.cursor))", failures: &failures)
+        if caretFailures > 6 {
+            failures.append("overflow: \(caretFailures - 6) more caret positions off screen")
+        }
+
         _ = engine.type("G")
         tv.syncFromEngine()
-        let last = tv.renderedCaretRect()
-        check(clip.documentVisibleRect.insetBy(dx: -0.5, dy: -0.5).contains(last), "overflow: caret \(last) after G is off screen", failures: &failures)
+        caretOnScreen("G")
+
+        tv.layoutAdapter.ensureFullLayout()
+        if let overflow = widestInk(tv, limit: column) {
+            failures.append("overflow: ink reaches \(overflow)pt past the \(column)pt column")
+        }
+        let used = tv.textLayoutManager?.usageBoundsForTextContainer ?? .zero
+        check(used.maxX <= column + 0.5, "overflow: laid-out width \(used.maxX) is wider than the \(column)pt column", failures: &failures)
+        check(tv.frame.width <= clip.bounds.width + 0.5, "overflow: view \(tv.frame.width) wider than clip \(clip.bounds.width)", failures: &failures)
+        check(abs(clip.bounds.origin.x) < 0.5, "overflow: clip scrolled sideways to \(clip.bounds.origin.x)", failures: &failures)
+
+        guard let storage = tv.textStorage else { return }
+        let tables = MarkdownTables.blocks(in: text)
+        guard tables.count == 3 else {
+            failures.append("overflow: found \(tables.count) tables")
+            return
+        }
+        func widestKern(_ range: Range<Int>) -> CGFloat {
+            var widest: CGFloat = 0
+            let span = NSRange(location: range.lowerBound, length: range.count)
+            storage.enumerateAttribute(.kern, in: span, options: []) { value, _, _ in
+                widest = max(widest, CGFloat((value as? NSNumber)?.doubleValue ?? 0))
+            }
+            return widest
+        }
+        check(widestKern(tables[0].range) > 0.5, "overflow: the small table lost its alignment", failures: &failures)
+        check(
+            widestKern(tables[1].range) < 0.5,
+            "overflow: the wide table is still padded (kern \(widestKern(tables[1].range))); it cannot align within \(column)pt",
+            failures: &failures
+        )
+        check(widestKern(0..<storage.length) < column, "overflow: a kern is wider than the column", failures: &failures)
+
+        let mid = tables[2]
+        let advance = MarkdownStyler.monoAdvance(tv.theme.monoFont)
+        func midAlignment(_ label: String, expectPadded: Bool) {
+            let width = tv.textContainer?.size.width ?? 0
+            let fits = mid.alignsWithin(columns: MarkdownStyler.fitColumns(width: width, advance: advance))
+            check(
+                fits == expectPadded,
+                "overflow \(label): a \(mid.alignedColumns)-cell table at \(width)pt; pick a width where it \(expectPadded ? "fits" : "does not fit")",
+                failures: &failures
+            )
+            let padded = widestKern(mid.range) > 0.5
+            check(padded == expectPadded, "overflow \(label): mid table padded \(padded) at \(width)pt", failures: &failures)
+            if let overflow = widestInk(tv, limit: width) {
+                failures.append("overflow \(label): ink reaches \(overflow)pt past the \(width)pt column")
+            }
+            caretOnScreen(label)
+        }
+        midAlignment("narrow", expectPadded: false)
+        let midLine = engine.buffer.lineIndex(containing: mid.range.lowerBound)
+        _ = engine.type(":\(midLine + 1)<CR>")
+        tv.syncFromEngine()
+        resizeEditor(window, scroll: scroll, width: 900, height: 300)
+        midAlignment("widened", expectPadded: true)
+        resizeEditor(window, scroll: scroll, width: 360, height: 300)
+        midAlignment("narrowed", expectPadded: false)
     }
 
     private static func utf16Length(_ text: String) -> Int {
