@@ -125,34 +125,38 @@ final class FastEditor: NSObject, VimTextViewDelegate {
 
     func reveal() {
         window.title = model.title
-        // Show the text view on its own. A scroll view's first display builds the
-        // scroller, and the heading font does not need that.
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        window.contentView = textView
-        window.orderFront(nil)
-        CATransaction.commit()
-
+        // The first editable selection builds the text input context. Place the caret
+        // while the view is not editable, then turn editing on before the window is shown.
+        textView.isEditable = false
         textView.columnWidth = model.theme.columnWidth
         textView.isDirectoryBuffer = model.isDirectory
-        textView.applyTheme(model.theme, focus: model.focusMode)
-        textView.appliedThemeID = model.themeIdentity
-        textView.appliedFocus = model.focusMode
         textView.disableAutomaticSubstitutions()
-        // The storage observer lays the buffer out on the first edit. Detach it
-        // until the heading font is applied, then put the caret back.
+        // Insert and style offscreen. The storage observer lays the buffer out on the
+        // first edit, so it stays detached until the heading font is applied.
         let observer = textView.textStorage?.textStorageObserver
         textView.textStorage?.textStorageObserver = nil
         textView.syncFromEngine(layout: false)
+        textView.applyTheme(model.theme, focus: model.focusMode)
+        textView.appliedThemeID = model.themeIdentity
+        textView.appliedFocus = model.focusMode
         textView.restyleNow()
         revealed = true
         textView.textStorage?.textStorageObserver = observer
         textView.prepareForDisplay()
+        // The note is laid out in the scroll view that stays on screen. Ready waits for
+        // that layout, including the caret placement, and does not wait for shadow or chrome.
         if let scroll {
             scroll.documentView = textView
             window.contentView = scroll
         }
+        textView.updateInsets()
         textView.syncFromEngine()
+        textView.isEditable = true
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        window.orderFront(nil)
+        CATransaction.commit()
+        OpenReadyProbe.consider(textView)
 
         if let scroll = textView.enclosingScrollView {
             scroll.hasVerticalScroller = true

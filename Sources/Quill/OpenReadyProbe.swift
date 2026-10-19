@@ -22,10 +22,22 @@ enum OpenReadyProbe {
         }
     }
 
-    /// Called after a restyle. Ready requires a window, the fixture text, and a heading font.
+    /// Called after a restyle. Ready requires the note in the visible scroll view, with the
+    /// heading font applied and the caret placement that lays that view out.
     static func consider(_ textView: VimTextView) {
         guard armed, !finished else { return }
         guard let expected = expectedText, !expected.isEmpty else { return }
+        guard let scroll = textView.enclosingScrollView, scroll.window?.isVisible == true else { return }
+        // The launch path detaches the storage observer while it inserts the string.
+        // Ready is the later layout, after that observer is back.
+        guard textView.textStorage?.textStorageObserver != nil else { return }
+        let length = (textView.string as NSString).length
+        let caret = min(textView.engine.cursor, length)
+        guard textView.selectedRange() == NSRange(location: caret, length: 0) else { return }
+        if length > 0 {
+            let laidOut = textView.textLayoutManager?.usageBoundsForTextContainer.height ?? 0
+            guard laidOut > 1 else { return }
+        }
         guard let window = textView.window, window.isVisible else { return }
         guard textView.string == expected else { return }
         guard headingUsesHeadingFont(textView, text: expected) else { return }

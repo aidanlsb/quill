@@ -68,12 +68,15 @@ if [[ "${1:-}" == "--wait" ]]; then
   wait_flag=(-W -n)
   shift
 fi
+# Empty unless this launch has a quill:// URL. `open` without --wait exits before
+# Quill can read that process's arguments, so the URL is also passed in the environment.
+launch_env=()
 
 open_app() {
   if [[ "$APP" == "Quill" ]]; then
-    open ${wait_flag[@]+"${wait_flag[@]}"} -a Quill "$@"
+    open ${wait_flag[@]+"${wait_flag[@]}"} ${launch_env[@]+"${launch_env[@]}"} -a Quill "$@"
   else
-    open ${wait_flag[@]+"${wait_flag[@]}"} -a "$APP" "$@"
+    open ${wait_flag[@]+"${wait_flag[@]}"} ${launch_env[@]+"${launch_env[@]}"} -a "$APP" "$@"
   fi
 }
 
@@ -84,6 +87,7 @@ fi
 
 urls=()
 pending_line=""
+last_url=""
 for arg in "$@"; do
   if [[ "$arg" =~ ^\+([0-9]+)$ ]]; then
     n=$((10#${BASH_REMATCH[1]}))
@@ -125,6 +129,7 @@ for arg in "$@"; do
     url+="&column=$col"
   fi
   urls+=("$url")
+  last_url="$url"
 done
 
 if [[ ${#urls[@]} -eq 0 ]]; then
@@ -132,4 +137,5 @@ if [[ ${#urls[@]} -eq 0 ]]; then
   exit 0
 fi
 
+launch_env=(--env "QUILL_LAUNCH_URL=$last_url")
 open_app ${urls[@]+"${urls[@]}"}

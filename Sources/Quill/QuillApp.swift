@@ -18,7 +18,9 @@ enum QuillMain {
             QuillApp.main()
             return
         }
-        if let url = LaunchOpenURL.find() {
+        // `open` without -W exits before this process can read its arguments. The launcher
+        // passes the same quill:// URL in the environment, which is here at startup.
+        if let url = LaunchOpenURL.fromEnvironment() ?? LaunchOpenURL.find() {
             EarlyOpenURL.remember(url)
             FastOpen.main(launchURL: url)
             return
@@ -31,6 +33,18 @@ enum QuillMain {
 /// an argument of that `open` process, which is alive while it waits for us. Reading it
 /// there avoids the wait until Launch Services delivers the GetURL event.
 enum LaunchOpenURL {
+    /// `QUILL_LAUNCH_URL` is set by `Scripts/quill` on the app process. `open` does not
+    /// keep itself alive for a normal launch, so its argv is not a reliable source.
+    static func fromEnvironment() -> URL? {
+        guard let raw = getenv("QUILL_LAUNCH_URL") else { return nil }
+        return url(inEnvironment: String(cString: raw))
+    }
+
+    static func url(inEnvironment raw: String) -> URL? {
+        guard let url = URL(string: raw), LaunchRequest.target(from: url) != nil else { return nil }
+        return url
+    }
+
     static func find() -> URL? {
         let bundle = Bundle.main
         let bundlePath = bundle.bundlePath

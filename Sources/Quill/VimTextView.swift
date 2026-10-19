@@ -290,6 +290,11 @@ final class VimTextView: NSTextView {
         isAutomaticDashSubstitutionEnabled = false
         isAutomaticTextReplacementEnabled = false
         isAutomaticSpellingCorrectionEnabled = false
+        // The first caret placement otherwise starts continuous spell checking.
+        isContinuousSpellCheckingEnabled = false
+        isGrammarCheckingEnabled = false
+        isAutomaticLinkDetectionEnabled = false
+        enabledTextCheckingTypes = 0
     }
 
     func applyTheme(_ theme: QuillTheme, focus: Bool) {
@@ -312,6 +317,8 @@ final class VimTextView: NSTextView {
         queueRestyle()
     }
 
+    /// Column insets from the enclosing scroll view. The launch path calls this once the
+    /// text view is in the scroll view that stays on screen.
     func updateInsets() {
         guard let clip = enclosingScrollView?.contentView else { return }
         let width = clip.bounds.width
