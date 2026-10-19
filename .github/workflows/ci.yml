@@ -24,6 +24,8 @@ jobs:
           python3 Scripts/check_boundaries.py --self-test
       - name: Shellcheck
         run: shellcheck -s bash Scripts/quill Scripts/verify-quill Scripts/*.sh
+      - name: Check app icon
+        run: python3 Scripts/make-icon.py --check
 
   # Xcode 16.4 (Swift 6.1) on macos-15 rejects the app, and Xcode 26
   # binaries do not run on macOS 15. macos-26 compiles and tests with Swift 6.2.

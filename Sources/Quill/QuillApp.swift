@@ -1,4 +1,5 @@
 import AppKit
+import QuillSearch
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -31,30 +32,53 @@ struct QuillApp: App {
         .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("New") { model.newUntitled() }
-                    .keyboardShortcut("n", modifiers: .command)
-                Button("Open…") { model.openPanel() }
-                    .keyboardShortcut("o", modifiers: .command)
-                Button("Save") { model.save() }
-                    .keyboardShortcut("s", modifiers: .command)
-                Button("Save As…") { model.saveAs() }
-                    .keyboardShortcut("s", modifiers: [.command, .shift])
+                ForEach(model.commands.menuEntries(category: "File")) { entry in
+                    menuButton(entry)
+                }
             }
             CommandGroup(after: .toolbar) {
-                Button("Find Files") { model.presentFilePicker() }
-                    .keyboardShortcut("p", modifiers: .command)
-                Button("Live Grep") { model.presentGrepPicker() }
-                    .keyboardShortcut("f", modifiers: [.command, .shift])
-                Button("Focus Mode") { model.toggleFocus() }
-                    .keyboardShortcut("f", modifiers: [.command, .control])
-                Button("Go to Definition") { model.goToDefinition() }
-                    .keyboardShortcut("d", modifiers: .command)
+                ForEach(model.commands.menuEntries(category: "Search")) { entry in
+                    menuButton(entry)
+                }
+                ForEach(model.commands.menuEntries(category: "Navigate")) { entry in
+                    menuButton(entry)
+                }
             }
             CommandGroup(after: .sidebar) {
-                Button("Toggle Light/Dark") { model.toggleTheme() }
-                    .keyboardShortcut("l", modifiers: [.command, .shift])
+                ForEach(model.commands.menuEntries(category: "View")) { entry in
+                    menuButton(entry)
+                }
+                ForEach(model.commands.menuEntries(category: "Edit")) { entry in
+                    menuButton(entry)
+                }
             }
         }
+    }
+
+    @ViewBuilder
+    private func menuButton(_ entry: CommandEntry) -> some View {
+        let enabled = model.commands.isEnabled(id: entry.id)
+        if let chord = menuChord(for: entry) {
+            Button(entry.name) { model.runCommand(entry.id) }
+                .keyboardShortcut(KeyEquivalent(chord.key), modifiers: chord.modifiers)
+                .disabled(!enabled)
+        } else {
+            Button(entry.name) { model.runCommand(entry.id) }
+                .disabled(!enabled)
+        }
+    }
+
+    private func menuChord(for entry: CommandEntry) -> (key: Character, modifiers: EventModifiers)? {
+        for binding in entry.bindings {
+            guard case .chord(let key, let command, let shift, let option, let control) = binding.kind else { continue }
+            var modifiers: EventModifiers = []
+            if command { modifiers.insert(.command) }
+            if shift { modifiers.insert(.shift) }
+            if option { modifiers.insert(.option) }
+            if control { modifiers.insert(.control) }
+            return (key, modifiers)
+        }
+        return nil
     }
 }
 

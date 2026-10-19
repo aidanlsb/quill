@@ -117,6 +117,8 @@ Default leader is **Space**. Configurable in `~/.config/quill/config.toml`.
 `<leader>t*` is reserved for toggles. `tt` is the appearance toggle; other `t` sequences are left open. **⇧⌘L** is the same toggle, under View → Toggle Light/Dark.
 | ⌘P | alias for find files |
 
+**⌘K** opens the command palette: the same native picker, listing every command (open, save, find files, live grep, the directory buffer, focus mode, light/dark/system theme, LSP, config, and the rest). Each row’s shortcut sits on the right. Recently used commands stay at the top. It opens from normal or insert mode; Escape puts the previous mode and cursor back, and Return runs the selected command. File → Command Palette uses the same list as the menus and the leader and ex bindings.
+
 The picker is a native floating panel with a preview.
 
 **Picker insert mode** (opens here): type to filter, **Ctrl-n / Ctrl-p** or arrows move, Enter opens, **Esc** → picker normal.

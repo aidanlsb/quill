@@ -18,12 +18,15 @@ public struct PickerItem: Equatable, Sendable {
     public var subtitle: String
     public var payload: String
     public var preview: String
+    /// Drawn quieter. The command palette uses this for a command whose predicate is false.
+    public var dimmed: Bool
 
-    public init(title: String, subtitle: String = "", payload: String, preview: String = "") {
+    public init(title: String, subtitle: String = "", payload: String, preview: String = "", dimmed: Bool = false) {
         self.title = title
         self.subtitle = subtitle
         self.payload = payload
         self.preview = preview
+        self.dimmed = dimmed
     }
 }
 
@@ -192,9 +195,9 @@ public final class PickerEngine {
     }
 
     /// Async results land here. Filtering stays on the caller so a keystroke never blocks.
-    public func replaceItems(_ newItems: [PickerItem]) {
+    public func replaceItems(_ newItems: [PickerItem], resetSelection: Bool = false) {
         items = newItems
-        if items.isEmpty {
+        if items.isEmpty || resetSelection {
             selectedIndex = 0
         } else {
             selectedIndex = min(selectedIndex, items.count - 1)
