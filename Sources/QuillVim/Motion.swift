@@ -113,7 +113,7 @@ enum MotionResolver {
             for step in 0..<n {
                 let line = buffer.lineIndex(containing: pos)
                 pos = buffer.lastCharacterOffset(onLine: line)
-                if line + 1 < buffer.lineCount, step < n - 1 {
+                if line < buffer.lastLine, step < n - 1 {
                     pos = buffer.line(line + 1).start
                 }
             }
@@ -130,14 +130,14 @@ enum MotionResolver {
             let row = screen.step(from: screen.screenLine(containing: buffer.cursor), by: n - 1).row
             return .move(screen.lastCursor(on: row), inclusive: true)
         case .fileStart:
-            let line = min(max(0, n - 1), buffer.lineCount - 1)
+            let line = min(max(0, n - 1), buffer.lastLine)
             return .move(buffer.firstNonBlank(onLine: line), linewise: true)
         case .gotoLine:
             let line: Int
             if count <= 0 {
-                line = max(0, buffer.lineCount - 1)
+                line = buffer.lastLine
             } else {
-                line = min(max(0, n - 1), buffer.lineCount - 1)
+                line = min(max(0, n - 1), buffer.lastLine)
             }
             return .move(buffer.firstNonBlank(onLine: line), linewise: true)
         case .find(let findKind):
@@ -207,7 +207,7 @@ enum MotionResolver {
     /// `dj` / `yk` / `>j`: whole buffer lines. Wrapping never changes what an operator covers.
     private static func bufferVertical(_ buffer: TextBuffer, delta: Int) -> ResolvedMotion {
         let line = buffer.lineIndex(containing: buffer.cursor)
-        let last = buffer.lineCount - 1
+        let last = buffer.lastLine
         if delta > 0, line >= last { return .fail(buffer.cursor) }
         if delta < 0, line <= 0 { return .fail(buffer.cursor) }
         let target = min(max(0, line + delta), last)
@@ -267,6 +267,7 @@ enum MotionResolver {
         stepGeneric(buffer, from: from, toEnd: toEnd, backward: backward, big: true)
     }
 
+    /// One `w` / `e` / `b` step. Walks graphemes, so it cannot stop inside one.
     private static func stepGeneric(
         _ buffer: TextBuffer,
         from: Int,
@@ -274,25 +275,27 @@ enum MotionResolver {
         backward: Bool,
         big: Bool
     ) -> Int {
-        let last = max(0, buffer.count - 1)
-        var i = min(max(0, from), last)
+        let last = buffer.graphemeStart(before: buffer.count)
+        var i = buffer.clampedCursor(min(max(0, from), last), normalMode: false)
 
         func cls(_ off: Int) -> CharClass { buffer.charClass(at: off) }
         func isBlank(_ off: Int) -> Bool {
             let c = cls(off)
             return c == .whitespace || c == .newline
         }
+        func next(_ off: Int) -> Int { buffer.nextGrapheme(after: off) }
+        func previous(_ off: Int) -> Int { buffer.graphemeStart(before: off) }
 
         if backward {
             if i == 0 { return 0 }
-            i -= 1
-            while i > 0 && isBlank(i) { i -= 1 }
+            i = previous(i)
+            while i > 0 && isBlank(i) { i = previous(i) }
             if toEnd {
                 return i
             }
             let current = cls(i)
-            while i > 0 && sameWordClass(cls(i - 1), current, big: big) {
-                i -= 1
+            while i > 0 && sameWordClass(cls(previous(i)), current, big: big) {
+                i = previous(i)
             }
             return i
         }
@@ -301,18 +304,18 @@ enum MotionResolver {
             // If already at end of a word, move off it first.
             if !isBlank(i) {
                 let current = cls(i)
-                let atEnd = i == last || !sameWordClass(cls(i + 1), current, big: big)
+                let atEnd = i == last || !sameWordClass(cls(next(i)), current, big: big)
                 if atEnd {
-                    if i < last { i += 1 }
-                    while i < last && isBlank(i) { i += 1 }
+                    if i < last { i = next(i) }
+                    while i < last && isBlank(i) { i = next(i) }
                 }
             } else {
-                while i < last && isBlank(i) { i += 1 }
+                while i < last && isBlank(i) { i = next(i) }
             }
             if isBlank(i) { return i }
             let current = cls(i)
-            while i < last && sameWordClass(cls(i + 1), current, big: big) {
-                i += 1
+            while i < last && sameWordClass(cls(next(i)), current, big: big) {
+                i = next(i)
             }
             return i
         }
@@ -320,12 +323,12 @@ enum MotionResolver {
         // w / W: next word start
         if !isBlank(i) {
             let current = cls(i)
-            while i < last && sameWordClass(cls(i + 1), current, big: big) {
-                i += 1
+            while i < last && sameWordClass(cls(next(i)), current, big: big) {
+                i = next(i)
             }
-            if i < last { i += 1 }
+            if i < last { i = next(i) }
         }
-        while i < last && isBlank(i) { i += 1 }
+        while i < last && isBlank(i) { i = next(i) }
         return i
     }
 
@@ -348,6 +351,7 @@ enum MotionResolver {
         return .move(pos, inclusive: inclusive)
     }
 
+    /// `f` / `t` / `F` / `T` within `content`, one grapheme at a time.
     private static func scanFind(
         _ buffer: TextBuffer,
         kind: FindKind,
@@ -356,26 +360,31 @@ enum MotionResolver {
         content: Range<Int>
     ) -> Int? {
         if kind.isForward {
-            var i = from + 1
+            var before = from
+            var i = buffer.nextGrapheme(after: from)
             while i < content.upperBound {
                 if buffer.character(at: i) == target {
                     if kind.isTill {
-                        return i > from + 1 || i - 1 > from ? i - 1 : nil
+                        return before > from ? before : nil
                     }
                     return i
                 }
-                i += 1
+                before = i
+                i = buffer.nextGrapheme(after: i)
             }
         } else {
-            var i = from - 1
-            while i >= content.lowerBound {
+            guard from > content.lowerBound else { return nil }
+            var i = buffer.graphemeStart(before: from)
+            while true {
                 if buffer.character(at: i) == target {
                     if kind.isTill {
-                        return i + 1 < from ? i + 1 : nil
+                        let after = buffer.nextGrapheme(after: i)
+                        return after < from ? after : nil
                     }
                     return i
                 }
-                i -= 1
+                if i <= content.lowerBound { break }
+                i = buffer.graphemeStart(before: i)
             }
         }
         return nil
@@ -384,19 +393,22 @@ enum MotionResolver {
     private static func paragraph(_ buffer: TextBuffer, count: Int, forward: Bool) -> ResolvedMotion {
         if buffer.isEmpty { return .fail(0) }
         var line = buffer.lineIndex(containing: buffer.cursor)
+        let last = buffer.lastLine
         for _ in 0..<count {
             if forward {
-                if buffer.isBlankLine(line) && line + 1 < buffer.lineCount {
+                if buffer.isBlankLine(line) && line < last {
                     line += 1
-                    while line < buffer.lineCount && buffer.isBlankLine(line) {
+                    while line < last && buffer.isBlankLine(line) {
                         line += 1
                     }
                 }
-                while line < buffer.lineCount && !buffer.isBlankLine(line) {
+                while line <= last && !buffer.isBlankLine(line) {
                     line += 1
                 }
-                if line >= buffer.lineCount {
-                    line = buffer.lineCount - 1
+                if line > last {
+                    // No blank line ahead: vim goes to the end of the last line,
+                    // so `d}` takes the rest of the document.
+                    return .move(buffer.count)
                 }
             } else {
                 if line == 0 {
@@ -439,9 +451,9 @@ enum MotionResolver {
         guard offset < buffer.count, isSentencePunct(buffer.character(at: offset)) else {
             return false
         }
-        var i = offset + 1
+        var i = buffer.nextGrapheme(after: offset)
         while i < buffer.count, isCloser(buffer.character(at: i)) {
-            i += 1
+            i = buffer.nextGrapheme(after: i)
         }
         if i >= buffer.count { return true }
         let ch = buffer.character(at: i)
@@ -449,55 +461,47 @@ enum MotionResolver {
     }
 
     private static func nextSentence(_ buffer: TextBuffer, from: Int) -> Int {
+        let last = buffer.graphemeStart(before: buffer.count)
         var i = from
         while i < buffer.count {
             if isSentenceEnd(buffer, at: i) {
-                i += 1
-                while i < buffer.count {
-                    let ch = buffer.character(at: i)
-                    if ch == " " || ch == "\t" || ch == "\n" || isCloser(ch) {
-                        i += 1
-                        continue
-                    }
-                    break
-                }
-                return min(i, max(0, buffer.count - 1))
+                return sentenceStart(afterEndAt: i, in: buffer)
             }
-            i += 1
+            i = buffer.nextGrapheme(after: i)
         }
-        return max(0, buffer.count - 1)
+        return last
     }
 
     private static func sentenceStart(afterEndAt end: Int, in buffer: TextBuffer) -> Int {
-        var start = end + 1
+        var start = buffer.nextGrapheme(after: end)
         while start < buffer.count {
             let ch = buffer.character(at: start)
             if ch == " " || ch == "\t" || ch == "\n" || isCloser(ch) {
-                start += 1
+                start = buffer.nextGrapheme(after: start)
                 continue
             }
             break
         }
-        return min(start, max(0, buffer.count - 1))
+        return min(start, buffer.graphemeStart(before: buffer.count))
     }
 
     private static func prevSentence(_ buffer: TextBuffer, from: Int) -> Int {
         if from == 0 { return 0 }
-        var searchFrom = from - 1
+        var searchFrom = buffer.graphemeStart(before: from)
         let currentStart: Int? = {
-            var i = from - 1
-            while i > 0, !isSentenceEnd(buffer, at: i) { i -= 1 }
+            var i = buffer.graphemeStart(before: from)
+            while i > 0, !isSentenceEnd(buffer, at: i) { i = buffer.graphemeStart(before: i) }
             guard isSentenceEnd(buffer, at: i) else { return 0 }
             return sentenceStart(afterEndAt: i, in: buffer)
         }()
         if let currentStart, from <= currentStart {
-            searchFrom = max(0, currentStart - 1)
+            searchFrom = buffer.graphemeStart(before: currentStart)
         } else if let currentStart, from > currentStart {
             return currentStart
         }
         var i = searchFrom
         while i > 0, !isSentenceEnd(buffer, at: i) {
-            i -= 1
+            i = buffer.graphemeStart(before: i)
         }
         if isSentenceEnd(buffer, at: i) {
             let start = sentenceStart(afterEndAt: i, in: buffer)
