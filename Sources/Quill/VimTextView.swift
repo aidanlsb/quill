@@ -498,15 +498,12 @@ final class VimTextView: NSTextView {
 
     private func assertViewMatchesEngine() {
         #if DEBUG
-        // `string` is the document reload writes. Repair a drift instead of
-        // aborting: TextKit can report a short length while the engine is right.
+        // A host command can replace the buffer before this returns. The model's
+        // editor reloads inside that command; a view the model does not own
+        // still has the previous document, so put the engine text back.
         let length = (string as NSString).length
         guard length != engine.buffer.count, !repairingDocument else { return }
         repairingDocument = true
-        fputs(
-            "quill drift view=\(length) engine=\(engine.buffer.count) viewText=[\(string)] engineText=[\(engine.text)]\n",
-            stderr
-        )
         string = engine.text
         repairingDocument = false
         #endif
