@@ -28,7 +28,7 @@ extension Probe {
 
         let lines = (0..<80).map { "line \($0) abcdefghij" }.joined(separator: "\n")
         engine.load(text: lines)
-        tv.syncFromEngine()
+        tv.reload()
         tv.layoutSubtreeIfNeeded()
         tv.noteContentSizeChanged()
         let clipHeight = scroll.contentView.bounds.height
@@ -43,7 +43,7 @@ extension Probe {
         check(scrolled > origin + 50, "trackpad scroll \(origin) -> \(scrolled)", failures: failures)
 
         _ = tv.press("gg")
-        tv.syncFromEngine()
+        tv.reload()
         for _ in 0..<40 {
             _ = tv.press("j")
         }
@@ -59,7 +59,7 @@ extension Probe {
         )
 
         _ = tv.press("G")
-        tv.syncFromEngine()
+        tv.reload()
         let atEnd = scroll.contentView.bounds.origin.y
         check(
             atEnd > tv.frame.height * 0.3,
@@ -67,7 +67,7 @@ extension Probe {
             failures: failures
         )
         _ = tv.press("gg")
-        tv.syncFromEngine()
+        tv.reload()
         // The first line sits below the top margin, so the origin rests just above that line.
         let top = max(40, tv.textContainerInset.height + 8)
         check(
@@ -79,7 +79,7 @@ extension Probe {
         engine.scrollLineCount = tv.halfPageLines()
         let before = engine.buffer.lineIndex(containing: engine.cursor)
         _ = tv.press("<C-d>")
-        tv.syncFromEngine()
+        tv.reload()
         let after = engine.buffer.lineIndex(containing: engine.cursor)
         check(
             after >= before + engine.scrollLineCount,
@@ -87,7 +87,7 @@ extension Probe {
             failures: failures
         )
         _ = tv.press("<C-u>")
-        tv.syncFromEngine()
+        tv.reload()
         let back = engine.buffer.lineIndex(containing: engine.cursor)
         check(
             back <= before + 1,
@@ -122,7 +122,7 @@ extension Probe {
         window.contentView = scroll
         window.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
         window.makeKeyAndOrderFront(nil)
-        tv.syncFromEngine()
+        tv.reload()
         tv.layoutSubtreeIfNeeded()
 
         let viewLength = (tv.string as NSString).length
@@ -149,9 +149,9 @@ extension Probe {
         )
 
         _ = tv.press("gg")
-        tv.syncFromEngine()
+        tv.reload()
         _ = tv.press("G")
-        tv.syncFromEngine()
+        tv.reload()
         let endLine = engine.buffer.lineIndex(containing: engine.cursor)
         let maxY = max(0, tv.frame.height - clip)
         let atEnd = scroll.contentView.bounds.origin.y
@@ -163,9 +163,9 @@ extension Probe {
         )
 
         _ = tv.press("gg")
-        tv.syncFromEngine()
+        tv.reload()
         _ = tv.press("/MARKER-9000<CR>")
-        tv.syncFromEngine()
+        tv.reload()
         let found = engine.buffer.lineIndex(containing: engine.cursor)
         check(found == markerLine, "search landed on line \(found)", failures: failures)
         let row = tv.frame.height / CGFloat(max(engine.buffer.lineCount, 1))

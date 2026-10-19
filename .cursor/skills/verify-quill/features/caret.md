@@ -1,5 +1,7 @@
 # Caret
 
+Keystrokes, table formatting, completion, and jumps move the caret through one path. A buffer replacement (open, or a directory refresh) reloads the text view.
+
 The normal-mode cursor is one character cell: the width of the glyph under it, or a space at the end of a line, and the height of that font's em box (`ascender - descender`). It sits on the baseline, with slightly rounded corners and a translucent accent so the glyph stays legible. Insert mode is a 2-pixel rounded beam of the same height that blinks subtly. A heading caret is taller than a body caret. Blank lines and the end of the document use the same em box.
 
 ## Sub-features

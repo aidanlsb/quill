@@ -113,7 +113,7 @@ enum AppPerf {
         let session = host(edited)
         let view = session.view
         let sync = millis {
-            view.syncFromEngine()
+            view.reload()
         }
         emit("textSyncMs", sync)
         view.engine.mode = .insert
@@ -142,10 +142,10 @@ enum AppPerf {
 
         let typicalText = sample(lines: 3_000)
         let typical = host(typicalText)
-        typical.view.syncFromEngine()
+        typical.view.reload()
         let at = typical.view.engine.buffer.line(2_000).start
         typical.view.engine.moveCursor(to: at)
-        typical.view.syncFromEngine()
+        typical.view.reload()
         typical.view.engine.mode = .insert
         let typicalTyping = millis {
             for _ in 0..<20 {
@@ -167,7 +167,7 @@ enum AppPerf {
         emit("imageIndexMs", indexed)
         let images = host(imageDoc)
         images.view.setImageContext(enabled: true, filePath: "/tmp/quill-image-bench.md")
-        images.view.syncFromEngine()
+        images.view.reload()
         let refreshed = millis {
             images.view.flushImagePreviews()
         }

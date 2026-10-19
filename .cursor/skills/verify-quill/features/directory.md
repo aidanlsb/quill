@@ -1,5 +1,7 @@
 # Directory buffer
 
+`j` and `k` redraw the old highlight row and the new one. The row style is cached until the listing text, theme, or entries change. Drawing lays out only the fragments that intersect the dirty rect.
+
 `quill .` opens the folder as an editable listing. The listing is a compact monospaced list, left aligned, with a path header and a background tint that is not the writing column. Enter opens the entry under the cursor. `-` opens the parent. Editing a name and pressing `:w` asks before changing the filesystem. Until that write, a rename, a new name, and a deletion stay marked on the listing.
 
 ## Sub-features

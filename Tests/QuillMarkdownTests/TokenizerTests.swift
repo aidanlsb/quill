@@ -238,6 +238,10 @@ final class TokenizerTests: XCTestCase {
         let text = "[[note]]"
         XCTAssertEqual(WikilinkQuery.at(cursor: 4, in: text), "note")
         XCTAssertEqual(WikilinkQuery.prefix(before: 6, in: "[[not"), "not")
+        let line = "see [[no"
+        XCTAssertEqual(WikilinkQuery.prefix(before: line.utf16.count, in: line), "no")
+        let current = "plain text"
+        XCTAssertNil(WikilinkQuery.prefix(before: current.utf16.count, in: current))
         let paragraph = Paragraphs.range(in: "one\n\ntwo three\n", utf16: 6)
         XCTAssertTrue(paragraph.contains(6))
     }

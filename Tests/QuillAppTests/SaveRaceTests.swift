@@ -40,7 +40,7 @@ final class SaveRaceTests: XCTestCase {
 
         let result = model.engine.type(":wq<CR>")
         XCTAssertEqual(result.actions, [.ex(ExCall(name: "wq"))])
-        model.handleEngineResult(result)
+        model.afterEdit(result)
         XCTAssertEqual(model.closeRequests, 0, "close ran before the write finished")
 
         await gate.release()
@@ -73,7 +73,7 @@ final class SaveRaceTests: XCTestCase {
         let gate = pauseWrites(of: model)
 
         model.message = ""
-        model.handleEngineResult(model.engine.type(":wq<CR>"))
+        model.afterEdit(model.engine.type(":wq<CR>"))
         insert(" more", in: model)
         await gate.release()
         await waitUntil("save did not finish") {
@@ -97,7 +97,7 @@ final class SaveRaceTests: XCTestCase {
             throw CocoaError(.fileWriteUnknown)
         }
 
-        model.handleEngineResult(model.engine.type(":wq<CR>"))
+        model.afterEdit(model.engine.type(":wq<CR>"))
         await attempted.wait()
         await Task.yield()
 

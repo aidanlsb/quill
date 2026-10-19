@@ -23,7 +23,6 @@ final class AppModel {
     var focusMode = false
     var theme = QuillTheme.current()
     var isDirectory = false
-    var hoverText: String?
     var picker: PickerEngine?
     var pickerKind: PickerKind?
     var pickerTick = 0
@@ -35,10 +34,17 @@ final class AppModel {
     var showConfirm = false
     var confirmWarning = ""
     var completions: [String] = []
-    var diagnostics: [Diagnostic] = []
+    /// `-1` until Ctrl-n/p or an arrow chooses a row. The first Ctrl-n selects the first match.
+    var completionIndex = -1
+    var diagnostics: [Diagnostic] = [] {
+        didSet { rebuildDiagnosticRanges() }
+    }
+    /// UTF-16 ranges computed once when diagnostics arrive.
+    var diagnosticRanges: [(NSRange, Int)] = []
     var showUnsaved = false
-    /// Bumped when the buffer changes outside `keyDown`, so the text view syncs.
-    var revision = 0
+    /// The live text view. Nil in tests that drive the engine without a window.
+    @ObservationIgnored
+    weak var editor: VimTextView?
 
     enum PickerKind { case files, grep, references, codeAction, commands }
     enum PendingNavigation {
@@ -54,8 +60,6 @@ final class AppModel {
     private var ending: LineEnding = .lf
     private var loadedAt: Date?
     private var confirmOverwrite = false
-    private var docVersion = 1
-    private var sync = DocumentSync()
     private var appearanceObserver: NSKeyValueObservation?
     private let servers = LanguageServerManager()
     private let searchSession = SearchSession()
@@ -63,7 +67,9 @@ final class AppModel {
     private let fileTypes = FileTypeRegistry()
     private var grepTask: Task<Void, Never>?
     private var hoverGeneration = 0
-    private var lspURI: String?
+    private var lsp: LSPDocumentLink?
+    private var completionQuery: String?
+    private var completionGeneration = 0
     private var pendingJumps: [String: LaunchTarget] = [:]
     private var codeActions: [CodeAction] = []
     var pendingNavigation: PendingNavigation?
@@ -270,22 +276,48 @@ final class AppModel {
         }
     }
 
-    func handleEngineResult(_ result: EngineResult, fromTextView: Bool = false) {
-        // The text view already applied the edit. Bumping `revision` made
-        // SwiftUI sync the buffer and restyle the whole document again.
-        if result.didChangeText, !fromTextView { revision += 1 }
-        modified = engine.isModified
-        status = engine.mode.displayName
-        if !engine.statusMessage.isEmpty { message = engine.statusMessage }
-        if engine.mode == .commandLine || engine.mode == .search { message = engine.commandLine }
+    func afterEdit(_ result: EngineResult) {
+        setIfChanged(\.modified, engine.isModified)
+        setIfChanged(\.status, engine.mode.displayName)
+        if !engine.statusMessage.isEmpty {
+            setIfChanged(\.message, engine.statusMessage)
+        }
+        if engine.mode == .commandLine || engine.mode == .search {
+            setIfChanged(\.message, engine.commandLine)
+        }
         if result.didChangeText, !isDirectory {
-            sync.apply(edits: result.edits.map { ($0.range, $0.replacement) })
-            pushLSPChange()
-            updateWikilinkCompletion()
+            lsp?.didEdit(result.edits)
+            if engine.mode == .insert {
+                updateWikilinkCompletion()
+            } else if !completions.isEmpty {
+                clearCompletions()
+            }
         }
         for action in result.actions { perform(action) }
-        requestHover()
         refreshStatus()
+    }
+
+    /// Host edit: the text view applies it, then `afterEdit` runs. Without a view, only the model updates.
+    private func apply(_ result: EngineResult) {
+        if let editor {
+            editor.applyResult(result)
+        } else {
+            afterEdit(result)
+        }
+    }
+
+    private func setIfChanged<T: Equatable>(_ keyPath: ReferenceWritableKeyPath<AppModel, T>, _ value: T) {
+        if self[keyPath: keyPath] != value {
+            self[keyPath: keyPath] = value
+        }
+    }
+
+    var hasLanguageServer: Bool { lsp != nil }
+
+    /// Tests install a scripted client without spawning a server process.
+    func adoptLanguageLink(_ link: LSPDocumentLink) {
+        lsp?.close()
+        lsp = link
     }
 
     func perform(_ action: HostAction) {
@@ -414,7 +446,7 @@ final class AppModel {
         guard !plan.rewrites.isEmpty else { return }
         let edits = plan.rewrites.map { TextEdit(range: $0.range, replacement: $0.replacement) }
         let result = engine.applyHostEdits(edits, cursor: plan.cursor)
-        handleEngineResult(result)
+        apply(result)
     }
 
     func save(then completion: (@MainActor () -> Void)? = nil) {
@@ -544,27 +576,27 @@ final class AppModel {
     }
 
     func goToDefinition() {
-        if let url = fileURL, lspURI != nil {
-            let pos = LSPPosition(engine.buffer.position(of: engine.cursor))
-            let uri = url.absoluteString
-            Task {
-                let clients = await serversForCurrentFile()
-                for client in clients where client.capabilities.definitionProvider || client.isRunning {
-                    if let locs = try? await client.definition(uri: uri, position: pos), let first = locs.first, let dest = first.fileURL {
-                        self.openTarget(LaunchTarget(
-                            path: dest.path,
-                            line: first.range.start.line + 1,
-                            column: first.range.start.character + 1,
-                            columnUnit: .utf16
-                        ))
-                        return
-                    }
-                }
-                self.followWikilink()
-            }
+        guard let url = fileURL, let link = lsp else {
+            followWikilink()
             return
         }
-        followWikilink()
+        let pos = LSPPosition(engine.buffer.position(of: engine.cursor))
+        let uri = url.absoluteString
+        Task {
+            let clients = link.requestClients()
+            for client in clients where client.capabilities.definitionProvider || client.isRunning {
+                if let locs = try? await client.definition(uri: uri, position: pos), let first = locs.first, let dest = first.fileURL {
+                    self.openTarget(LaunchTarget(
+                        path: dest.path,
+                        line: first.range.start.line + 1,
+                        column: first.range.start.character + 1,
+                        columnUnit: .utf16
+                    ))
+                    return
+                }
+            }
+            self.followWikilink()
+        }
     }
 
     func presentFilePicker() {
@@ -657,8 +689,7 @@ final class AppModel {
         case .utf16:
             offset = engine.buffer.offset(of: TextPosition(line: index, utf16Column: col))
         }
-        engine.moveCursor(to: offset)
-        revision += 1
+        apply(engine.moveCursor(to: offset))
         pickerTick += 1
     }
 
@@ -670,8 +701,12 @@ final class AppModel {
         let position = LSPPosition(engine.buffer.position(of: engine.cursor))
         let uri = url.absoluteString
         let text = engine.text
+        guard let link = lsp else {
+            message = "No language server"
+            return
+        }
         Task {
-            let clients = await serversForCurrentFile()
+            let clients = link.requestClients()
             guard let client = clients.first(where: \.isRunning) else {
                 self.message = "No language server"
                 return
@@ -721,8 +756,12 @@ final class AppModel {
         }
         let uri = url.absoluteString
         let context = diagnostics
+        guard let link = lsp else {
+            message = "No language server"
+            return
+        }
         Task {
-            let clients = await serversForCurrentFile()
+            let clients = link.requestClients()
             guard let client = clients.first(where: \.isRunning) else {
                 self.message = "No language server"
                 return
@@ -754,20 +793,64 @@ final class AppModel {
 
     func toggleFocus() { focusMode.toggle() }
 
-    func nsDiagnosticRanges() -> [(NSRange, Int)] {
-        diagnostics.map { diag in
-            let start = engine.buffer.offset(of: diag.range.start.textPosition)
-            let end = engine.buffer.offset(of: diag.range.end.textPosition)
-            return (NSRange(location: start, length: max(0, end - start)), diag.severity)
+    func showHover() {
+        if let text = diagnosticMessage(at: engine.cursor) {
+            setIfChanged(\.message, text)
+            return
+        }
+        guard let link = lsp else {
+            setIfChanged(\.message, "No info")
+            return
+        }
+        hoverGeneration += 1
+        let generation = hoverGeneration
+        let position = LSPPosition(engine.buffer.position(of: engine.cursor))
+        Task {
+            let hover = await link.hover(at: position)
+            guard generation == self.hoverGeneration else { return }
+            let line = hover?.contents.split(whereSeparator: \.isNewline).first.map(String.init)
+            let shown = (line?.isEmpty == false) ? line! : "No info"
+            self.setIfChanged(\.message, shown)
+        }
+    }
+
+    /// Insert-mode keys for the completion list. Esc returns false so the engine still leaves insert.
+    func handleCompletionKey(_ event: KeyEvent) -> Bool {
+        guard engine.mode == .insert, !completions.isEmpty else { return false }
+        switch event.key {
+        case .ctrl("n"), .down:
+            completionIndex += 1
+            if completionIndex >= completions.count { completionIndex = 0 }
+            return true
+        case .ctrl("p"), .up:
+            completionIndex -= 1
+            if completionIndex < 0 { completionIndex = completions.count - 1 }
+            return true
+        case .ctrl("y"), .tab:
+            let index = min(max(completionIndex, 0), completions.count - 1)
+            applyCompletion(completions[index])
+            return true
+        case .ctrl("e"):
+            clearCompletions()
+            return true
+        case .escape:
+            clearCompletions()
+            return false
+        default:
+            return false
         }
     }
 
     func applyCompletion(_ name: String) {
-        guard let prefix = WikilinkQuery.prefix(before: engine.cursor, in: engine.text) else { return }
-        let start = engine.cursor - prefix.utf16.count
-        _ = engine.applyHostEdit(replacing: start..<engine.cursor, with: name)
-        completions = []
-        modified = engine.isModified
+        let cursor = engine.cursor
+        let line = engine.buffer.line(engine.buffer.lineIndex(containing: cursor))
+        let end = min(max(cursor, line.start), line.contentEnd)
+        let fragment = engine.buffer.substring(line.start..<end)
+        guard let prefix = WikilinkQuery.prefix(before: end - line.start, in: fragment) else { return }
+        let start = end - prefix.utf16.count
+        let result = engine.applyHostEdit(replacing: start..<end, with: name)
+        apply(result)
+        clearCompletions()
     }
 
     private func performOpen(_ url: URL) {
@@ -814,11 +897,9 @@ final class AppModel {
         modified = false
         loadedAt = modificationDate(url)
         confirmOverwrite = false
-        sync = DocumentSync(text: decoded.text, version: 1)
-        docVersion = 1
         startLSP(for: url, text: decoded.text)
         applyPendingJump(for: url)
-        revision += 1
+        editor?.reload()
         refreshStatus()
     }
 
@@ -829,8 +910,8 @@ final class AppModel {
         rebuildKeymap()
         title = "Untitled"
         modified = false
-        sync = DocumentSync()
-        revision += 1
+        stopLSP()
+        editor?.reload()
         refreshStatus()
     }
 
@@ -853,8 +934,9 @@ final class AppModel {
             rootURL = url
             title = url.lastPathComponent + "/"
             modified = false
+            stopLSP()
             applyPendingJump(for: url)
-            revision += 1
+            editor?.reload()
             refreshStatus()
         } catch {
             message = error.localizedDescription
@@ -947,107 +1029,124 @@ final class AppModel {
     }
 
     private func updateWikilinkCompletion() {
-        guard engine.mode == .insert,
-              let prefix = WikilinkQuery.prefix(before: engine.cursor, in: engine.text) else {
-            completions = []
+        guard engine.mode == .insert else {
+            clearCompletions()
             return
         }
+        let cursor = engine.cursor
+        let line = engine.buffer.line(engine.buffer.lineIndex(containing: cursor))
+        let end = min(max(cursor, line.start), line.contentEnd)
+        let fragment = engine.buffer.substring(line.start..<end)
+        guard let prefix = WikilinkQuery.prefix(before: end - line.start, in: fragment) else {
+            clearCompletions()
+            return
+        }
+        if prefix == completionQuery { return }
+        completionQuery = prefix
+        completionGeneration += 1
+        let generation = completionGeneration
         let root = rootURL
         Task {
             if await fileIndex.root?.path != root.path {
                 await fileIndex.rebuild(root: root, ignore: IgnoreRules())
             }
+            guard generation == self.completionGeneration else { return }
             let names = await fileIndex.files.map { $0.deletingPathExtension().lastPathComponent }
-            self.completions = Fuzzy.rank(query: prefix, candidates: Array(Set(names))).prefix(8).map(\.value)
+            let ranked = Fuzzy.rank(query: prefix, candidates: Array(Set(names))).prefix(8).map(\.value)
+            guard generation == self.completionGeneration else { return }
+            self.completions = ranked
+            self.completionIndex = -1
         }
+    }
+
+    private func clearCompletions() {
+        completionGeneration += 1
+        completionQuery = nil
+        completionIndex = -1
+        if !completions.isEmpty { completions = [] }
     }
 
     private func startLSP(for url: URL, text: String) {
+        stopLSP()
+        let configs = config.lsp.servers(for: url)
+        guard !configs.isEmpty else { return }
         let language = fileTypes.languageId(for: url)
         let uri = url.absoluteString
-        lspURI = uri
+        let roots = configs.map { server in
+            WorkspaceRoot.find(from: url, markers: server.rootMarkers.isEmpty ? [".git"] : server.rootMarkers)
+        }
+        let link = LSPDocumentLink(uri: uri, text: text, version: 1)
+        lsp = link
         Task {
-            let configs = config.lsp.servers(for: url)
-            guard let server = configs.first else { return }
-            let root = WorkspaceRoot.find(from: url, markers: server.rootMarkers.isEmpty ? [".git"] : server.rootMarkers)
-            do {
-                let client = try await servers.connection(config: server, root: root)
-                let key = LanguageServerManager.ConnectionKey(name: server.name, root: root.path)
-                let already = await servers.isOpen(key: key, uri: uri)
-                client.onDiagnostics = { [weak self] diagURI, diags in
-                    Task { @MainActor [weak self] in
-                        guard let self, diagURI == self.fileURL?.absoluteString else { return }
-                        self.diagnostics = diags
+            var connected: [LSPClient] = []
+            for (server, root) in zip(configs, roots) {
+                do {
+                    let client = try await self.servers.connection(config: server, root: root)
+                    let key = LanguageServerManager.ConnectionKey(name: server.name, root: root.path)
+                    let already = await self.servers.isOpen(key: key, uri: uri)
+                    client.onDiagnostics = { [weak self] diagURI, diags in
+                        Task { @MainActor [weak self] in
+                            guard let self, diagURI == self.fileURL?.absoluteString else { return }
+                            self.diagnostics = diags
+                        }
                     }
-                }
-                client.onApplyEdit = { [weak self] edit in
-                    Task { @MainActor [weak self] in
-                        self?.applyWorkspaceEdit(edit)
+                    client.onApplyEdit = { [weak self] edit in
+                        Task { @MainActor [weak self] in
+                            self?.applyWorkspaceEdit(edit)
+                        }
                     }
+                    if !already {
+                        client.didOpen(uri: uri, languageId: language, version: 1, text: text)
+                        await self.servers.trackOpen(key: key, uri: uri)
+                    }
+                    connected.append(client)
+                    self.message = "LSP: \(server.name)"
+                } catch {
+                    self.message = ""
                 }
-                if !already {
-                    client.didOpen(uri: uri, languageId: language, version: docVersion, text: text)
-                    await servers.trackOpen(key: key, uri: uri)
-                }
-                self.message = "LSP: \(server.name)"
-            } catch {
-                self.message = ""
             }
+            guard self.lsp === link else { return }
+            link.attach(connected)
         }
     }
 
-    private func pushLSPChange() {
-        guard let url = fileURL else { return }
-        let uri = url.absoluteString
-        Task {
-            let clients = await serversForCurrentFile()
-            let flushed = sync.flush(incremental: true)
-            let full = LSPContentChange(text: sync.text)
-            for client in clients {
-                let changes = client.capabilities.incrementalSync ? flushed.changes : [full]
-                if changes.isEmpty { continue }
-                client.didChange(uri: uri, version: flushed.version, changes: changes)
-            }
-        }
+    private func stopLSP() {
+        lsp?.close()
+        lsp = nil
+        clearCompletions()
+        if !diagnostics.isEmpty { diagnostics = [] }
     }
 
     private func lspDidSave(_ url: URL) {
-        Task {
-            let clients = await serversForCurrentFile()
-            for client in clients {
-                client.didSave(uri: url.absoluteString, text: engine.text)
-            }
-        }
+        guard fileURL == url else { return }
+        lsp?.didSave(text: engine.text)
     }
 
-    private func serversForCurrentFile() async -> [LSPClient] {
-        guard let url = fileURL else { return [] }
-        var found: [LSPClient] = []
-        for server in config.lsp.servers(for: url) {
-            let root = WorkspaceRoot.find(from: url, markers: server.rootMarkers.isEmpty ? [".git"] : server.rootMarkers)
-            let key = LanguageServerManager.ConnectionKey(name: server.name, root: root.path)
-            if let client = await servers.client(key) { found.append(client) }
+    private func rebuildDiagnosticRanges() {
+        diagnosticRanges = diagnostics.map { diag in
+            let start = engine.buffer.offset(of: diag.range.start.textPosition)
+            let end = engine.buffer.offset(of: diag.range.end.textPosition)
+            return (NSRange(location: start, length: max(0, end - start)), diag.severity)
         }
-        return found
+        guard let editor else { return }
+        let current = editor.diagnosticRanges
+        let changed = current.count != diagnosticRanges.count
+            || current.map(\.0) != diagnosticRanges.map(\.0)
+        guard changed else { return }
+        editor.diagnosticRanges = diagnosticRanges
+        editor.queueRestyle()
     }
 
-    private func requestHover() {
-        guard !isDirectory, let url = fileURL else {
-            hoverText = nil
-            return
-        }
-        hoverGeneration += 1
-        let generation = hoverGeneration
-        let pos = LSPPosition(engine.buffer.position(of: engine.cursor))
-        let uri = url.absoluteString
-        Task {
-            let clients = await serversForCurrentFile()
-            guard let client = clients.first, client.isRunning else { return }
-            let hover = try? await client.hover(uri: uri, position: pos)
-            if generation == self.hoverGeneration {
-                self.hoverText = hover?.contents
+    private func diagnosticMessage(at cursor: Int) -> String? {
+        for (index, range) in diagnosticRanges.enumerated() where diagnostics.indices.contains(index) {
+            let ns = range.0
+            if ns.length == 0 {
+                if cursor == ns.location { return diagnostics[index].message }
+            } else if cursor >= ns.location, cursor < ns.location + ns.length {
+                return diagnostics[index].message
             }
         }
+        return nil
     }
 
     private func modificationDate(_ url: URL) -> Date? {
@@ -1080,8 +1179,12 @@ final class AppModel {
         guard let command = action.command else { return }
         let name = command.command
         let arguments = command.arguments
+        guard let link = lsp else {
+            if action.edit == nil { message = "No language server" }
+            return
+        }
         Task {
-            let clients = await serversForCurrentFile()
+            let clients = link.requestClients()
             guard let client = clients.first(where: \.isRunning) else {
                 if action.edit == nil { self.message = "No language server" }
                 return
@@ -1094,7 +1197,7 @@ final class AppModel {
         }
     }
 
-    private func applyWorkspaceEdit(_ edit: WorkspaceEdit) {
+    func applyWorkspaceEdit(_ edit: WorkspaceEdit) {
         guard let url = fileURL else {
             message = "Edit applies to another file"
             return
@@ -1108,7 +1211,7 @@ final class AppModel {
             return
         }
         let result = engine.applyHostEdits(edits)
-        handleEngineResult(result)
+        apply(result)
         if foreign { message = "Edit applies to another file" }
     }
 
@@ -1153,9 +1256,11 @@ final class AppModel {
     }
 
     private func refreshStatus() {
-        status = engine.mode.displayName
-        modified = engine.isModified
-        if engine.mode == .commandLine || engine.mode == .search { message = engine.commandLine }
+        setIfChanged(\.status, engine.mode.displayName)
+        setIfChanged(\.modified, engine.isModified)
+        if engine.mode == .commandLine || engine.mode == .search {
+            setIfChanged(\.message, engine.commandLine)
+        }
     }
 }
 

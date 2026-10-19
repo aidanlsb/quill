@@ -115,7 +115,7 @@ package.targets.append(
 package.targets.append(
     .testTarget(
         name: "QuillAppTests",
-        dependencies: ["Quill", "QuillVim", "QuillText", "QuillMarkdown", "QuillFS"],
+        dependencies: ["Quill", "QuillVim", "QuillText", "QuillMarkdown", "QuillLSP", "QuillFS"],
         swiftSettings: [.swiftLanguageMode(.v6)]
     )
 )

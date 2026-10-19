@@ -84,7 +84,9 @@ Own engine: parse **count → operator → motion or text object**. Motions retu
 
 **Ex:** `:w` `:write` `:q` `:quit` `:wq` `:x` `:e` `:edit`. `:q` refuses a dirty buffer (`:q!` closes it). `:e` reloads the current file from disk (`:e!` reloads even when the buffer is dirty); `:e path` opens that path. `:theme` toggles light and dark; `:theme light`, `:theme dark`, and `:theme system` set it. The last runtime choice is remembered in `~/.config/quill/state.toml` and overrides `theme` in `config.toml` on the next launch. `:TableFormat` pads the GFM table under the cursor (`:%TableFormat` and `:3,5TableFormat` take a range). `:s` substitutes. `:set shiftwidth` is the only `:set` option.
 
-**Other:** `gd` (definition / wikilink), `gr` (references), `-` (parent directory), Enter (open a directory entry; in a file, move down), **leader** (Space by default). Those keys, the leader maps, and the ex names above are one command table: the palette label is the binding that runs.
+**Other:** `gd` (definition / wikilink), `K` (diagnostic or hover, on the status line), `gr` (references), `-` (parent directory), Enter (open a directory entry; in a file, move down), **leader** (Space by default). Those keys, the leader maps, and the ex names above are one command table: the palette label is the binding that runs.
+
+**Wikilink completion:** in insert mode, `[[` opens a list. `Ctrl-n` / `Down` and `Ctrl-p` / `Up` move the highlight, `Ctrl-y` or `Tab` accepts it, `Ctrl-e` dismisses it, and `Esc` dismisses it and leaves insert mode.
 
 `j`/`k` in normal and visual mode move by screen row and keep the horizontal position, including across a short row. `gj`/`gk` move by buffer line. `0`/`$` are the screen row; `g0`/`g$` are the buffer line. Operators stay on buffer lines (`dj`). `d$` deletes to the end of the screen row.
 
@@ -191,7 +193,7 @@ env = {}
 
 `marksman` and `rvn lsp` are example command lines. Any other server is the same shape: set `command`, `arguments`, `extensions`, and `rootMarkers`.
 
-Wired: `initialize`, `initialized`, `textDocument/didOpen|didChange|didSave|didClose`, completion, definition (`gd` / ⌘-click), references (`gr`), code action (`<leader>ca`), hover, `publishDiagnostics`, `workspace/executeCommand`. A chosen code action applies its `WorkspaceEdit` or runs its command. Server `workspace/applyEdit` is applied too. Those edits go through the engine and undo as one group. Server requests `workspace/configuration`, `workspace/workspaceFolders`, and capability registration are answered so generic servers can start. Edits for a file that is not the open buffer are left alone and reported on the status line.
+Wired: `initialize`, `initialized`, `textDocument/didOpen|didChange|didSave|didClose`, completion, definition (`gd` / ⌘-click), references (`gr`), code action (`<leader>ca`), hover (`K`), `publishDiagnostics`, `workspace/executeCommand`. Edits in one turn share a single `didChange`. A chosen code action applies its `WorkspaceEdit` or runs its command. Server `workspace/applyEdit` is applied too. Those edits go through the engine and undo as one group. Server requests `workspace/configuration`, `workspace/workspaceFolders`, and capability registration are answered so generic servers can start. Edits for a file that is not the open buffer are left alone and reported on the status line.
 
 ## What is verified vs not
 
@@ -204,6 +206,6 @@ Wired: `initialize`, `initialized`, `textDocument/didOpen|didChange|didSave|didC
 ## Recommended next steps
 
 1. Build `Quill.app` on a Mac and open a large note (10k lines) to confirm restyle + typing stay smooth.
-2. Point `lsp.servers` at marksman or another markdown server and try `gd`, hover, and diagnostics.
+2. Point `lsp.servers` at marksman or another markdown server and try `gd`, `K` (hover and diagnostics), and the diagnostic underline.
 3. Walk an oil-style rename / `dd`+`p` move / `:w` confirm once on a throwaway folder.
-4. Optional: incremental document sync, visual-block, and a marks/jumplist — deliberately out of v1.
+4. Optional: visual-block and a marks/jumplist — deliberately out of v1.

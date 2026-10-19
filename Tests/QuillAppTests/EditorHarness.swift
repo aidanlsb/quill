@@ -20,7 +20,7 @@ final class EditorHarness {
         (scroll, view, window) = Self.makeWindow(engine: engine, size: size)
         if let column { view.columnWidth = column }
         view.applyTheme(theme, focus: false)
-        view.syncFromEngine()
+        view.reload()
         finish()
     }
     /// Hosts the model's engine the way `EditorView.makeNSView` does.
@@ -32,7 +32,7 @@ final class EditorHarness {
         view.directoryURL = model.isDirectory ? model.fileURL : nil
         view.directoryEntries = model.isDirectory ? (model.directorySnapshot?.entries ?? []) : []
         view.applyTheme(model.theme, focus: model.focusMode)
-        view.syncFromEngine()
+        view.reload()
         finish()
     }
     @discardableResult
@@ -96,6 +96,8 @@ private final class KeySink: NSObject, VimTextViewDelegate {
     }
 
     func vimTextViewDidClick(_ view: VimTextView, characterOffset: Int, commandClick: Bool) {}
+
+    func vimTextView(_ view: VimTextView, handleCompletionKey key: KeyEvent) -> Bool { false }
 
     private static var key: UInt8 = 0
 

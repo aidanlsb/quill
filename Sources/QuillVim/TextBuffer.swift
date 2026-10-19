@@ -136,15 +136,32 @@ public struct TextBuffer: Equatable {
 
     /// Every line's text (as `lineCount` counts lines) with the first directory-entry
     /// anchor on it, the anchor sitting anywhere from the line start through its newline.
+    /// One pass over the sorted anchors merged with line starts.
     public func directoryEntryLines() -> [(text: String, anchor: Anchor?)] {
-        (0..<lineCount).map { index in
+        var anchorIndex = 0
+        var rows: [(text: String, anchor: Anchor?)] = []
+        rows.reserveCapacity(lineCount)
+        for index in 0..<lineCount {
             let line = lines.line(index)
-            let anchor = anchors(in: line.start..<(line.contentEnd + 1)).first { anchor in
-                if case .directoryEntry = anchor.kind { return true }
-                return false
+            let end = line.contentEnd + 1
+            while anchorIndex < anchors.count, anchors[anchorIndex].offset < line.start {
+                anchorIndex += 1
             }
-            return (substring(line.content), anchor)
+            var found: Anchor?
+            var look = anchorIndex
+            while look < anchors.count, anchors[look].offset < end {
+                if case .directoryEntry = anchors[look].kind {
+                    found = anchors[look]
+                    break
+                }
+                look += 1
+            }
+            while anchorIndex < anchors.count, anchors[anchorIndex].offset < end {
+                anchorIndex += 1
+            }
+            rows.append((substring(line.content), found))
         }
+        return rows
     }
 
     // MARK: Lines

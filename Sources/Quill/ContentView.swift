@@ -12,7 +12,7 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            EditorView(model: model, revision: model.revision)
+            EditorView(model: model, diagnostics: model.diagnosticRanges)
                 .background(Color(editorBackground))
             if model.picker != nil {
                 PickerPanel(model: model)
@@ -23,6 +23,7 @@ struct ContentView: View {
                     HStack {
                         CompletionList(
                             names: model.completions,
+                            selection: model.completionIndex,
                             text: Color(model.theme.textColor),
                             background: Color(model.theme.backgroundColor)
                         ) { model.applyCompletion($0) }
@@ -83,19 +84,22 @@ struct StatusBar: View {
 
 struct CompletionList: View {
     var names: [String]
+    var selection: Int
     var text: Color
     var background: Color
     var choose: (String) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(names, id: \.self) { name in
+            ForEach(Array(names.enumerated()), id: \.offset) { index, name in
                 Button(name) { choose(name) }
                     .buttonStyle(.plain)
                     .font(.system(size: 13, design: .monospaced))
                     .foregroundStyle(text)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(index == selection ? text.opacity(0.16) : Color.clear)
             }
         }
         .padding(.vertical, 4)

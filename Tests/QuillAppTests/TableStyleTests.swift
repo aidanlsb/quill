@@ -132,7 +132,7 @@ extension Probe {
         window.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
         window.makeKeyAndOrderFront(nil)
         defer { window.orderOut(nil) }
-        tv.syncFromEngine()
+        tv.reload()
         tv.layoutSubtreeIfNeeded()
 
         guard let header = text.range(of: "| N |"), let storage = tv.textStorage else {
@@ -232,7 +232,7 @@ extension Probe {
         window.makeKeyAndOrderFront(nil)
         defer { window.orderOut(nil) }
         tv.applyTheme(QuillTheme.current(), focus: false)
-        tv.syncFromEngine()
+        tv.reload()
         tv.layoutSubtreeIfNeeded()
         tv.layoutAdapter.ensureFullLayout()
         let column = tv.textContainer?.size.width ?? 0
@@ -265,7 +265,7 @@ extension Probe {
 
         for (index, line) in lines.enumerated() where line.count > 30 {
             _ = tv.press(":\(index + 1)<CR>")
-            tv.syncFromEngine()
+            tv.reload()
             for keys in ["$", "g$", "0"] {
                 _ = tv.press(keys)
                 caretOnScreen(":\(index + 1) \(keys)")
@@ -281,7 +281,7 @@ extension Probe {
         }
 
         _ = tv.press("gg")
-        tv.syncFromEngine()
+        tv.reload()
         var rows = 0
         for direction in ["j", "k"] {
             var steps = 0
@@ -301,7 +301,7 @@ extension Probe {
         }
 
         _ = tv.press("G")
-        tv.syncFromEngine()
+        tv.reload()
         caretOnScreen("G")
 
         tv.layoutAdapter.ensureFullLayout()
@@ -355,7 +355,7 @@ extension Probe {
         midAlignment("narrow", expectPadded: false)
         let midLine = engine.buffer.lineIndex(containing: mid.range.lowerBound)
         _ = tv.press(":\(midLine + 1)<CR>")
-        tv.syncFromEngine()
+        tv.reload()
         caretOnScreen(":\(midLine + 1)")
         resizeEditor(window, scroll: scroll, width: 900, height: 300)
         midAlignment("widened", expectPadded: true)

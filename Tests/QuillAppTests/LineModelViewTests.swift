@@ -26,7 +26,7 @@ extension Probe {
             let applied = tv.textContainer?.size.width ?? 0
             check(abs(applied - column) < 0.5, "\(label) column is \(applied) not \(column)", failures: failures)
             engine.load(text: text)
-            tv.syncFromEngine()
+            tv.reload()
             tv.layoutSubtreeIfNeeded()
             tv.layoutAdapter.ensureFullLayout()
             let rows = drawnRows(tv)
@@ -56,7 +56,7 @@ extension Probe {
     static func checkWideColumnLandings(engine: Engine, tv: VimTextView, failures: Failures) {
         let want = [(0, 8), (1, 8), (2, 8), (3, 4), (4, 0), (5, 8), (6, 8), (7, 8), (8, 8), (9, 8), (10, 5), (11, 8)]
         _ = tv.press("gg08l")
-        tv.syncFromEngine()
+        tv.reload()
         expectCaret(engine, want[0], label: "wide start", failures: failures)
         for index in 1..<want.count {
             _ = tv.press("j")
@@ -67,7 +67,7 @@ extension Probe {
             expectCaret(engine, want[index], label: "wide k\(index)", failures: failures)
         }
         _ = tv.press("5j")
-        tv.syncFromEngine()
+        tv.reload()
         expectCaret(engine, want[5], label: "wide 5j", failures: failures)
         _ = tv.press("$")
         expectCaret(engine, (5, utf16Length(motionDocument[5]) - 1), label: "wide $", failures: failures)
@@ -129,7 +129,7 @@ extension Probe {
         }
 
         _ = tv.press("gg08l")
-        tv.syncFromEngine()
+        tv.reload()
         guard let start = rowIndex(of: engine.cursor),
               let want = cells(start).first(where: { $0.offset == engine.cursor })?.start else {
             failures.append("\(label) start \(describe(engine.cursor)) is on no drawn row")
@@ -139,14 +139,14 @@ extension Probe {
               walk("k", from: bottom, want: want, tag: "column \(want)") != nil else { return }
 
         _ = tv.press("$")
-        tv.syncFromEngine()
+        tv.reload()
         check(engine.cursor == landing(0, want: nil), "\(label) $ landed \(describe(engine.cursor))", failures: failures)
         guard let end = walk("j", from: 0, want: nil, tag: "$"), walk("k", from: end, want: nil, tag: "$") != nil else { return }
 
         _ = tv.press("0")
         let counted = min(rows.count - 1, 5)
         _ = tv.press("5j")
-        tv.syncFromEngine()
+        tv.reload()
         check(engine.cursor == landing(counted, want: 0), "\(label) 5j landed \(describe(engine.cursor)) want \(describe(landing(counted, want: 0)))", failures: failures)
         _ = tv.press("0")
         check(engine.cursor == rows[counted].lowerBound, "\(label) 0 landed \(describe(engine.cursor)) want row start \(rows[counted].lowerBound)", failures: failures)
@@ -164,7 +164,7 @@ extension Probe {
                 at += character.utf16.count
             }
             engine.moveCursor(to: line.start)
-            tv.syncFromEngine()
+            tv.reload()
             var previous: NSRect?
             var broke = false
             for (step, offset) in expected.enumerated() {

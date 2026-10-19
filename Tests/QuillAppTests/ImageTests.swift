@@ -65,7 +65,7 @@ extension Probe {
         let tv = harness.view
         let engine = harness.engine
         tv.setImageContext(enabled: true, filePath: note.path)
-        tv.syncFromEngine()
+        tv.reload()
         tv.layoutSubtreeIfNeeded()
         tv.flushImagePreviews()
         let ready = waitUntil(seconds: 2) {
@@ -129,7 +129,7 @@ extension Probe {
         check(tv.string == original, "image undo \(tv.string.prefix(12))", failures: failures)
 
         plain.view.setImageContext(enabled: false, filePath: note.path)
-        plain.view.syncFromEngine()
+        plain.view.reload()
         plain.view.layoutSubtreeIfNeeded()
         let on = strokes(tv)
         let off = strokes(plain.view)

@@ -148,6 +148,8 @@ final class TextKit2Layout: ScreenLayout, @unchecked Sendable {
 protocol VimTextViewDelegate: AnyObject {
     func vimTextView(_ view: VimTextView, didHandle result: EngineResult)
     func vimTextViewDidClick(_ view: VimTextView, characterOffset: Int, commandClick: Bool)
+    /// Return true to consume the key. Esc dismisses the list and returns false so insert mode still ends.
+    func vimTextView(_ view: VimTextView, handleCompletionKey key: KeyEvent) -> Bool
 }
 
 final class VimTextView: NSTextView {
@@ -163,7 +165,14 @@ final class VimTextView: NSTextView {
     var columnWidth: CGFloat = 640
     var theme = QuillTheme.current()
     var diagnosticRanges: [(NSRange, Int)] = []
+    var directoryStyleCache: DirectoryStyle?
+    /// Tests watch reloads, row invalidation, and directory painting. Nil in the app.
+    var onReload: (@MainActor () -> Void)?
+    var onNeedsDisplay: (@MainActor (NSRect) -> Void)?
+    var onDirectoryDecorations: (@MainActor () -> Void)?
     private var restyleQueued = false
+    /// Stops `string =` from re-entering the drift repair.
+    private var repairingDocument = false
     private var sizing = false
     /// True while `viewDidEndLiveResize` has cleared the inset for `super`.
     private var endingLiveResize = false
@@ -294,6 +303,7 @@ final class VimTextView: NSTextView {
             directoryGhostHeight = 0
             directoryHeaderText = ""
         }
+        invalidateDirectoryStyle()
         updateInsets()
         queueRestyle()
         imagePreviews.applyTheme()
@@ -358,7 +368,9 @@ final class VimTextView: NSTextView {
         return (span.inset, vertical, span.column)
     }
 
-    func syncFromEngine() {
+    func reload() {
+        MainActor.assumeIsolated { self.onReload?() }
+        invalidateDirectoryStyle()
         let text = engine.text
         let replaced = string != text
         if replaced {
@@ -394,9 +406,16 @@ final class VimTextView: NSTextView {
     }
 
     func applyResult(_ result: EngineResult) {
+        if result.didChangeText {
+            invalidateDirectoryStyle()
+        }
         var applied: [TextEdit] = []
         if result.didChangeText {
-            if result.edits.isEmpty {
+            let delta = result.edits.reduce(0) { $0 + $1.replacement.utf16.count - $1.range.count }
+            let previous = engine.buffer.count - delta
+            // TextKit 2 can leave `textStorage.length` behind `string`. Patching
+            // that short storage would edit the wrong document, so replace it.
+            if result.edits.isEmpty || textStorage?.length != previous {
                 string = engine.text
                 tokenizer = MarkdownTokenizer(text: string)
             } else if let storage = textStorage {
@@ -445,8 +464,8 @@ final class VimTextView: NSTextView {
                 imagePreviews.noteEdits(result.edits)
             }
         }
-        if isDirectoryBuffer { needsDisplay = true }
         vimDelegate?.vimTextView(self, didHandle: result)
+        assertViewMatchesEngine()
     }
 
     override func keyDown(with event: NSEvent) {
@@ -465,6 +484,10 @@ final class VimTextView: NSTextView {
             super.keyDown(with: event)
             return
         }
+        if vimDelegate?.vimTextView(self, handleCompletionKey: key) == true {
+            assertViewMatchesEngine()
+            return
+        }
         engine.scrollLineCount = halfPageLines()
         let result = engine.handle(key)
         applyResult(result)
@@ -473,11 +496,27 @@ final class VimTextView: NSTextView {
         }
     }
 
+    private func assertViewMatchesEngine() {
+        #if DEBUG
+        // A host command can replace the buffer before this returns. The model's
+        // editor reloads inside that command; a view the model does not own
+        // still has the previous document, so put the engine text back.
+        let length = (string as NSString).length
+        guard length != engine.buffer.count, !repairingDocument else { return }
+        repairingDocument = true
+        string = engine.text
+        repairingDocument = false
+        #endif
+    }
+
     override func mouseDown(with event: NSEvent) {
         super.mouseDown(with: event)
         let offset = clampUTF16(selectedRange().location)
         mouseAnchor = offset
-        engine.moveCursor(to: offset)
+        _ = engine.moveCursor(to: offset)
+        if focusMode {
+            queueRestyle(dirty: engine.cursor)
+        }
         vimDelegate?.vimTextViewDidClick(self, characterOffset: offset, commandClick: event.modifierFlags.contains(.command))
     }
 
@@ -523,7 +562,7 @@ final class VimTextView: NSTextView {
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         guard isDirectoryBuffer, engine != nil else { return }
-        drawDirectoryDecorations()
+        drawDirectoryDecorations(in: dirtyRect)
     }
 
     override func drawBackground(in rect: NSRect) {
@@ -534,14 +573,20 @@ final class VimTextView: NSTextView {
         drawDirectoryBackground(in: rect)
     }
 
+    override func setNeedsDisplay(_ invalidRect: NSRect) {
+        MainActor.assumeIsolated { self.onNeedsDisplay?(invalidRect) }
+        super.setNeedsDisplay(invalidRect)
+    }
+
     override func setSelectedRange(
         _ charRange: NSRange,
         affinity: NSSelectionAffinity,
         stillSelecting stillSelectingFlag: Bool
     ) {
+        let previous = selectedRange().location
         super.setSelectedRange(charRange, affinity: affinity, stillSelecting: stillSelectingFlag)
         if isDirectoryBuffer {
-            needsDisplay = true
+            invalidateDirectoryCaret(from: previous, to: charRange.location)
         }
         placeCaret()
     }
@@ -1689,16 +1734,35 @@ extension KeyEvent {
     }
 }
 
+/// Theme, focus, and a directory swap restyle the window. A status-line change does not.
+@MainActor
+@discardableResult
+func syncWindowChrome(
+    view: VimTextView,
+    theme: QuillTheme,
+    themeIdentity: Int,
+    focus: Bool,
+    directoryChanged: Bool
+) -> Bool {
+    guard view.appliedThemeID != themeIdentity || view.appliedFocus != focus || directoryChanged else {
+        return false
+    }
+    WindowChrome.apply(theme: theme)
+    view.applyTheme(theme, focus: focus)
+    view.appliedThemeID = themeIdentity
+    view.appliedFocus = focus
+    return true
+}
+
 struct EditorView: NSViewRepresentable {
     var model: AppModel
-    /// Bumped when the buffer is replaced outside a keystroke, so SwiftUI
-    /// refreshes this representable. `@Observable` does not track `engine`.
-    var revision: Int
+    var diagnostics: [(NSRange, Int)]
 
     func makeNSView(context: Context) -> NSScrollView {
         let hosted = VimTextView.host(engine: model.engine)
         let scroll = hosted.scroll
         let tv = hosted.view
+        model.editor = tv
         tv.vimDelegate = context.coordinator
         context.coordinator.textView = tv
         context.coordinator.model = model
@@ -1708,15 +1772,14 @@ struct EditorView: NSViewRepresentable {
         tv.directoryURL = model.isDirectory ? model.fileURL : nil
         tv.directoryEntries = model.isDirectory ? (model.directorySnapshot?.entries ?? []) : []
         tv.applyTheme(model.theme, focus: model.focusMode)
-        tv.syncFromEngine()
-        context.coordinator.syncedRevision = revision
+        tv.reload()
         return scroll
     }
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let tv = scroll.documentView as? VimTextView else { return }
         tv.engine = model.engine
-        _ = revision
+        model.editor = tv
         tv.columnWidth = model.theme.columnWidth
         tv.setImageContext(enabled: model.showImages, filePath: model.isDirectory ? nil : model.fileURL?.path)
         let entries = model.isDirectory ? (model.directorySnapshot?.entries ?? []) : []
@@ -1727,10 +1790,13 @@ struct EditorView: NSViewRepresentable {
         tv.isDirectoryBuffer = model.isDirectory
         tv.directoryURL = url
         tv.directoryEntries = entries
-        let diagnostics = model.nsDiagnosticRanges()
-        let diagnosticsChanged = tv.diagnosticRanges.map(\.0) != diagnostics.map(\.0)
-        if diagnosticsChanged { tv.diagnosticRanges = diagnostics }
-        WindowChrome.apply(theme: model.theme)
+        if directoryChanged { tv.invalidateDirectoryStyle() }
+        let diagnosticsChanged = tv.diagnosticRanges.count != diagnostics.count
+            || tv.diagnosticRanges.map(\.0) != diagnostics.map(\.0)
+        if diagnosticsChanged {
+            tv.diagnosticRanges = diagnostics
+            tv.queueRestyle()
+        }
         if model.isDirectory {
             scroll.drawsBackground = true
             scroll.backgroundColor = model.theme.directoryBackgroundColor
@@ -1738,29 +1804,14 @@ struct EditorView: NSViewRepresentable {
         } else {
             scroll.drawsBackground = false
         }
-        if tv.appliedThemeID != model.themeIdentity || tv.appliedFocus != model.focusMode || directoryChanged {
-            tv.applyTheme(model.theme, focus: model.focusMode)
-            tv.appliedThemeID = model.themeIdentity
-            tv.appliedFocus = model.focusMode
-        } else {
+        if !syncWindowChrome(
+            view: tv,
+            theme: model.theme,
+            themeIdentity: model.themeIdentity,
+            focus: model.focusMode,
+            directoryChanged: directoryChanged
+        ) {
             tv.updateInsets()
-        }
-        let caret = min(model.engine.cursor, (tv.string as NSString).length)
-        let bufferReplaced = context.coordinator.syncedRevision != revision
-        // A keystroke already updated this view. Comparing the whole string
-        // here, or treating that keystroke's revision bump as a buffer swap,
-        // restyled the document again on every character.
-        if bufferReplaced || tv.selectedRange().location != caret {
-            if bufferReplaced {
-                tv.syncFromEngine()
-            } else if tv.string != model.engine.text {
-                tv.syncFromEngine()
-            } else if model.focusMode {
-                tv.queueRestyle(dirty: caret)
-            }
-            context.coordinator.syncedRevision = revision
-        } else if diagnosticsChanged {
-            tv.queueRestyle()
         }
         let sheetUp = model.showConfirm || model.showUnsaved
         if model.picker == nil, !sheetUp, tv.window?.firstResponder !== tv {
@@ -1779,16 +1830,19 @@ struct EditorView: NSViewRepresentable {
         var textView: VimTextView?
         weak var model: AppModel?
         var hadPicker = false
-        var syncedRevision = -1
 
         func vimTextView(_ view: VimTextView, didHandle result: EngineResult) {
-            model?.handleEngineResult(result, fromTextView: true)
+            model?.afterEdit(result)
         }
 
         func vimTextViewDidClick(_ view: VimTextView, characterOffset: Int, commandClick: Bool) {
             if commandClick {
                 model?.goToDefinition()
             }
+        }
+
+        func vimTextView(_ view: VimTextView, handleCompletionKey key: KeyEvent) -> Bool {
+            model?.handleCompletionKey(key) ?? false
         }
     }
 }

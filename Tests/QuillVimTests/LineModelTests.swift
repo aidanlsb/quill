@@ -147,6 +147,26 @@ final class LineModelColumnTests: XCTestCase {
         XCTAssertEqual(lines.map(\.text), ["a/", "b.md", ""])
         XCTAssertEqual(lines.map { $0.anchor?.id.raw }, [1, 2, nil])
     }
+
+    func testDirectoryEntryLinesSkipMarksInOnePass() {
+        var buffer = TextBuffer(text: "keep.md\nnested/\n")
+        buffer.addAnchor(Anchor(id: AnchorID(raw: 9), offset: 2, gravity: .left, kind: .mark("a")))
+        buffer.addAnchor(Anchor(
+            id: AnchorID(raw: 4),
+            offset: 8,
+            gravity: .left,
+            kind: .directoryEntry(sourcePath: "/nested", isDirectory: true, transfer: .identity)
+        ))
+        buffer.addAnchor(Anchor(
+            id: AnchorID(raw: 3),
+            offset: 0,
+            gravity: .left,
+            kind: .directoryEntry(sourcePath: "/keep.md", isDirectory: false, transfer: .identity)
+        ))
+        let lines = buffer.directoryEntryLines()
+        XCTAssertEqual(lines.map(\.text), ["keep.md", "nested/", ""])
+        XCTAssertEqual(lines.map { $0.anchor?.id.raw }, [3, 4, nil])
+    }
 }
 
 /// One case per bug the line-model audit found. Each failed before the fix.

@@ -90,7 +90,7 @@ enum AppSmoke {
         )
         window.isReleasedWhenClosed = false
         window.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
-        window.contentViewController = NSHostingController(rootView: EditorView(model: model, revision: model.revision))
+        window.contentViewController = NSHostingController(rootView: EditorView(model: model, diagnostics: model.diagnosticRanges))
         window.makeKeyAndOrderFront(nil)
         return wait(model, 2)
     }

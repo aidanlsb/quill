@@ -28,7 +28,7 @@ extension Probe {
         let engine = harness.engine
         let scroll = harness.scroll
         tv.setImageContext(enabled: true, filePath: "/tmp/quill-scroll-margin.md")
-        tv.syncFromEngine()
+        tv.reload()
         tv.layoutSubtreeIfNeeded()
         tv.flushImagePreviews()
         check(
@@ -77,7 +77,7 @@ extension Probe {
 
         let paragraph = Array(repeating: "wrap", count: 80).joined(separator: " ")
         engine.load(text: paragraph + "\n")
-        tv.syncFromEngine()
+        tv.reload()
         harness.resize(to: NSSize(width: 340, height: 460))
         tv.layoutSubtreeIfNeeded()
         _ = tv.press("gg")
