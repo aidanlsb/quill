@@ -95,7 +95,6 @@ final class FastEditor: NSObject, VimTextViewDelegate {
         scroll.hasHorizontalScroller = false
         scroll.borderType = .noBorder
         scroll.drawsBackground = false
-        textView.prepareForDisplay()
         textView.engine = model.engine
         textView.layoutAdapter.textView = textView
         model.engine.layout = textView.layoutAdapter
@@ -138,6 +137,7 @@ final class FastEditor: NSObject, VimTextViewDelegate {
         textView.syncFromEngine(layout: false)
         textView.restyleNow()
         textView.textStorage?.textStorageObserver = observer
+        textView.prepareForDisplay()
         if let scroll {
             scroll.documentView = textView
             window.contentView = scroll
