@@ -1,4 +1,5 @@
 import Foundation
+import QuillText
 
 public struct LSPPosition: Equatable, Sendable {
     public var line: Int
@@ -18,60 +19,22 @@ public struct LSPPosition: Equatable, Sendable {
         return LSPPosition(line: o["line"]?.int ?? 0, character: o["character"]?.int ?? 0)
     }
 
-    /// Convert a Swift `Character` offset into an LSP UTF-16 position.
-    public static func utf16(in text: String, characterOffset: Int) -> LSPPosition {
-        let clamped = min(max(0, characterOffset), text.count)
-        let idx = text.index(text.startIndex, offsetBy: clamped)
-        let prefix = text[text.startIndex..<idx]
-        let line = prefix.filter { $0 == "\n" }.count
-        let lastNL = prefix.lastIndex(of: "\n")
-        let lineStart = lastNL.map { prefix.index(after: $0) } ?? prefix.startIndex
-        let linePrefix = prefix[lineStart..<idx]
-        let utf16 = linePrefix.utf16.count
-        return LSPPosition(line: line, character: utf16)
+    public init(_ position: TextPosition) {
+        self.init(line: position.line, character: position.utf16Column)
     }
 
-    /// Engine and TextKit offsets are UTF-16. This does not walk grapheme clusters.
+    public var textPosition: TextPosition {
+        TextPosition(line: line, utf16Column: character)
+    }
+
+    /// Prefer `LineIndex.position(of:)` on an index the caller already keeps.
     public static func position(utf16Offset: Int, in text: String) -> LSPPosition {
-        let units = Array(text.utf16)
-        let clamped = min(max(0, utf16Offset), units.count)
-        var line = 0
-        var lineStart = 0
-        var i = 0
-        while i < clamped {
-            if units[i] == 10 {
-                line += 1
-                lineStart = i + 1
-            }
-            i += 1
-        }
-        return LSPPosition(line: line, character: clamped - lineStart)
+        LSPPosition(LineIndex(text).position(of: utf16Offset))
     }
 
+    /// A character past the end of its line clamps to the line end (LSP 3.17).
     public static func utf16Offset(in text: String, position: LSPPosition) -> Int {
-        let units = Array(text.utf16)
-        var line = 0
-        var i = 0
-        while i < units.count, line < position.line {
-            if units[i] == 10 { line += 1 }
-            i += 1
-        }
-        return min(units.count, i + max(0, position.character))
-    }
-
-    public static func characterOffset(in text: String, position: LSPPosition) -> Int {
-        var line = 0
-        var i = text.startIndex
-        while i < text.endIndex, line < position.line {
-            if text[i] == "\n" { line += 1 }
-            i = text.index(after: i)
-        }
-        var utf16Remaining = position.character
-        while i < text.endIndex, utf16Remaining > 0, text[i] != "\n" {
-            utf16Remaining -= text[i].utf16.count
-            i = text.index(after: i)
-        }
-        return text.distance(from: text.startIndex, to: i)
+        LineIndex(text).offset(of: position.textPosition)
     }
 }
 

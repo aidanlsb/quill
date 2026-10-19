@@ -1,23 +1,22 @@
+import QuillText
+
 /// UTF-16 buffer backed by a rope. Offsets count UTF-16 code units so they
 /// match NSString, TextKit, and LSP. `h` / `l` / `x` still step by grapheme.
 public struct TextBuffer: Equatable {
     private var rope: Rope
     public var cursor: Int
-    /// Character column remembered across `j` / `k` (`curswant`).
-    /// This is a buffer column, never a pixel x. `endColumn` means end of line.
-    public var preferredColumn: Int
-    /// Larger than any real line. `$` stores this so the next `j` / `k` hugs the end.
-    public static let endColumn = Int.max / 4
-    public private(set) var lineStarts: [Int]
+    /// Display column that `j` / `k` aim for (vim's `curswant`).
+    public var curswant: Curswant
+    /// Buffer lines. The only offset-to-line map in the editor.
+    public private(set) var lines: LineIndex
     public private(set) var anchors: [Anchor]
 
     public init(text: String = "", cursor: Int = 0) {
         self.rope = Rope(text)
         self.cursor = max(0, cursor)
-        self.preferredColumn = 0
-        self.lineStarts = [0]
+        self.curswant = .fresh
+        self.lines = LineIndex(text)
         self.anchors = []
-        rebuildLines()
         self.cursor = clampedCursor(self.cursor, normalMode: true)
     }
 
@@ -25,7 +24,7 @@ public struct TextBuffer: Equatable {
     /// UTF-16 length. O(1).
     public var count: Int { rope.utf16Count }
     public var isEmpty: Bool { rope.isEmpty }
-    public var lineCount: Int { lineStarts.count }
+    public var lineCount: Int { lines.lineCount }
 
     public subscript(offset: Int) -> Character {
         character(at: offset)
@@ -78,7 +77,7 @@ public struct TextBuffer: Equatable {
         let upper = min(max(lower, range.upperBound), count)
         let span = lower..<upper
         rope.replace(span, with: new)
-        updateLineStarts(replacing: span, with: new)
+        lines.replace(span, with: new)
         adjustAnchors(replacing: span, withUTF16: new.utf16.count)
         return []
     }
@@ -123,41 +122,30 @@ public struct TextBuffer: Equatable {
     // MARK: Lines
 
     public func lineIndex(containing offset: Int) -> Int {
-        let clamped = min(max(0, offset), count)
-        var low = 0
-        var high = lineStarts.count - 1
-        while low < high {
-            let mid = (low + high + 1) / 2
-            if lineStarts[mid] <= clamped {
-                low = mid
-            } else {
-                high = mid - 1
-            }
-        }
-        return low
+        lines.line(containing: offset)
+    }
+
+    public func line(_ index: Int) -> BufferLine {
+        lines.line(index)
+    }
+
+    public func bufferLine(containing offset: Int) -> BufferLine {
+        lines.bufferLine(containing: offset)
     }
 
     /// Content of the line, excluding the trailing newline.
     public func lineContentRange(at line: Int) -> Range<Int> {
-        let start = lineStarts[line]
-        return start..<lineEnd(at: line)
+        lines.line(line).content
     }
 
     /// Offset of the newline ending this line, or `count` if the last line has no newline.
     public func lineEnd(at line: Int) -> Int {
-        if line + 1 < lineStarts.count {
-            return lineStarts[line + 1] - 1
-        }
-        return count
+        lines.line(line).contentEnd
     }
 
     /// Range covering the line including its trailing newline when present.
     public func lineFullRange(at line: Int) -> Range<Int> {
-        let start = lineStarts[line]
-        if line + 1 < lineStarts.count {
-            return start..<lineStarts[line + 1]
-        }
-        return start..<count
+        lines.line(line).full
     }
 
     public func linesRange(from startLine: Int, through endLine: Int) -> Range<Int> {
@@ -166,31 +154,35 @@ public struct TextBuffer: Equatable {
         return lineFullRange(at: a).lowerBound..<lineFullRange(at: b).upperBound
     }
 
-    public func column(of offset: Int) -> Int {
-        let line = lineIndex(containing: offset)
-        return max(0, min(offset, count) - lineStarts[line])
+    /// Line and UTF-16 column, the coordinates LSP uses.
+    public func position(of offset: Int) -> TextPosition {
+        lines.position(of: offset)
     }
 
-    /// Caret on `line` for a remembered character column.
-    /// A short line clamps to its last character. An empty line sits on the newline.
-    /// The caller keeps the desired column so a later longer line can restore it.
-    public func caretOffset(onLine line: Int, preferredColumn: Int) -> Int {
-        let content = lineContentRange(at: line)
-        if content.isEmpty { return content.lowerBound }
-        if Self.isEndColumn(preferredColumn) {
-            return lastCharacterOffset(onLine: line)
-        }
-        let clamped = min(max(0, preferredColumn), content.count - 1)
-        let raw = content.lowerBound + clamped
-        let start = graphemeSpan(containing: raw).lowerBound
-        if start < content.lowerBound || start >= content.upperBound {
-            return content.lowerBound
-        }
-        return start
+    public func offset(of position: TextPosition) -> Int {
+        lines.offset(of: position)
     }
 
-    public static func isEndColumn(_ column: Int) -> Bool {
-        column >= endColumn
+    /// Graphemes of `range` with their UTF-16 spans, in order.
+    /// `range` should start on a grapheme boundary.
+    public func graphemes(in range: Range<Int>) -> [(span: Range<Int>, character: Character)] {
+        if range.isEmpty { return [] }
+        var out: [(span: Range<Int>, character: Character)] = []
+        var at = range.lowerBound
+        for character in substring(range) {
+            let width = character.utf16.count
+            out.append((at..<(at + width), character))
+            at += width
+        }
+        return out
+    }
+
+    /// Start of the `column`-th grapheme (0-based) on `line`, clamped to its last grapheme.
+    public func offset(line index: Int, graphemeColumn column: Int) -> Int {
+        let target = line(index)
+        let graphemes = graphemes(in: target.content)
+        guard !graphemes.isEmpty else { return target.start }
+        return graphemes[min(max(0, column), graphemes.count - 1)].span.lowerBound
     }
 
     /// Last caret offset in `range`. A trailing newline is not a place to sit.
@@ -206,12 +198,6 @@ public struct TextBuffer: Equatable {
         }
         if end <= start { return start }
         return graphemeStart(before: end)
-    }
-
-    public func offset(line: Int, column: Int) -> Int {
-        let content = lineContentRange(at: line)
-        if content.isEmpty { return content.lowerBound }
-        return min(content.lowerBound + column, content.upperBound - 1)
     }
 
     public func firstNonBlank(onLine line: Int) -> Int {
@@ -246,8 +232,7 @@ public struct TextBuffer: Equatable {
         if normalMode {
             if c >= count { c = graphemeStart(before: count) }
             if c < count, character(at: c) == "\n" {
-                let line = lineIndex(containing: c)
-                if lineStarts[line] < c {
+                if lines.bufferLine(containing: c).start < c {
                     c = graphemeStart(before: c)
                 }
             }
@@ -275,48 +260,6 @@ public struct TextBuffer: Equatable {
         if ch.isWhitespace { return .whitespace }
         if isKeyword(ch) { return .keyword }
         return .other
-    }
-
-    private mutating func rebuildLines() {
-        lineStarts = [0]
-        let text = rope.content
-        var units = 0
-        for unit in text.utf16 {
-            units += 1
-            if unit == 10 {
-                lineStarts.append(units)
-            }
-        }
-    }
-
-    private mutating func updateLineStarts(replacing range: Range<Int>, with new: String) {
-        let startLine = lineIndex(containing: min(range.lowerBound, max(0, count)))
-        // `count` is already the post-edit length. The line index of the edit
-        // start is still valid because line starts at or before the edit didn't move.
-        var next: [Int] = []
-        next.reserveCapacity(lineStarts.count + 4)
-        if lineStarts.indices.contains(startLine) {
-            for index in 0...startLine {
-                next.append(lineStarts[index])
-            }
-        } else {
-            next = [0]
-        }
-        var relative = 0
-        for unit in new.utf16 {
-            if unit == 10 {
-                next.append(range.lowerBound + relative + 1)
-            }
-            relative += 1
-        }
-        let delta = new.utf16.count - range.count
-        for start in lineStarts where start > range.upperBound {
-            next.append(start + delta)
-        }
-        if next.isEmpty || next[0] != 0 {
-            next.insert(0, at: 0)
-        }
-        lineStarts = next
     }
 
     private mutating func adjustAnchors(replacing range: Range<Int>, withUTF16 newLen: Int) {

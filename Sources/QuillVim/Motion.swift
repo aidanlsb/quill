@@ -25,14 +25,11 @@ public enum FindKind: Equatable, Sendable {
 public enum MotionKind: Equatable, Sendable {
     case left
     case right
-    /// Next logical line. `j`. One buffer line, at the remembered character column.
+    /// `j`, `gj`: the next screen line at `curswant`. Under an operator, the next
+    /// buffer line, linewise.
     case down
-    /// Previous logical line. `k`.
+    /// `k`, `gk`.
     case up
-    /// Next screen row. `gj`.
-    case bufferDown
-    /// Previous screen row. `gk`.
-    case bufferUp
     case word
     case wordEnd
     case wordBack
@@ -42,9 +39,9 @@ public enum MotionKind: Equatable, Sendable {
     case lineStart
     case firstNonBlank
     case lineEnd
-    /// `0` when lines wrap: the left edge of the screen row.
+    /// `0`: the start of the screen line. Under an operator, the buffer line.
     case screenLineStart
-    /// `$` when lines wrap: the last character of the screen row.
+    /// `$`: the last character of the screen line. Under an operator, the buffer line.
     case screenLineEnd
     case fileStart
     case gotoLine
@@ -74,25 +71,26 @@ enum MotionResolver {
         _ kind: MotionKind,
         count: Int,
         buffer: TextBuffer,
-        layout: any TextLayout,
+        layout: any ScreenLayout,
         find: (FindKind, Character)? = nil,
         searchPattern: String? = nil,
-        searchForward: Bool = true
+        searchForward: Bool = true,
+        operatorPending: Bool = false,
+        insert: Bool = false
     ) -> ResolvedMotion {
         let n = max(1, count)
+        let screen = ScreenModel(buffer: buffer, layout: layout, insert: insert)
         switch kind {
         case .left:
-            return horizontal(buffer, delta: -n, inclusive: false)
+            return horizontal(buffer, delta: -n, operatorPending: operatorPending)
         case .right:
-            return horizontal(buffer, delta: n, inclusive: false)
+            return horizontal(buffer, delta: n, operatorPending: operatorPending)
         case .down:
-            return bufferVertical(buffer, delta: n)
+            if operatorPending { return bufferVertical(buffer, delta: n) }
+            return screenVertical(screen, delta: n)
         case .up:
-            return bufferVertical(buffer, delta: -n)
-        case .bufferDown:
-            return screenVertical(buffer, layout: layout, delta: n)
-        case .bufferUp:
-            return screenVertical(buffer, layout: layout, delta: -n)
+            if operatorPending { return bufferVertical(buffer, delta: -n) }
+            return screenVertical(screen, delta: -n)
         case .word:
             return wordMotion(buffer, count: n, kind: .start, big: false, backward: false)
         case .wordEnd:
@@ -106,8 +104,7 @@ enum MotionResolver {
         case .WORDBack:
             return wordMotion(buffer, count: n, kind: .start, big: true, backward: true)
         case .lineStart:
-            let line = buffer.lineIndex(containing: buffer.cursor)
-            return .move(buffer.lineStarts[line])
+            return .move(buffer.bufferLine(containing: buffer.cursor).start)
         case .firstNonBlank:
             let line = buffer.lineIndex(containing: buffer.cursor)
             return .move(buffer.firstNonBlank(onLine: line))
@@ -117,23 +114,21 @@ enum MotionResolver {
                 let line = buffer.lineIndex(containing: pos)
                 pos = buffer.lastCharacterOffset(onLine: line)
                 if line + 1 < buffer.lineCount, step < n - 1 {
-                    pos = buffer.lineStarts[line + 1]
+                    pos = buffer.line(line + 1).start
                 }
             }
             return .move(pos, inclusive: true)
         case .screenLineStart:
-            return .move(layout.screenLineStart(at: buffer.cursor, in: buffer))
-        case .screenLineEnd:
-            var pos = buffer.cursor
-            if n > 1 {
-                pos = layout.position(
-                    from: pos,
-                    displayLines: n - 1,
-                    preferredColumn: TextBuffer.endColumn,
-                    in: buffer
-                )
+            if operatorPending {
+                return .move(buffer.bufferLine(containing: buffer.cursor).start)
             }
-            return .move(layout.screenLineEnd(at: pos, in: buffer), inclusive: true)
+            return .move(screen.screenLine(containing: buffer.cursor).range.lowerBound)
+        case .screenLineEnd:
+            if operatorPending {
+                return resolve(.lineEnd, count: n, buffer: buffer, layout: layout)
+            }
+            let row = screen.step(from: screen.screenLine(containing: buffer.cursor), by: n - 1).row
+            return .move(screen.lastCursor(on: row), inclusive: true)
         case .fileStart:
             let line = min(max(0, n - 1), buffer.lineCount - 1)
             return .move(buffer.firstNonBlank(onLine: line), linewise: true)
@@ -160,15 +155,22 @@ enum MotionResolver {
         }
     }
 
-    private static func horizontal(_ buffer: TextBuffer, delta: Int, inclusive: Bool) -> ResolvedMotion {
+    /// `h` / `l`: graphemes within the buffer line. Never crosses a newline, and
+    /// never looks at layout, so styling and wrapping cannot make it skip.
+    /// Under an operator `l` may reach the end of the content, so `dl` takes the last character.
+    private static func horizontal(_ buffer: TextBuffer, delta: Int, operatorPending: Bool) -> ResolvedMotion {
         if buffer.isEmpty { return .fail(0) }
-        let line = buffer.lineIndex(containing: buffer.cursor)
-        let content = buffer.lineContentRange(at: line)
+        let content = buffer.bufferLine(containing: buffer.cursor).content
         if content.isEmpty { return .fail(buffer.cursor) }
         var dest = buffer.cursor
         if delta > 0 {
             for _ in 0..<delta {
                 let next = buffer.graphemeSpan(containing: dest).upperBound
+                if operatorPending, next <= content.upperBound {
+                    dest = next
+                    if next == content.upperBound { break }
+                    continue
+                }
                 if next >= content.upperBound {
                     let last = content.upperBound == content.lowerBound
                         ? content.lowerBound
@@ -186,38 +188,30 @@ enum MotionResolver {
             }
         }
         if dest == buffer.cursor { return .fail(buffer.cursor) }
-        return .move(dest, inclusive: inclusive)
-    }
-
-    /// `gj` / `gk`. One screen row. The remembered column stays a character column.
-    private static func screenVertical(
-        _ buffer: TextBuffer,
-        layout: any TextLayout,
-        delta: Int
-    ) -> ResolvedMotion {
-        if buffer.isEmpty { return .fail(0) }
-        let dest = layout.position(
-            from: buffer.cursor,
-            displayLines: delta,
-            preferredColumn: buffer.preferredColumn,
-            in: buffer
-        )
-        if dest == buffer.cursor { return .fail(buffer.cursor) }
         return .move(dest)
     }
 
-    /// `j` / `k`. Exactly one logical line, at the remembered character column.
-    /// A count that runs past the buffer stops on the last line it can reach.
-    /// Linewise, so `dj` deletes whole lines.
+    /// `j` / `k`: `delta` screen lines, straight down or up, at `curswant`.
+    /// A count past the document stops on the last row it reaches.
+    private static func screenVertical(_ screen: ScreenModel, delta: Int) -> ResolvedMotion {
+        let buffer = screen.buffer
+        let (row, moved) = screen.step(from: screen.screenLine(containing: buffer.cursor), by: delta)
+        if moved == 0 { return .fail(buffer.cursor) }
+        var want = buffer.curswant
+        if want == .fresh {
+            want = .column(screen.displayColumn(of: buffer.cursor))
+        }
+        return .move(screen.offset(on: row, want: want))
+    }
+
+    /// `dj` / `yk` / `>j`: whole buffer lines. Wrapping never changes what an operator covers.
     private static func bufferVertical(_ buffer: TextBuffer, delta: Int) -> ResolvedMotion {
-        if buffer.isEmpty { return .fail(0) }
         let line = buffer.lineIndex(containing: buffer.cursor)
         let last = buffer.lineCount - 1
         if delta > 0, line >= last { return .fail(buffer.cursor) }
         if delta < 0, line <= 0 { return .fail(buffer.cursor) }
         let target = min(max(0, line + delta), last)
-        let pos = buffer.caretOffset(onLine: target, preferredColumn: buffer.preferredColumn)
-        return .move(pos, linewise: true)
+        return .move(buffer.line(target).start, linewise: true)
     }
 
     private enum WordSeek {
@@ -244,8 +238,18 @@ enum MotionResolver {
         if pos == buffer.cursor && kind != .end {
             return .fail(pos)
         }
-        let inclusive = kind == .end
-        return .move(pos, inclusive: inclusive)
+        if kind == .start, !backward, pos < buffer.count,
+           buffer.graphemeSpan(containing: pos).upperBound == buffer.count {
+            // `w` ran out of words and stopped on the last character. Unless a word
+            // starts there, the operator takes that character too (`dw` on the last word).
+            let here = buffer.charClass(at: pos)
+            let before = pos > 0 ? buffer.charClass(at: buffer.graphemeStart(before: pos)) : .whitespace
+            let startsWord = here != .whitespace && here != .newline && !sameWordClass(before, here, big: big)
+            if !startsWord {
+                return .move(pos, inclusive: true)
+            }
+        }
+        return .move(pos, inclusive: kind == .end)
     }
 
     private static func sameWordClass(_ a: CharClass, _ b: CharClass, big: Bool) -> Bool {
@@ -409,8 +413,7 @@ enum MotionResolver {
                 }
             }
         }
-        let pos = buffer.lineStarts[line]
-        return .move(pos)
+        return .move(buffer.line(line).start)
     }
 
     private static func sentence(_ buffer: TextBuffer, count: Int, forward: Bool) -> ResolvedMotion {
@@ -553,24 +556,19 @@ enum OperatorRange {
         // previous line's newline without including it (vim exception 1 / `dw`).
         if !inclusive,
            b > a,
-           buffer.column(of: b) == 0,
+           buffer.bufferLine(containing: b).start == b,
            buffer.lineIndex(containing: a) != buffer.lineIndex(containing: b),
            b > 0 {
             b -= 1
             inclusive = false
         }
 
-        // Exclusive forward motion that lands on the last character still
-        // includes that character (`dw` on the last word).
-        if !inclusive, b > a, b == buffer.count - 1 {
-            b = buffer.count
-            inclusive = false
-        } else if inclusive, b < buffer.count {
-            b += 1
+        if inclusive, b < buffer.count {
+            b = buffer.graphemeSpan(containing: b).upperBound
         }
         if a >= b {
             if a < buffer.count {
-                return (a..<min(a + 1, buffer.count), .characterwise)
+                return (a..<buffer.graphemeSpan(containing: a).upperBound, .characterwise)
             }
             return nil
         }

@@ -4,7 +4,8 @@
 public final class Engine {
     public private(set) var buffer: TextBuffer
     public var mode: Mode = .normal
-    public var layout: any TextLayout
+    /// Where buffer lines break into screen lines. The host's text view, or no wrapping.
+    public var layout: any ScreenLayout
     public var clipboard: any Clipboard
     public var shiftWidth: Int = 2
     /// When true, leaving insert mode asks the host to pad the table under the cursor.
@@ -86,12 +87,16 @@ public final class Engine {
         text: String = "",
         cursor: Int = 0,
         clipboard: (any Clipboard)? = nil,
-        layout: (any TextLayout)? = nil
+        layout: (any ScreenLayout)? = nil
     ) {
         self.buffer = TextBuffer(text: text, cursor: cursor)
         self.clipboard = clipboard ?? MemoryClipboard()
         self.layout = layout ?? LogicalLineLayout.shared
-        self.buffer.preferredColumn = self.buffer.column(of: self.buffer.cursor)
+    }
+
+    /// Buffer and screen lines for the current text and layout.
+    public var screen: ScreenModel {
+        ScreenModel(buffer: buffer, layout: layout)
     }
 
     public var text: String { buffer.text }
@@ -107,13 +112,13 @@ public final class Engine {
             let l2 = buffer.lineIndex(containing: b)
             return buffer.linesRange(from: l1, through: l2)
         }
-        let end = min(b + 1, buffer.count)
+        let end = b < buffer.count ? buffer.graphemeSpan(containing: b).upperBound : buffer.count
         return a..<max(a, end)
     }
 
     public func load(text: String, cursor: Int = 0) {
         buffer = TextBuffer(text: text, cursor: cursor)
-        capturePreferredColumn()
+        resetCurswant()
         mode = .normal
         isModified = false
         undoStack = []
@@ -154,7 +159,7 @@ public final class Engine {
         replace(range, with: text)
         let width = buffer.measure(text)
         buffer.cursor = buffer.clampedCursor(range.lowerBound + width, normalMode: mode != .insert)
-        capturePreferredColumn()
+        resetCurswant()
         if !nested { commitTransaction() }
         return finishStroke(EngineResult(didChangeText: true, beep: false, actions: []), cursorBefore: before)
     }
@@ -182,11 +187,11 @@ public final class Engine {
         }
         if let cursor {
             buffer.cursor = buffer.clampedCursor(cursor, normalMode: mode != .insert)
-            capturePreferredColumn()
+            resetCurswant()
         } else if let earliest = applyOrder.last {
             let width = buffer.measure(earliest.replacement)
             buffer.cursor = buffer.clampedCursor(earliest.range.lowerBound + width, normalMode: mode != .insert)
-            capturePreferredColumn()
+            resetCurswant()
         }
         if !nested { commitTransaction() }
         return finishStroke(EngineResult(didChangeText: true, beep: false, actions: []), cursorBefore: before)
@@ -195,7 +200,7 @@ public final class Engine {
     /// Install a directory-line identity at the start of `line`.
     public func setDirectoryAnchor(line: Int, id: UInt64, sourcePath: String, isDirectory: Bool) {
         guard line >= 0, line < buffer.lineCount else { return }
-        let offset = buffer.lineStarts[line]
+        let offset = buffer.line(line).start
         buffer.addAnchor(Anchor(
             id: AnchorID(raw: id),
             offset: offset,
@@ -209,12 +214,12 @@ public final class Engine {
         visualAnchor = min(anchor, buffer.count)
         mode = .visual
         buffer.cursor = buffer.clampedCursor(max(anchor, caret), normalMode: true)
-        capturePreferredColumn()
+        resetCurswant()
     }
 
     public func moveCursor(to offset: Int) {
         buffer.cursor = buffer.clampedCursor(offset, normalMode: mode != .insert)
-        capturePreferredColumn()
+        resetCurswant()
     }
 
     @discardableResult
@@ -403,10 +408,10 @@ public final class Engine {
                 return applyMotion(.fileStart, find: nil)
             }
             if ch == "j" {
-                return applyMotion(.bufferDown, find: nil)
+                return applyMotion(.down, find: nil)
             }
             if ch == "k" {
-                return applyMotion(.bufferUp, find: nil)
+                return applyMotion(.up, find: nil)
             }
             if ch == "0" {
                 return applyMotion(.lineStart, find: nil)
@@ -698,6 +703,9 @@ public final class Engine {
                 cwAdjusted = kind == .WORD ? .WORDEnd : .wordEnd
             }
         }
+        if operatorKind == nil, kind == .down || kind == .up {
+            settleCurswant()
+        }
         let resolved = MotionResolver.resolve(
             cwAdjusted,
             count: max(1, motionCount == 0 && kind == .gotoLine ? 1 : motionCount),
@@ -705,7 +713,8 @@ public final class Engine {
             layout: layout,
             find: find,
             searchPattern: searchPattern,
-            searchForward: searchForward
+            searchForward: searchForward,
+            operatorPending: operatorKind != nil
         )
         if kind == .gotoLine, count == 0 {
             let last = MotionResolver.resolve(
@@ -739,7 +748,7 @@ public final class Engine {
         }
         if mode.isVisual {
             buffer.cursor = buffer.clampedCursor(resolved.position, normalMode: true)
-            updatePreferredColumn(after: kind)
+            updateCurswant(after: kind)
             resetParser()
             return .noop
         }
@@ -750,25 +759,33 @@ public final class Engine {
             break
         }
         buffer.cursor = buffer.clampedCursor(resolved.position, normalMode: true)
-        updatePreferredColumn(after: kind)
+        updateCurswant(after: kind)
         resetParser()
         return .noop
     }
 
-    private func updatePreferredColumn(after kind: MotionKind) {
+    private func updateCurswant(after kind: MotionKind) {
         switch kind {
-        case .up, .down, .bufferUp, .bufferDown:
+        case .up, .down:
             break
         case .screenLineEnd:
-            buffer.preferredColumn = TextBuffer.endColumn
+            buffer.curswant = .end
         default:
-            capturePreferredColumn()
+            resetCurswant()
         }
     }
 
-    /// Remember the caret's character column. `j` / `k` keep it until a horizontal motion or an edit.
-    private func capturePreferredColumn() {
-        buffer.preferredColumn = buffer.column(of: buffer.cursor)
+    /// Horizontal motions and edits. The next `j` / `k` reads the column from the caret,
+    /// after the host has laid out the edit, so wrapping is current.
+    private func resetCurswant() {
+        buffer.curswant = .fresh
+    }
+
+    /// First `j` / `k` after a reset: pin the caret's display column on its screen line.
+    private func settleCurswant() {
+        if buffer.curswant == .fresh {
+            buffer.curswant = .column(screen.displayColumn(of: buffer.cursor))
+        }
     }
 
     private func applyTextObject(_ object: TextObjectKind) -> EngineResult {
@@ -870,7 +887,7 @@ public final class Engine {
             }
             replace(range, with: "")
             buffer.cursor = buffer.clampedCursor(range.lowerBound, normalMode: op == .delete)
-            capturePreferredColumn()
+            resetCurswant()
             if op == .change {
                 lastRepeatable = .operate(.change, count: n, target: target, inserted: nil)
                 enterInsertMode(.change)
@@ -952,7 +969,7 @@ public final class Engine {
             jumpBack.append(buffer.cursor)
             buffer.cursor = buffer.clampedCursor(pos, normalMode: mode != .insert)
         }
-        capturePreferredColumn()
+        resetCurswant()
         return .noop
     }
 
@@ -965,7 +982,7 @@ public final class Engine {
         }
         insertCount = effectiveCount()
         prepareInsertPosition(kind)
-        capturePreferredColumn()
+        resetCurswant()
         lastRepeatable = .insert(kind: kind, text: "", count: insertCount)
         enterInsertMode(kind)
         resetParser()
@@ -979,9 +996,8 @@ public final class Engine {
         case .a:
             if !buffer.isEmpty {
                 let line = buffer.lineIndex(containing: buffer.cursor)
-                let end = buffer.lineEnd(at: line)
-                if buffer.cursor < end {
-                    buffer.cursor += 1
+                if buffer.cursor < buffer.lineEnd(at: line) {
+                    buffer.cursor = buffer.graphemeSpan(containing: buffer.cursor).upperBound
                 }
             }
         case .I:
@@ -996,11 +1012,10 @@ public final class Engine {
             let insertAt = buffer.lineFullRange(at: line).upperBound
             replace(insertAt..<insertAt, with: "\n")
             let targetLine = min(line + 1, buffer.lineCount - 1)
-            buffer.cursor = buffer.lineStarts[targetLine]
+            buffer.cursor = buffer.line(targetLine).start
         case .O:
             beginTransaction()
-            let line = buffer.lineIndex(containing: buffer.cursor)
-            let insertAt = buffer.lineStarts[line]
+            let insertAt = buffer.bufferLine(containing: buffer.cursor).start
             replace(insertAt..<insertAt, with: "\n")
             buffer.cursor = insertAt
         }
@@ -1031,47 +1046,52 @@ public final class Engine {
         case .enter:
             replace(buffer.cursor..<buffer.cursor, with: "\n")
             buffer.cursor += 1
-            capturePreferredColumn()
+            resetCurswant()
             return EngineResult(didChangeText: true, beep: false, actions: [])
         case .backspace:
             if buffer.cursor == 0 { return beepResult() }
             let start = buffer.graphemeStart(before: buffer.cursor)
             replace(start..<buffer.cursor, with: "")
             buffer.cursor = start
-            capturePreferredColumn()
+            resetCurswant()
             return EngineResult(didChangeText: true, beep: false, actions: [])
         case .delete:
             if buffer.cursor >= buffer.count { return beepResult() }
             let end = buffer.graphemeSpan(containing: buffer.cursor).upperBound
             replace(buffer.cursor..<end, with: "")
-            capturePreferredColumn()
+            resetCurswant()
             return EngineResult(didChangeText: true, beep: false, actions: [])
         case .tab:
             let tab = String(repeating: " ", count: max(1, shiftWidth))
             replace(buffer.cursor..<buffer.cursor, with: tab)
             buffer.cursor += buffer.measure(tab)
-            capturePreferredColumn()
+            resetCurswant()
             return EngineResult(didChangeText: true, beep: false, actions: [])
         case .left:
-            buffer.cursor = buffer.graphemeStart(before: buffer.cursor)
-            capturePreferredColumn()
+            // Arrows stay on the buffer line, like vim's default `whichwrap`.
+            if buffer.cursor > buffer.bufferLine(containing: buffer.cursor).start {
+                buffer.cursor = buffer.graphemeStart(before: buffer.cursor)
+            }
+            resetCurswant()
             return .noop
         case .right:
-            if buffer.cursor < buffer.count {
+            if buffer.cursor < buffer.bufferLine(containing: buffer.cursor).contentEnd {
                 buffer.cursor = buffer.graphemeSpan(containing: buffer.cursor).upperBound
             }
-            capturePreferredColumn()
+            resetCurswant()
             return .noop
         case .up, .down:
-            // Same character column as normal-mode j/k. The view's pixel x drifts
-            // under headings, bold, and tables, so arrows do not ask the layout for it.
-            let delta = event.key == .up ? -1 : 1
-            buffer.cursor = LogicalLineLayout.shared.position(
-                from: buffer.cursor,
-                displayLines: delta,
-                preferredColumn: buffer.preferredColumn,
-                in: buffer
+            settleCurswant()
+            let resolved = MotionResolver.resolve(
+                event.key == .up ? .up : .down,
+                count: 1,
+                buffer: buffer,
+                layout: layout,
+                insert: true
             )
+            if !resolved.failed {
+                buffer.cursor = resolved.position
+            }
             return .noop
         case .character(let ch):
             return insertText(String(ch))
@@ -1086,7 +1106,7 @@ public final class Engine {
         if text.isEmpty { return .noop }
         replace(buffer.cursor..<buffer.cursor, with: text)
         buffer.cursor += buffer.measure(text)
-        capturePreferredColumn()
+        resetCurswant()
         return EngineResult(didChangeText: true, beep: false, actions: [])
     }
 
@@ -1110,15 +1130,11 @@ public final class Engine {
         operatorKind = nil
         operatorCount = nil
         count = nil
-        if buffer.cursor > 0 {
-            let prev = buffer.cursor - 1
-            let line = buffer.lineIndex(containing: buffer.cursor)
-            if buffer.cursor > buffer.lineStarts[line] {
-                buffer.cursor = prev
-            }
+        if buffer.cursor > buffer.bufferLine(containing: buffer.cursor).start {
+            buffer.cursor = buffer.graphemeStart(before: buffer.cursor)
         }
         buffer.clampCursor(normalMode: true)
-        capturePreferredColumn()
+        resetCurswant()
         commitTransaction()
         if !inserted.isEmpty {
             registers.lastInsert = Register(text: inserted, style: .characterwise)
@@ -1173,7 +1189,7 @@ public final class Engine {
         yank(range, style: .characterwise, deleting: true)
         replace(range, with: "")
         buffer.cursor = buffer.clampedCursor(range.lowerBound, normalMode: !enterInsert)
-        capturePreferredColumn()
+        resetCurswant()
         if enterInsert {
             lastRepeatable = .operate(.change, count: count, target: .characterCount(count), inserted: nil)
             enterInsertMode(.s)
@@ -1202,15 +1218,18 @@ public final class Engine {
         beginTransaction()
         let line = buffer.lineIndex(containing: buffer.cursor)
         let endLimit = buffer.lineEnd(at: line)
-        let end = min(buffer.cursor + n, endLimit)
+        let end = buffer.endOfGraphemes(from: buffer.cursor, count: n, limit: endLimit)
         guard buffer.cursor < end else {
             abortTransaction()
             return beepResult()
         }
-        let replacement = String(repeating: String(ch), count: end - buffer.cursor)
-        replace(buffer.cursor..<end, with: replacement)
-        buffer.cursor = buffer.clampedCursor(max(buffer.cursor, end - 1), normalMode: true)
-        capturePreferredColumn()
+        let replaced = buffer.graphemes(in: buffer.cursor..<end).count
+        let replacement = String(repeating: String(ch), count: replaced)
+        let start = buffer.cursor
+        replace(start..<end, with: replacement)
+        let lastStart = start + (replaced - 1) * String(ch).utf16.count
+        buffer.cursor = buffer.clampedCursor(lastStart, normalMode: true)
+        resetCurswant()
         lastRepeatable = .replace(count: n, ch)
         resetParser()
         commitTransaction()
@@ -1223,23 +1242,21 @@ public final class Engine {
             toggleCase(in: range)
             commitTransaction()
             mode = .normal
-            capturePreferredColumn()
+            resetCurswant()
             lastRepeatable = .toggleCase(count: range.count)
             resetParser()
             return EngineResult(didChangeText: true, beep: false, actions: [])
         }
         if buffer.isEmpty { return beepResult() }
         beginTransaction()
-        let line = buffer.lineIndex(containing: buffer.cursor)
-        let endLimit = buffer.lineEnd(at: line)
-        let end = min(buffer.cursor + n, endLimit)
-        toggleCase(in: buffer.cursor..<end)
-        buffer.cursor = buffer.clampedCursor(min(end, endLimit - (endLimit > buffer.lineStarts[line] ? 1 : 0)), normalMode: true)
-        if buffer.cursor < end, end < endLimit {
-            buffer.cursor = end
-            buffer.clampCursor(normalMode: true)
+        let endLimit = buffer.bufferLine(containing: buffer.cursor).contentEnd
+        var end = buffer.cursor
+        for _ in 0..<n where end < endLimit {
+            end = buffer.graphemeSpan(containing: end).upperBound
         }
-        capturePreferredColumn()
+        toggleCase(in: buffer.cursor..<end)
+        buffer.cursor = buffer.clampedCursor(end, normalMode: true)
+        resetCurswant()
         lastRepeatable = .toggleCase(count: n)
         resetParser()
         commitTransaction()
@@ -1250,9 +1267,7 @@ public final class Engine {
         guard !range.isEmpty else { return }
         var out = ""
         out.reserveCapacity(range.count)
-        for off in range {
-            if off >= buffer.count { break }
-            let ch = buffer.character(at: off)
+        for (_, ch) in buffer.graphemes(in: range.clamped(to: 0..<buffer.count)) {
             if ch.isUppercase {
                 out += ch.lowercased()
             } else if ch.isLowercase {
@@ -1281,7 +1296,7 @@ public final class Engine {
                 break
             }
             let joinSpace: String
-            if end == buffer.lineStarts[current] || nextContent.isEmpty {
+            if end == buffer.line(current).start || nextContent.isEmpty {
                 joinSpace = ""
             } else {
                 joinSpace = " "
@@ -1291,7 +1306,7 @@ public final class Engine {
             buffer.cursor = end
         }
         buffer.clampCursor(normalMode: true)
-        capturePreferredColumn()
+        resetCurswant()
         lastRepeatable = .join(count: n)
         resetParser()
         commitTransaction()
@@ -1325,7 +1340,7 @@ public final class Engine {
                     text = "\n" + text
                 }
             } else {
-                insertAt = buffer.lineStarts[line]
+                insertAt = buffer.line(line).start
             }
             replace(insertAt..<insertAt, with: text)
             installPutAnchors(source, at: insertAt, inserted: text)
@@ -1334,16 +1349,16 @@ public final class Engine {
         } else {
             var at = buffer.cursor
             if after, !buffer.isEmpty {
-                let line = buffer.lineIndex(containing: at)
-                if at < buffer.lineEnd(at: line) {
-                    at += 1
+                if at < buffer.bufferLine(containing: at).contentEnd {
+                    at = buffer.graphemeSpan(containing: at).upperBound
                 }
             }
             replace(at..<at, with: payload)
             installPutAnchors(source, at: at, inserted: payload)
-            buffer.cursor = buffer.clampedCursor(at + max(0, buffer.measure(payload) - 1), normalMode: true)
+            let pastPut = at + buffer.measure(payload)
+            buffer.cursor = buffer.clampedCursor(pastPut > at ? buffer.graphemeStart(before: pastPut) : at, normalMode: true)
         }
-        capturePreferredColumn()
+        resetCurswant()
         lastRepeatable = .put(after: after, count: n)
         resetParser()
         mode = .normal
@@ -1364,7 +1379,7 @@ public final class Engine {
         let startLine = buffer.lineIndex(containing: range.lowerBound)
         var endLine = buffer.lineIndex(containing: max(range.lowerBound, range.upperBound - (range.isEmpty ? 0 : 1)))
         if range.upperBound > range.lowerBound,
-           buffer.column(of: range.upperBound) == 0,
+           buffer.bufferLine(containing: range.upperBound).start == range.upperBound,
            endLine > startLine {
             endLine -= 1
         }
@@ -1372,7 +1387,7 @@ public final class Engine {
         let lines = startLine...endLine
         if direction > 0 {
             for line in lines.reversed() {
-                let at = buffer.lineStarts[line]
+                let at = buffer.line(line).start
                 replace(at..<at, with: pad)
             }
         } else {
@@ -1398,7 +1413,7 @@ public final class Engine {
             }
         }
         buffer.cursor = buffer.firstNonBlank(onLine: startLine)
-        capturePreferredColumn()
+        resetCurswant()
     }
 
     // MARK: Repeat / undo
@@ -1528,7 +1543,7 @@ public final class Engine {
             strokeEdits.append(TextEdit(range: lower..<upper, replacement: edit.replacement))
         }
         buffer.cursor = buffer.clampedCursor(cursor, normalMode: true)
-        capturePreferredColumn()
+        resetCurswant()
     }
 
     // MARK: Search / ex
@@ -1662,7 +1677,7 @@ public final class Engine {
         }) else { return beepResult() }
         recordJump(from: buffer.cursor)
         buffer.cursor = buffer.clampedCursor(anchor.offset, normalMode: true)
-        capturePreferredColumn()
+        resetCurswant()
         return .noop
     }
 
@@ -1702,6 +1717,15 @@ public final class Engine {
             return EngineResult(didChangeText: false, beep: false, actions: [.setTheme(choice)])
         case "s":
             return substitute(parsed)
+        case "" where parsed.rangeStart != nil && parsed.args.isEmpty:
+            // `:N`, `:$`, `:'a`: a buffer line, wherever it wraps on screen.
+            let last = max(0, buffer.lineCount - 1)
+            let current = buffer.lineIndex(containing: buffer.cursor)
+            let target = resolveAddress(parsed.rangeEnd ?? parsed.rangeStart, current: current, last: last)
+            recordJump(from: buffer.cursor)
+            buffer.cursor = buffer.clampedCursor(buffer.firstNonBlank(onLine: target), normalMode: true)
+            resetCurswant()
+            return .noop
         default:
             statusMessage = "Not an editor command"
             return beepResult()

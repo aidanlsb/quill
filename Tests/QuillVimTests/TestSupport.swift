@@ -22,7 +22,7 @@ func marked(_ text: String, cursor: Int) -> String {
     return out
 }
 
-func vim(_ initial: String, keys: String, layout: (any TextLayout)? = nil) -> Engine {
+func vim(_ initial: String, keys: String, layout: (any ScreenLayout)? = nil) -> Engine {
     let parsed = splitMarked(initial)
     let engine = Engine(text: parsed.text, cursor: parsed.cursor, layout: layout)
     engine.type(keys)
