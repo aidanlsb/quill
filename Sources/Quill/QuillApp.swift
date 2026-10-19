@@ -25,7 +25,9 @@ enum QuillMain {
             FastOpen.main(launchURL: url)
             return
         }
-        LaunchRouter.start()
+        // No file and no quill:// URL. This call is the first NSApplicationMain.
+        // A run loop started before it returns, and a second main never presents a window.
+        QuillApp.main()
     }
 }
 
@@ -136,80 +138,6 @@ enum LaunchOpenURL {
             index += 1
         }
         return args
-    }
-}
-
-/// Empty argv. A quill:// launch event is presented directly; otherwise SwiftUI starts.
-@MainActor
-final class LaunchRouter: NSObject, NSApplicationDelegate {
-    private static var session: LaunchRouter?
-    private var launchURL: URL?
-    private var yielded = false
-
-    static func start() {
-        let app = NSApplication.shared
-        app.setActivationPolicy(.regular)
-        let router = LaunchRouter()
-        session = router
-        app.delegate = router
-        router.install()
-        app.run()
-        // Reached only when no quill:// event arrived. The URL path presents from the handler.
-        QuillApp.main()
-    }
-
-    func applicationWillFinishLaunching(_ notification: Notification) {
-        install()
-    }
-
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        // A quill:// event is delivered just before this. If it did not arrive, leave the run loop.
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.launchURL == nil else { return }
-            self.yield()
-        }
-    }
-
-    private func yield() {
-        guard !yielded else { return }
-        yielded = true
-        let app = NSApplication.shared
-        app.stop(nil)
-        if let event = NSEvent.otherEvent(
-            with: .applicationDefined,
-            location: .zero,
-            modifierFlags: [],
-            timestamp: ProcessInfo.processInfo.systemUptime,
-            windowNumber: 0,
-            context: nil,
-            subtype: 0,
-            data1: 0,
-            data2: 0
-        ) {
-            app.postEvent(event, atStart: false)
-        }
-    }
-
-    private func install() {
-        NSAppleEventManager.shared().setEventHandler(
-            self,
-            andSelector: #selector(handleGetURL(_:reply:)),
-            forEventClass: AEEventClass(kInternetEventClass),
-            andEventID: AEEventID(kAEGetURL)
-        )
-    }
-
-    @objc nonisolated func handleGetURL(_ event: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
-        guard let raw = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
-              let url = URL(string: raw) else { return }
-        // quill-concurrency: The Apple event arrives on the main thread; assumeIsolated hops without capturing self.
-        nonisolated(unsafe) let router = self
-        MainActor.assumeIsolated {
-            guard LaunchRequest.target(from: url) != nil else { return }
-            EarlyOpenURL.remember(url)
-            router.launchURL = url
-            FastOpen.main(launchURL: url, applicationReady: true)
-        }
     }
 }
 
