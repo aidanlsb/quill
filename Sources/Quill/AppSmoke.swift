@@ -3,6 +3,7 @@ import Foundation
 import SwiftUI
 import QuillFS
 import QuillMarkdown
+import QuillText
 import QuillVim
 
 /// In-process check for the behaviors Linux tests cannot see: caret cell size,
@@ -86,6 +87,7 @@ enum AppSmoke {
         checkCaretAndScroll(failures: &failures)
         checkLongNote(failures: &failures)
         checkColumnFollowsResize(failures: &failures)
+        checkNoHorizontalOverflow(failures: &failures)
         checkDirectory(failures: &failures)
         checkPicker(failures: &failures)
         if failures.isEmpty {
@@ -391,7 +393,7 @@ enum AppSmoke {
             tv.applyResult(result)
         }
         let line = engine.buffer.lineIndex(containing: engine.cursor)
-        let column = engine.buffer.column(of: engine.cursor)
+        let column = engine.buffer.position(of: engine.cursor).utf16Column
         let afterJ = motionDiag(engine: engine, tv: tv, scroll: scroll)
         check(line == 40, "j stopped on line \(line) (\(afterJ))", failures: &failures)
         check(column == 0, "j column drifted to \(column) (\(afterJ))", failures: &failures)
@@ -438,8 +440,7 @@ enum AppSmoke {
             failures: &failures
         )
 
-        checkWrappedVertical(engine: engine, tv: tv, failures: &failures)
-        checkStyledVertical(engine: engine, tv: tv, failures: &failures)
+        checkMotionModel(engine: engine, tv: tv, failures: &failures)
     }
 
     /// A 10k-line note stays one buffer in the text view: `G` scrolls to the
@@ -527,198 +528,458 @@ enum AppSmoke {
         window.orderOut(nil)
     }
 
-    /// A long paragraph in a narrow column. `j` moves to the next logical line.
-    /// `gj` may step a screen row. `$` remembers end-of-line, not the screen-row x.
+    /// Headings, bold, a list, short and empty lines, a table with a long row,
+    /// wide characters, and a tab. Prose lines are long enough to wrap in the
+    /// narrow column; in the wide one every buffer line is one screen line.
+    private static let motionDocument = [
+        "# Heading line with several words here",
+        "**bold words** in prose long enough to wrap when narrow",
+        "- list item longer",
+        "short",
+        "",
+        "| Name | Quantity |",
+        "| --- | ---: |",
+        "| apple | 12 |",
+        "| pear and a much longer description cell | 3 |",
+        "emoji 😀 and 日本語 wide",
+        "\tindented with a tab",
+        "restored column line that is also fairly long so it wraps",
+    ]
+
+    /// j / k by screen line and h / l by grapheme, at a narrow and a wide column,
+    /// against rows read straight from TextKit line fragments.
     @MainActor
-    private static func checkWrappedVertical(engine: Engine, tv: VimTextView, failures: inout [String]) {
-        tv.columnWidth = 160
-        tv.updateInsets()
-        let paragraph = String(repeating: "abcdefghi ", count: 30)
-        engine.load(text: paragraph + "\nZ")
-        tv.syncFromEngine()
-        tv.layoutSubtreeIfNeeded()
-        tv.layoutAdapter.ensureFullLayout()
-        let visual = tv.layoutAdapter.laidOutLineCount()
-        check(visual >= 3, "wrapped paragraph laid out \(visual) visual lines", failures: &failures)
-
-        _ = engine.type("0")
-        let start = engine.cursor
-        let paragraphEnd = paragraph.utf16.count - 1
-        let first = engine.handle(KeyEvent(.character("j")))
-        tv.applyResult(first)
-        check(
-            engine.buffer.lineIndex(containing: engine.cursor) == 1,
-            "j stayed in the paragraph at \(engine.cursor)",
-            failures: &failures
-        )
-        check(
-            engine.buffer.column(of: engine.cursor) == 0,
-            "j column \(engine.buffer.column(of: engine.cursor)) on Z",
-            failures: &failures
-        )
-        let back = engine.handle(KeyEvent(.character("k")))
-        tv.applyResult(back)
-        check(
-            engine.cursor == start && engine.buffer.column(of: engine.cursor) == 0,
-            "k returned to \(engine.cursor) column \(engine.buffer.column(of: engine.cursor))",
-            failures: &failures
-        )
-
-        let visualStep = engine.handle(KeyEvent(.character("g")))
-        tv.applyResult(visualStep)
-        let visualDown = engine.handle(KeyEvent(.character("j")))
-        tv.applyResult(visualDown)
-        check(
-            engine.buffer.lineIndex(containing: engine.cursor) == 0 && engine.cursor > start && engine.cursor < paragraphEnd - 20,
-            "gj left the paragraph at \(engine.cursor) of \(paragraphEnd)",
-            failures: &failures
-        )
-
-        _ = engine.type("gg")
-        let stuck = engine.handle(KeyEvent(.character("k")))
-        check(stuck.beep, "k returned by moving at the top", failures: &failures)
-
-        _ = engine.type("$")
-        let screenEnd = engine.cursor
-        check(
-            screenEnd > start && screenEnd < 80,
-            "screen $ landed at \(screenEnd)",
-            failures: &failures
-        )
-        _ = engine.type("j")
-        check(
-            engine.buffer.lineIndex(containing: engine.cursor) == 1,
-            "$j left Z at \(engine.cursor)",
-            failures: &failures
-        )
-        _ = engine.type("k")
-        check(
-            engine.cursor == paragraphEnd,
-            "$ set the desired column to \(engine.cursor) instead of \(paragraphEnd)",
-            failures: &failures
-        )
-        _ = engine.type("g$")
-        check(
-            engine.cursor > 200,
-            "g$ landed at \(engine.cursor)",
-            failures: &failures
-        )
-    }
-
-    /// Headings, bold, a list, a table, and short or empty lines. `j` / `k` report
-    /// the character column, including after the text view has styled the note.
-    @MainActor
-    private static func checkStyledVertical(engine: Engine, tv: VimTextView, failures: inout [String]) {
-        tv.columnWidth = 80
-        tv.updateInsets()
-        let lines = [
-            "# Heading line here",
-            "**bold words in prose**",
-            "- list item longer",
-            "short",
-            "",
-            "| Name | Quantity |",
-            "| --- | ---: |",
-            "| apple | 12 |",
-            "| pear | 3 |",
-            "restored column line",
-        ]
-        let text = lines.joined(separator: "\n")
-        engine.load(text: text)
-        tv.syncFromEngine()
-        tv.layoutSubtreeIfNeeded()
-        tv.layoutAdapter.ensureFullLayout()
-        guard let storage = tv.textStorage else {
-            failures.append("styled column missing text storage")
+    private static func checkMotionModel(engine: Engine, tv: VimTextView, failures: inout [String]) {
+        let text = motionDocument.joined(separator: "\n")
+        guard let window = tv.window, let scroll = tv.enclosingScrollView else {
+            failures.append("motion model: text view has no window")
             return
         }
-        let bodySize = tv.theme.bodyFont.pointSize
-        let heading = storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
-        check(
-            (heading?.pointSize ?? 0) > bodySize + 1,
-            "heading font \(heading?.pointSize ?? 0) is not larger than body \(bodySize)",
-            failures: &failures
-        )
-        let boldAt = utf16Length(lines[0]) + 1 + 2
-        let bold = storage.attribute(.font, at: boldAt, effectiveRange: nil) as? NSFont
-        let boldTraits = NSFontManager.shared.traits(of: bold ?? tv.theme.bodyFont)
-        check(boldTraits.contains(.boldFontMask), "bold run missing at \(boldAt)", failures: &failures)
-        var tableAt = 0
-        for line in lines.prefix(5) {
-            tableAt += utf16Length(line) + 1
+        let original = scroll.frame.size
+        defer {
+            tv.columnWidth = 640
+            resizeEditor(window, scroll: scroll, width: original.width, height: original.height)
+            tv.updateInsets()
         }
-        let tableFont = storage.attribute(.font, at: tableAt, effectiveRange: nil) as? NSFont
-        check(tableFont?.isFixedPitch == true, "table font \(tableFont?.fontName ?? "missing")", failures: &failures)
-
-        let desired = 8
-        _ = engine.type("0")
-        _ = engine.type("8l")
-        tv.syncFromEngine()
-        expectCaret(engine, line: 0, column: caretColumn(lines[0], desired: desired), label: "start", failures: &failures)
-        for index in 1..<lines.count {
-            let result = engine.handle(KeyEvent(.character("j")))
-            tv.applyResult(result)
-            expectCaret(
-                engine,
-                line: index,
-                column: caretColumn(lines[index], desired: desired),
-                label: "j\(index)",
-                failures: &failures
-            )
+        // The side gutters cap the column at the window width minus 256pt.
+        for (label, column) in [("narrow", CGFloat(160)), ("wide", CGFloat(600))] {
+            resizeEditor(window, scroll: scroll, width: column + QuillMetrics.sideGutter * 2 + 80, height: original.height)
+            tv.columnWidth = column
+            tv.updateInsets()
+            let applied = tv.textContainer?.size.width ?? 0
+            check(abs(applied - column) < 0.5, "\(label) column is \(applied) not \(column)", failures: &failures)
+            engine.load(text: text)
+            tv.syncFromEngine()
+            tv.layoutSubtreeIfNeeded()
+            tv.layoutAdapter.ensureFullLayout()
+            let rows = drawnRows(tv)
+            if label == "narrow" {
+                check(
+                    rows.count > motionDocument.count + 3,
+                    "narrow column drew \(rows.count) rows for \(motionDocument.count) lines",
+                    failures: &failures
+                )
+                writeStderr(probeLineFragmentIndexing(tv) + "\n")
+            } else {
+                check(
+                    rows.count == motionDocument.count,
+                    "wide column drew \(rows.count) rows for \(motionDocument.count) lines",
+                    failures: &failures
+                )
+                checkWideColumnLandings(engine: engine, tv: tv, failures: &failures)
+            }
+            checkVerticalAgainstRows(engine: engine, tv: tv, rows: rows, label: label, failures: &failures)
+            checkHorizontalWalk(engine: engine, tv: tv, label: label, failures: &failures)
         }
-        for index in stride(from: lines.count - 2, through: 0, by: -1) {
-            let result = engine.handle(KeyEvent(.character("k")))
-            tv.applyResult(result)
-            expectCaret(
-                engine,
-                line: index,
-                column: caretColumn(lines[index], desired: desired),
-                label: "k\(index)",
-                failures: &failures
-            )
-        }
-
-        _ = engine.type("5j")
-        tv.syncFromEngine()
-        expectCaret(engine, line: 5, column: caretColumn(lines[5], desired: desired), label: "5j", failures: &failures)
-        _ = engine.type("5k")
-        expectCaret(engine, line: 0, column: caretColumn(lines[0], desired: desired), label: "5k", failures: &failures)
-
-        _ = engine.type("$")
-        let end = caretColumn(lines[0], desired: Int.max)
-        expectCaret(engine, line: 0, column: end, label: "$", failures: &failures)
-        _ = engine.type("j")
-        expectCaret(engine, line: 1, column: caretColumn(lines[1], desired: Int.max), label: "$j", failures: &failures)
-        _ = engine.type("k")
-        expectCaret(engine, line: 0, column: end, label: "$k", failures: &failures)
-
-        _ = engine.type("0")
-        expectCaret(engine, line: 0, column: 0, label: "0", failures: &failures)
-        _ = engine.type("j")
-        expectCaret(engine, line: 1, column: 0, label: "0j", failures: &failures)
     }
 
-    private static func caretColumn(_ line: String, desired: Int) -> Int {
-        let count = utf16Length(line)
-        if count == 0 { return 0 }
-        return min(desired, count - 1)
+    /// Hand-written (line, UTF-16 column) landings for `8l` then `j` down and `k` up
+    /// when nothing wraps. Display column 8 stays column 8 across a 32pt heading,
+    /// bold, mono table cells, an emoji (two cells), and a tab (four cells).
+    @MainActor
+    private static func checkWideColumnLandings(engine: Engine, tv: VimTextView, failures: inout [String]) {
+        let want = [(0, 8), (1, 8), (2, 8), (3, 4), (4, 0), (5, 8), (6, 8), (7, 8), (8, 8), (9, 8), (10, 5), (11, 8)]
+        _ = engine.type("gg08l")
+        tv.syncFromEngine()
+        expectCaret(engine, want[0], label: "wide start", failures: &failures)
+        for index in 1..<want.count {
+            tv.applyResult(engine.handle(KeyEvent(.character("j"))))
+            expectCaret(engine, want[index], label: "wide j\(index)", failures: &failures)
+        }
+        for index in stride(from: want.count - 2, through: 0, by: -1) {
+            tv.applyResult(engine.handle(KeyEvent(.character("k"))))
+            expectCaret(engine, want[index], label: "wide k\(index)", failures: &failures)
+        }
+        _ = engine.type("5j")
+        tv.syncFromEngine()
+        expectCaret(engine, want[5], label: "wide 5j", failures: &failures)
+        _ = engine.type("$")
+        expectCaret(engine, (5, utf16Length(motionDocument[5]) - 1), label: "wide $", failures: &failures)
+        _ = engine.type("j")
+        expectCaret(engine, (6, utf16Length(motionDocument[6]) - 1), label: "wide $j", failures: &failures)
+        _ = engine.type("2k")
+        expectCaret(engine, (4, 0), label: "wide $2k on the empty line", failures: &failures)
+        _ = engine.type("k")
+        expectCaret(engine, (3, 4), label: "wide $k", failures: &failures)
     }
 
     @MainActor
-    private static func expectCaret(
-        _ engine: Engine,
-        line: Int,
-        column: Int,
+    private static func expectCaret(_ engine: Engine, _ want: (Int, Int), label: String, failures: inout [String]) {
+        let got = engine.buffer.position(of: engine.cursor)
+        check(
+            got.line == want.0 && got.utf16Column == want.1,
+            "\(label) landed \(got.line),\(got.utf16Column) want \(want.0),\(want.1)",
+            failures: &failures
+        )
+    }
+
+    /// Walks every screen row down and back up and compares each landing with
+    /// an oracle built from TextKit's rows and display widths, not `ScreenModel`.
+    @MainActor
+    private static func checkVerticalAgainstRows(
+        engine: Engine,
+        tv: VimTextView,
+        rows: [Range<Int>],
         label: String,
         failures: inout [String]
     ) {
-        let gotLine = engine.buffer.lineIndex(containing: engine.cursor)
-        let gotColumn = engine.buffer.column(of: engine.cursor)
-        check(
-            gotLine == line && gotColumn == column,
-            "\(label) landed \(gotLine),\(gotColumn) want \(line),\(column)",
-            failures: &failures
+        let ns = tv.string as NSString
+        let lines = LineIndex(tv.string)
+        guard !rows.isEmpty else {
+            failures.append("\(label) no rows")
+            return
+        }
+        func rowIndex(of offset: Int) -> Int? {
+            rows.firstIndex { $0.contains(offset) } ?? rows.lastIndex { $0.upperBound == offset }
+        }
+        func cells(_ index: Int) -> [OracleCell] {
+            oracleCells(ns, row: rows[index], lineStart: lines.bufferLine(containing: rows[index].lowerBound).start)
+        }
+        func landing(_ index: Int, want: Int?) -> Int {
+            let row = cells(index)
+            guard let last = row.last else { return rows[index].lowerBound }
+            guard let want else { return last.offset }
+            return row.first { want < $0.end }?.offset ?? last.offset
+        }
+        func describe(_ offset: Int) -> String {
+            let position = lines.position(of: offset)
+            return "\(position.line),\(position.utf16Column) (\(offset))"
+        }
+        func walk(_ key: Character, from start: Int, want: Int?, tag: String) -> Int? {
+            var current = start
+            while true {
+                let result = engine.handle(KeyEvent(.character(key)))
+                tv.applyResult(result)
+                let edge = key == "j" ? rows.count - 1 : 0
+                if current == edge {
+                    check(result.beep, "\(label) \(tag) \(key) past row \(edge) moved to \(describe(engine.cursor))", failures: &failures)
+                    return current
+                }
+                current += key == "j" ? 1 : -1
+                let expected = landing(current, want: want)
+                if engine.cursor != expected {
+                    failures.append(
+                        "\(label) \(tag) \(key) onto row \(current) \(rows[current]) landed \(describe(engine.cursor)) want \(describe(expected)) for column \(want.map(String.init) ?? "end")"
+                    )
+                    return nil
+                }
+            }
+        }
+
+        _ = engine.type("gg08l")
+        tv.syncFromEngine()
+        guard let start = rowIndex(of: engine.cursor),
+              let want = cells(start).first(where: { $0.offset == engine.cursor })?.start else {
+            failures.append("\(label) start \(describe(engine.cursor)) is on no drawn row")
+            return
+        }
+        guard let bottom = walk("j", from: start, want: want, tag: "column \(want)"),
+              walk("k", from: bottom, want: want, tag: "column \(want)") != nil else { return }
+
+        _ = engine.type("$")
+        tv.syncFromEngine()
+        check(engine.cursor == landing(0, want: nil), "\(label) $ landed \(describe(engine.cursor))", failures: &failures)
+        guard let end = walk("j", from: 0, want: nil, tag: "$"), walk("k", from: end, want: nil, tag: "$") != nil else { return }
+
+        _ = engine.type("0")
+        let counted = min(rows.count - 1, 5)
+        _ = engine.type("5j")
+        tv.syncFromEngine()
+        check(engine.cursor == landing(counted, want: 0), "\(label) 5j landed \(describe(engine.cursor)) want \(describe(landing(counted, want: 0)))", failures: &failures)
+        _ = engine.type("0")
+        check(engine.cursor == rows[counted].lowerBound, "\(label) 0 landed \(describe(engine.cursor)) want row start \(rows[counted].lowerBound)", failures: &failures)
+    }
+
+    private struct OracleCell {
+        var offset: Int
+        var start: Int
+        var end: Int
+    }
+
+    /// Display cells of a drawn row. Tab stops count from the buffer line start.
+    private static func oracleCells(_ ns: NSString, row: Range<Int>, lineStart: Int) -> [OracleCell] {
+        var base = 0
+        if row.lowerBound > lineStart {
+            for character in ns.substring(with: NSRange(location: lineStart, length: row.lowerBound - lineStart)) {
+                base = DisplayWidth.advance(base, over: character)
+            }
+        }
+        var column = base
+        var offset = row.lowerBound
+        var out: [OracleCell] = []
+        for character in ns.substring(with: NSRange(location: row.lowerBound, length: row.count)) {
+            let next = DisplayWidth.advance(column, over: character)
+            out.append(OracleCell(offset: offset, start: column - base, end: next - base))
+            column = next
+            offset += character.utf16.count
+        }
+        return out
+    }
+
+    /// `l` across headings, bold, table rows, and wide characters visits every
+    /// grapheme once and stops at the end of the line. At every step the drawn
+    /// caret sits on the glyph TextKit drew for that character, and moves right
+    /// within a row, so styling or table padding cannot make it skip or stick.
+    @MainActor
+    private static func checkHorizontalWalk(engine: Engine, tv: VimTextView, label: String, failures: inout [String]) {
+        let ns = tv.string as NSString
+        let lines = LineIndex(tv.string)
+        for index in [0, 1, 5, 8, 9, 10] {
+            let line = lines.line(index)
+            var expected: [Int] = []
+            var at = line.start
+            for character in ns.substring(with: NSRange(location: line.start, length: line.content.count)) {
+                expected.append(at)
+                at += character.utf16.count
+            }
+            engine.moveCursor(to: line.start)
+            tv.syncFromEngine()
+            var previous: NSRect?
+            var broke = false
+            for (step, offset) in expected.enumerated() {
+                if step > 0 {
+                    let result = engine.handle(KeyEvent(.character("l")))
+                    tv.applyResult(result)
+                    if result.beep || engine.cursor != offset {
+                        failures.append("\(label) line \(index) l step \(step) went to \(engine.cursor) want \(offset)")
+                        broke = true
+                        break
+                    }
+                }
+                let caret = tv.renderedCaretRect()
+                guard let glyph = segmentFrame(tv, utf16: offset) else {
+                    failures.append("\(label) line \(index) no text segment at \(offset)")
+                    broke = true
+                    break
+                }
+                if abs(caret.minX - glyph.minX) > 1 || caret.midY < glyph.minY - 2 || caret.midY > glyph.maxY + 2 {
+                    failures.append("\(label) line \(index) offset \(offset) caret \(caret) is not on its glyph \(glyph)")
+                    broke = true
+                    break
+                }
+                if let previous, abs(previous.midY - caret.midY) < 1, caret.minX <= previous.minX {
+                    failures.append("\(label) line \(index) offset \(offset) caret x \(caret.minX) did not advance from \(previous.minX)")
+                    broke = true
+                    break
+                }
+                previous = caret
+            }
+            if broke { continue }
+            let past = engine.handle(KeyEvent(.character("l")))
+            check(past.beep && engine.cursor == expected.last, "\(label) line \(index) l crossed the line end to \(engine.cursor)", failures: &failures)
+            for offset in expected.reversed().dropFirst() {
+                tv.applyResult(engine.handle(KeyEvent(.character("h"))))
+                if engine.cursor != offset {
+                    failures.append("\(label) line \(index) h went to \(engine.cursor) want \(offset)")
+                    break
+                }
+            }
+            let before = engine.handle(KeyEvent(.character("h")))
+            check(before.beep && engine.cursor == line.start, "\(label) line \(index) h crossed the line start to \(engine.cursor)", failures: &failures)
+        }
+    }
+
+    /// Text-view rect of the grapheme at `utf16`, from TextKit's text segments.
+    @MainActor
+    private static func segmentFrame(_ tv: NSTextView, utf16: Int) -> NSRect? {
+        guard let lm = tv.textLayoutManager else { return nil }
+        let ns = tv.string as NSString
+        guard utf16 < ns.length, let frame = segmentUnion(lm, range: ns.rangeOfComposedCharacterSequence(at: utf16)) else { return nil }
+        return frame.offsetBy(dx: tv.textContainerOrigin.x, dy: tv.textContainerOrigin.y)
+    }
+
+    @MainActor
+    private static func segmentUnion(_ lm: NSTextLayoutManager, range: NSRange) -> NSRect? {
+        let doc = lm.documentRange.location
+        guard let start = lm.location(doc, offsetBy: range.location),
+              let end = lm.location(start, offsetBy: range.length),
+              let textRange = NSTextRange(location: start, end: end) else { return nil }
+        var union: NSRect?
+        lm.enumerateTextSegments(in: textRange, type: .standard, options: [.rangeNotRequired]) { _, frame, _, _ in
+            union = union.map { $0.union(frame) } ?? frame
+            return true
+        }
+        return union
+    }
+
+    /// Screen rows as TextKit drew them, newline excluded. The empty fragment
+    /// after a final newline is not a row.
+    @MainActor
+    private static func drawnRows(_ tv: NSTextView) -> [Range<Int>] {
+        guard let lm = tv.textLayoutManager else { return [] }
+        lm.ensureLayout(for: lm.documentRange)
+        let ns = tv.string as NSString
+        let doc = lm.documentRange.location
+        var rows: [Range<Int>] = []
+        lm.enumerateTextLayoutFragments(from: doc, options: [.ensuresLayout]) { fragment in
+            let start = lm.offset(from: doc, to: fragment.rangeInElement.location)
+            guard start != NSNotFound else { return true }
+            for line in fragment.textLineFragments {
+                let range = line.characterRange
+                guard range.location != NSNotFound, range.length > 0 else { continue }
+                let lower = start + range.location
+                var upper = lower + range.length
+                while upper > lower, ns.character(at: upper - 1) == 10 {
+                    upper -= 1
+                }
+                rows.append(lower..<upper)
+            }
+            return true
+        }
+        return rows
+    }
+
+    /// How far past `limit` (text-container x) any visible glyph reaches, or nil.
+    /// Trailing spaces may hang at a wrap and are not ink.
+    @MainActor
+    private static func widestInk(_ tv: NSTextView, limit: CGFloat) -> CGFloat? {
+        guard let lm = tv.textLayoutManager else { return nil }
+        let ns = tv.string as NSString
+        var worst: CGFloat?
+        for row in drawnRows(tv) {
+            var upper = row.upperBound
+            while upper > row.lowerBound, ns.character(at: upper - 1) == 32 || ns.character(at: upper - 1) == 9 {
+                upper -= 1
+            }
+            guard upper > row.lowerBound,
+                  let frame = segmentUnion(lm, range: NSRange(location: row.lowerBound, length: upper - row.lowerBound)) else { continue }
+            if frame.maxX > limit + 0.5 {
+                worst = max(worst ?? 0, frame.maxX - limit)
+            }
+        }
+        return worst
+    }
+
+    /// Which index `NSTextLineFragment.locationForCharacter(at:)` expects on a
+    /// continuation row, measured against text segments. The caret and the old
+    /// pixel-x `j` / `k` passed a row-relative index here.
+    @MainActor
+    private static func probeLineFragmentIndexing(_ tv: NSTextView) -> String {
+        guard let lm = tv.textLayoutManager else { return "quill probe line-fragment index: no layout" }
+        let doc = lm.documentRange.location
+        var report = "quill probe line-fragment index: no wrapped paragraph"
+        lm.enumerateTextLayoutFragments(from: doc, options: [.ensuresLayout]) { fragment in
+            let lines = fragment.textLineFragments
+            guard lines.count > 1 else { return true }
+            let row = lines[1]
+            let range = row.characterRange
+            guard range.length > 3 else { return true }
+            let start = lm.offset(from: doc, to: fragment.rangeInElement.location)
+            let local = range.location + 2
+            guard let truth = segmentUnion(lm, range: NSRange(location: start + local, length: 1)) else { return true }
+            let base = fragment.layoutFragmentFrame.minX + row.typographicBounds.minX
+            let paragraphX = base + row.locationForCharacter(at: local).x
+            let rowX = base + row.locationForCharacter(at: local - range.location).x
+            let verdict: String
+            if abs(paragraphX - truth.minX) < 1, abs(rowX - truth.minX) >= 1 {
+                verdict = "paragraph-relative (a row-relative index is wrong on continuation rows)"
+            } else if abs(rowX - truth.minX) < 1, abs(paragraphX - truth.minX) >= 1 {
+                verdict = "row-relative"
+            } else {
+                verdict = "inconclusive"
+            }
+            report = "quill probe line-fragment index: \(verdict); segment x \(truth.minX), paragraph index \(local) -> \(paragraphX), row index \(local - range.location) -> \(rowX)"
+            return false
+        }
+        return report
+    }
+
+    /// Wide table rows, a long code line, a long URL, and a long word in a narrow
+    /// window: nothing draws past the column, the view never scrolls sideways,
+    /// and the caret stays on screen at the end of each long line.
+    @MainActor
+    private static func checkNoHorizontalOverflow(failures: inout [String]) {
+        let lines = [
+            "# A heading that is long enough to wrap in a narrow column",
+            "",
+            "| Name | Description |",
+            "| --- | --- |",
+            "| key | " + String(repeating: "b", count: 90) + " |",
+            "",
+            "```",
+            "let url = \"https://example.com/" + String(repeating: "a", count: 70) + "\"",
+            "```",
+            "",
+            "https://example.com/" + String(repeating: "p", count: 80),
+            "",
+            String(repeating: "word", count: 30),
+            "",
+            "last line",
+        ]
+        let text = lines.joined(separator: "\n")
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 360, height: 300))
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = false
+        let tv = VimTextView.make()
+        tv.commonInit()
+        let engine = Engine(text: text)
+        tv.engine = engine
+        engine.layout = tv.layoutAdapter
+        tv.columnWidth = 640
+        scroll.documentView = tv
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 360, height: 300),
+            styleMask: [.titled, .resizable],
+            backing: .buffered,
+            defer: false
         )
+        window.contentView = scroll
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil) }
+        tv.applyTheme(QuillTheme.current(), focus: false)
+        tv.syncFromEngine()
+        tv.layoutSubtreeIfNeeded()
+        tv.layoutAdapter.ensureFullLayout()
+        let column = tv.textContainer?.size.width ?? 0
+        let clip = scroll.contentView
+        check(column > 50 && column < clip.bounds.width, "overflow column \(column) clip \(clip.bounds.width)", failures: &failures)
+        if let overflow = widestInk(tv, limit: column) {
+            failures.append("overflow: ink reaches \(overflow)pt past the \(column)pt column")
+        }
+        check(tv.frame.width <= clip.bounds.width + 0.5, "overflow: view \(tv.frame.width) wider than clip \(clip.bounds.width)", failures: &failures)
+        for (index, line) in lines.enumerated() where line.count > 30 {
+            _ = engine.type(":\(index + 1)<CR>")
+            tv.syncFromEngine()
+            for keys in ["g$", "0"] {
+                tv.applyResult(engine.type(keys))
+                let caret = tv.renderedCaretRect()
+                let visible = clip.documentVisibleRect.insetBy(dx: -0.5, dy: -0.5)
+                check(
+                    visible.contains(caret),
+                    "overflow: caret \(caret) after :\(index + 1) \(keys) is outside the visible \(clip.documentVisibleRect)",
+                    failures: &failures
+                )
+                check(
+                    caret.maxX <= tv.textContainerOrigin.x + column + 1,
+                    "overflow: caret \(caret) after :\(index + 1) \(keys) is past the column edge \(tv.textContainerOrigin.x + column)",
+                    failures: &failures
+                )
+            }
+        }
+        _ = engine.type("G")
+        tv.syncFromEngine()
+        let last = tv.renderedCaretRect()
+        check(clip.documentVisibleRect.insetBy(dx: -0.5, dy: -0.5).contains(last), "overflow: caret \(last) after G is off screen", failures: &failures)
     }
 
     private static func utf16Length(_ text: String) -> Int {
@@ -729,7 +990,7 @@ enum AppSmoke {
     private static func motionDiag(engine: Engine, tv: VimTextView, scroll: NSScrollView) -> String {
         let cursor = engine.cursor
         let line = engine.buffer.lineIndex(containing: cursor)
-        let column = engine.buffer.column(of: cursor)
+        let column = engine.buffer.position(of: cursor).utf16Column
         let textLines = tv.string.reduce(into: 1) { count, character in
             if character == "\n" { count += 1 }
         }
@@ -1367,7 +1628,7 @@ enum AppSmoke {
         check(headerUnderline?.intValue == NSUnderlineStyle.single.rawValue, "table rule header", failures: &failures)
         check(bodyUnderline?.intValue == NSUnderlineStyle.single.rawValue, "table rule row", failures: &failures)
         let para = storage.attribute(.paragraphStyle, at: body.text.lowerBound, effectiveRange: nil) as? NSParagraphStyle
-        check(para?.lineBreakMode == .byClipping, "table nowrap", failures: &failures)
+        check(para?.lineBreakMode == .byWordWrapping, "table rows wrap", failures: &failures)
         if let pipeIndex = short?.precedingPipe {
             let kern = (storage.attribute(.kern, at: pipeIndex, effectiveRange: nil) as? NSNumber)?.doubleValue ?? 0
             check(kern > 0.5, "table align kern \(kern)", failures: &failures)
@@ -1378,7 +1639,7 @@ enum AppSmoke {
         let wide = String(repeating: "b", count: 80)
         let sample = "| A | \(wide) |\n| - | - |\n| c | d |"
         let measured = (sample as NSString).size(withAttributes: [.font: light.monoFont]).width
-        check(measured > 140, "table nowrap sample \(measured)", failures: &failures)
+        check(measured > 140, "table wrap sample \(measured)", failures: &failures)
         let tv = NSTextView(usingTextLayoutManager: true)
         tv.isHorizontallyResizable = false
         tv.isVerticallyResizable = true
@@ -1403,7 +1664,10 @@ enum AppSmoke {
         }
         tv.layoutSubtreeIfNeeded()
         let fragments = lineFragmentCount(tv)
-        check(fragments == 3, "table nowrap \(fragments)", failures: &failures)
+        check(fragments > 3, "wide table row did not wrap: \(fragments) fragments", failures: &failures)
+        if let overflow = widestInk(tv, limit: 80) {
+            failures.append("table row ink reaches \(overflow) past the 80pt column")
+        }
 
         let command = Engine(text: ragged).type(":TableFormat<CR>")
         check(
