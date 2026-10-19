@@ -61,6 +61,43 @@ mkdir -p "$root/artifacts/verify-quill"
 log="$root/artifacts/verify-quill/smoke.log"
 : > "$log"
 
+# A Swift trap leaves only "Trace/BPT trap" in the log. ReportCrash writes the
+# stack to an .ips file a few seconds later; print the faulting thread.
+print_crash_report() {
+  local since="$1"
+  local dir="$HOME/Library/Logs/DiagnosticReports"
+  local report=""
+  local i=0
+  while [[ "$i" -lt 20 ]]; do
+    report="$(find "$dir" -maxdepth 1 -name 'Quill*.ips' -newer "$since" 2>/dev/null | head -n 1 || true)"
+    if [[ -n "$report" ]]; then
+      break
+    fi
+    sleep 1
+    i=$((i + 1))
+  done
+  if [[ -z "$report" ]]; then
+    echo "verify-quill: no crash report in $dir" >&2
+    return 0
+  fi
+  cp "$report" "$root/artifacts/verify-quill/" 2>/dev/null || true
+  echo "verify-quill: crash report $report" >&2
+  python3 - "$report" >&2 <<'PY' || true
+import json, sys
+text = open(sys.argv[1]).read()
+body = json.loads(text[text.index("\n") + 1:])
+print("exception:", json.dumps(body.get("exception", {})))
+asi = body.get("asi")
+if asi:
+    print("asi:", json.dumps(asi))
+images = body.get("usedImages", [])
+thread = body.get("threads", [])[body.get("faultingThread", 0)]
+for n, frame in enumerate(thread.get("frames", [])[:40]):
+    image = images[frame.get("imageIndex", 0)].get("name", "?") if images else "?"
+    print("%2d %-24s %s +%s" % (n, image, frame.get("symbol", "?"), frame.get("symbolLocation", "?")))
+PY
+}
+
 QUILL_SMOKE=1 "$bin" >"$log" 2>&1 &
 pid=$!
 status=0
@@ -92,6 +129,7 @@ fi
 if [[ "$status" -ne 0 ]]; then
   echo "verify-quill: smoke failed (status $status). Log: $log" >&2
   cat "$log" >&2 || true
+  print_crash_report "$log"
   exit "$status"
 fi
 
@@ -142,6 +180,7 @@ fi
 if [[ "$perf_status" -ne 0 ]]; then
   echo "verify-quill: perf failed (status $perf_status). Log: $perf_log" >&2
   cat "$perf_log" >&2 || true
+  print_crash_report "$perf_log"
   exit "$perf_status"
 fi
 if ! grep -F -q "quill perf done" "$perf_log"; then
