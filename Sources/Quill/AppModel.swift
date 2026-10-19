@@ -640,21 +640,13 @@ final class AppModel {
             }
             return
         }
-        Task {
-            let result = await Task.detached { () -> Result<TextCodec.Decoded, Error> in
-                do {
-                    let data = try Data(contentsOf: url)
-                    return .success(try TextCodec.decode(data))
-                } catch {
-                    return .failure(error)
-                }
-            }.value
-            switch result {
-            case .failure(let error):
-                self.message = error.localizedDescription
-            case .success(let decoded):
-                self.installFile(decoded, url: url)
-            }
+        // A short note is cheaper to read here than to hop to another task and back.
+        // The text view can style the bytes on its first pass instead of an empty one.
+        do {
+            let decoded = try TextCodec.decode(Data(contentsOf: url))
+            installFile(decoded, url: url)
+        } catch {
+            message = error.localizedDescription
         }
     }
 

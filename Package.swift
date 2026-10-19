@@ -96,4 +96,11 @@ package.targets.append(
         swiftSettings: [.swiftLanguageMode(.v6)]
     )
 )
+package.targets.append(
+    .testTarget(
+        name: "QuillAppTests",
+        dependencies: ["Quill"],
+        swiftSettings: [.swiftLanguageMode(.v6)]
+    )
+)
 #endif

@@ -1,27 +1,28 @@
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
+import QuillWorkspace
 
 @main
+enum QuillMain {
+    static func main() {
+        let targets = LaunchRequest.parse(Array(CommandLine.arguments.dropFirst()))
+        if targets.isEmpty {
+            QuillApp.main()
+        } else {
+            FastOpen.main()
+        }
+    }
+}
+
 struct QuillApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @State private var model = AppModel()
 
     var body: some Scene {
+        let _ = appDelegate.attach(model)
         WindowGroup {
-            ContentView(model: model)
-                .frame(minWidth: 720, minHeight: 480)
-                .onAppear {
-                    appDelegate.attach(model)
-                    NSApplication.shared.setActivationPolicy(.regular)
-                    model.consumeLaunchArguments(Array(CommandLine.arguments.dropFirst()))
-                    NSApplication.shared.windows.forEach { $0.delegate = appDelegate }
-                    WindowChrome.apply(theme: model.theme)
-                    AppSmoke.runIfRequested(model: model)
-                }
-                .onOpenURL { url in
-                    model.open(url: url)
-                }
+            EditorHost(model: model, appDelegate: appDelegate)
         }
         .defaultSize(width: 960, height: 760)
         .windowStyle(.hiddenTitleBar)
@@ -54,10 +55,35 @@ struct QuillApp: App {
     }
 }
 
+/// Launch-argument open lives here so both the SwiftUI scene and the fallback window run it.
+private struct EditorHost: View {
+    var model: AppModel
+    var appDelegate: AppDelegate
+
+    var body: some View {
+        ContentView(model: model)
+            .frame(minWidth: 720, minHeight: 480)
+            .onAppear {
+                appDelegate.attach(model)
+                NSApplication.shared.setActivationPolicy(.regular)
+                model.consumeLaunchArguments(Array(CommandLine.arguments.dropFirst()))
+                NSApplication.shared.windows.forEach { $0.delegate = appDelegate }
+                WindowChrome.apply(theme: model.theme)
+                OpenReadyProbe.armIfRequested()
+                AppSmoke.runIfRequested(model: model)
+            }
+            .onOpenURL { url in
+                model.open(url: url)
+            }
+    }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var model: AppModel?
     private var pending: [URL] = []
+    /// Retained when SwiftUI declines to open its own window. See `presentMainWindowIfNeeded`.
+    private var launchedWindow: NSWindow?
 
     func attach(_ model: AppModel) {
         self.model = model
@@ -65,6 +91,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationWillFinishLaunching(_ notification: Notification) {
+        // A bare exec is not a bundled app. AppKit leaves it prohibited, and then no window appears.
+        NSApplication.shared.setActivationPolicy(.regular)
         NSAppleEventManager.shared().setEventHandler(
             self,
             andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)),
@@ -100,8 +128,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
+    /// AppKit treats a bare path argument as a document open. SwiftUI then skips its
+    /// default window, so `onAppear` never runs and the launch-argument open never starts.
+    /// Claiming the file here lets that path proceed. The bytes are loaded from argv.
+    func application(_ sender: NSApplication, openFile filename: String) -> Bool {
+        _ = filename
+        return true
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         drainPending()
+        NSApplication.shared.activate()
+        OpenReadyProbe.armIfRequested()
+        presentMainWindowIfNeeded()
+    }
+
+    /// SwiftUI's `WindowGroup` stays empty when argv contains a path. Host the same
+    /// `ContentView` so launch-argument open still runs from `onAppear`.
+    private func presentMainWindowIfNeeded() {
+        guard let model else { return }
+        if NSApplication.shared.windows.contains(where: \.isVisible) { return }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 960, height: 760),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Quill"
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.titlebarSeparatorStyle = .none
+        window.isReleasedWhenClosed = false
+        window.contentViewController = NSHostingController(
+            rootView: EditorHost(model: model, appDelegate: self)
+        )
+        window.delegate = self
+        window.center()
+        launchedWindow = window
+        window.makeKeyAndOrderFront(nil)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

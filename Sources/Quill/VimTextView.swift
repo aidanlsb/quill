@@ -482,20 +482,33 @@ final class VimTextView: NSTextView {
         restyleQueued = true
         let dirty = dirty
         Task { @MainActor [weak self] in
-            guard let self, let storage = self.textStorage else { return }
+            guard let self else { return }
             self.restyleQueued = false
-            self.tokenizer.replace(text: storage.string, dirtyUTF16: dirty ?? 0)
-            MarkdownStyler.restyle(
-                storage,
-                theme: self.theme,
-                spans: self.tokenizer.spans,
-                dirtyUTF16: dirty,
-                focus: self.focusMode,
-                caret: self.engine.cursor,
-                diagnostics: self.diagnosticRanges
-            )
-            self.noteContentSizeChanged()
+            self.performRestyle(dirty: dirty)
         }
+    }
+
+    /// Styles the current string before returning. The first paint of a launch file uses this
+    /// so ready does not wait for another main-actor turn.
+    func restyleNow() {
+        restyleQueued = false
+        performRestyle(dirty: nil)
+    }
+
+    private func performRestyle(dirty: Int?) {
+        guard let storage = textStorage else { return }
+        tokenizer.replace(text: storage.string, dirtyUTF16: dirty ?? 0)
+        MarkdownStyler.restyle(
+            storage,
+            theme: theme,
+            spans: tokenizer.spans,
+            dirtyUTF16: dirty,
+            focus: focusMode,
+            caret: engine.cursor,
+            diagnostics: diagnosticRanges
+        )
+        noteContentSizeChanged()
+        OpenReadyProbe.consider(self)
     }
 
     /// One character cell: the advance of the glyph under the cursor, and the em box
