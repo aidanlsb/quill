@@ -19,7 +19,7 @@ final class LSPLink {
     init(
         uri: String,
         text: String,
-        version: Int,
+        version: Int = 1,
         servers: LanguageServerManager = LanguageServerManager()
     ) {
         session = LSPDocumentSession(uri: uri, text: text, version: version)

@@ -16,7 +16,7 @@ struct PickerPanel: View {
             if let opened {
                 prompt(opened.picker)
                 results(opened)
-                if let preview = picker.selected?.preview, !preview.isEmpty {
+                if let preview = opened.picker.selected?.preview, !preview.isEmpty {
                     Text(preview)
                         .font(.system(size: model.theme.monoFont.pointSize, design: .monospaced))
                         .foregroundStyle(Color(model.theme.dimColor))
