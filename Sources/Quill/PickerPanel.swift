@@ -110,6 +110,8 @@ struct PickerPanel: View {
         theme: QuillTheme
     ) -> some View {
         let selected = index == picker.selectedIndex
+        let commands = model.pickerKind == .commands
+        let titleColor = item.dimmed ? theme.dimColor : theme.textColor
         return HStack(alignment: .firstTextBaseline, spacing: 16) {
             PickerLineField(
                 text: item.title,
@@ -118,16 +120,28 @@ struct PickerPanel: View {
                     query: picker.query,
                     style: style,
                     font: theme.monoFont,
-                    matched: theme.textColor,
+                    matched: titleColor,
                     unmatched: theme.dimColor
                 ),
                 font: theme.monoFont,
-                color: theme.textColor,
+                color: titleColor,
                 identifier: "quill.picker.result",
                 style: .rich
             )
-            .frame(maxWidth: 560, alignment: .leading)
-            if !item.subtitle.isEmpty {
+            .frame(maxWidth: commands ? .infinity : 560, alignment: .leading)
+            if commands {
+                if !item.subtitle.isEmpty {
+                    PickerLineField(
+                        text: item.subtitle,
+                        font: NSFontManager.shared.convert(theme.monoFont, toSize: 12),
+                        color: theme.dimColor,
+                        identifier: "quill.picker.shortcut",
+                        style: .plain,
+                        alignment: .right
+                    )
+                    .fixedSize(horizontal: true, vertical: true)
+                }
+            } else if !item.subtitle.isEmpty {
                 PickerLineField(
                     text: item.subtitle,
                     attributed: pickerAttributed(
@@ -145,7 +159,9 @@ struct PickerPanel: View {
                 )
                 .frame(maxWidth: 320, alignment: .leading)
             }
-            Spacer(minLength: 0)
+            if !commands {
+                Spacer(minLength: 0)
+            }
         }
         .padding(.vertical, 5)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -162,6 +178,7 @@ struct PickerPanel: View {
         case .grep: "Pattern"
         case .references: "Reference"
         case .codeAction: "Action"
+        case .commands: "Command"
         case nil: "Search"
         }
     }
@@ -226,6 +243,7 @@ private struct PickerLineField: NSViewRepresentable {
     var placeholderColor: NSColor?
     var identifier: String
     var style: Style
+    var alignment: NSTextAlignment = .left
 
     enum Style {
         case query
@@ -261,7 +279,7 @@ private struct PickerLineField: NSViewRepresentable {
         field.focusRingType = .none
         field.font = font
         field.textColor = color
-        field.alignment = .left
+        field.alignment = alignment
         field.lineBreakMode = .byTruncatingTail
         field.maximumNumberOfLines = 1
         field.cell?.wraps = false
@@ -391,6 +409,10 @@ final class PickerKeyView: NSView {
     override func keyDown(with event: NSEvent) {
         guard let model else { return }
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if flags.contains(.command) {
+            super.keyDown(with: event)
+            return
+        }
         if flags.contains(.control), let ch = event.charactersIgnoringModifiers?.lowercased().first {
             model.handlePicker(.ctrl(ch))
             return

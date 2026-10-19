@@ -1,6 +1,6 @@
 ---
 name: verify-quill
-description: "Drive the Quill macOS editor and prove the caret, scrolling, directory buffer, picker prompt, and markdown tables. Use when changing the app target, TextKit layout, vim key handling, oil-style directories, the Telescope-style picker, or markdown table styling. The harness is QUILL_SMOKE via Scripts/verify-quill."
+description: "Drive the Quill macOS editor and prove the caret, scrolling, directory buffer, picker prompt, command palette, and markdown tables. Use when changing the app target, TextKit layout, vim key handling, oil-style directories, the Telescope-style picker, the command palette, or markdown table styling. The harness is QUILL_SMOKE via Scripts/verify-quill."
 ---
 
 # Verify Quill

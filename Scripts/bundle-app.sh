@@ -42,6 +42,27 @@ rm -rf "$DEST"
 mkdir -p "$DEST/Contents/MacOS" "$DEST/Contents/Resources"
 cp "$BIN" "$DEST/Contents/MacOS/Quill"
 cp Sources/Quill/Info.plist "$DEST/Contents/Info.plist"
+icon_src="Resources/AppIcon.icns"
+if [[ ! -s "$icon_src" ]]; then
+  echo "bundle-app: missing ${icon_src}; run python3 Scripts/make-icon.py" >&2
+  exit 1
+fi
+cp "$icon_src" "$DEST/Contents/Resources/AppIcon.icns"
+icon="$DEST/Contents/Resources/AppIcon.icns"
+if [[ ! -s "$icon" ]]; then
+  echo "bundle-app: AppIcon.icns missing from ${DEST}" >&2
+  exit 1
+fi
+magic="$(head -c 4 "$icon")"
+if [[ "$magic" != "icns" ]]; then
+  echo "bundle-app: AppIcon.icns is not an icns file" >&2
+  exit 1
+fi
+if ! grep -q "<key>CFBundleIconFile</key>" "$DEST/Contents/Info.plist" \
+  || ! grep -q "<key>CFBundleIconName</key>" "$DEST/Contents/Info.plist"; then
+  echo "bundle-app: Info.plist is missing CFBundleIconFile or CFBundleIconName" >&2
+  exit 1
+fi
 if command -v codesign >/dev/null 2>&1; then
   codesign --force --sign - "$DEST"
 fi
