@@ -169,6 +169,9 @@ final class VimTextView: NSTextView {
     /// UTF-16 ranges already given span attributes. A gap between two styled
     /// screens is not covered; scrolling into it styles that screen only.
     private var styledCoverage = 0..<0
+    /// Mono cells that fit the column when a table was last painted. Whether a
+    /// table is aligned or shown as typed depends on it, so a change repaints.
+    private var paintedTableFit: Int?
     /// Read by `EditorView` in this file. `private` would hide them from that type.
     fileprivate var appliedThemeID = -1
     fileprivate var appliedFocus = false
@@ -273,6 +276,7 @@ final class VimTextView: NSTextView {
             return
         }
         let columnChanged = abs(currentColumn - target.column) > 0.5
+        defer { if columnChanged { refitTables() } }
         let caretBefore = (hadInsets && columnChanged) ? caretDocumentMidY() : nil
         updatingInsets = true
         textContainerInset = NSSize(width: target.inset, height: target.vertical)
@@ -712,6 +716,7 @@ final class VimTextView: NSTextView {
         if !tables.isEmpty {
             limit = tablePaintRange(limit, tables: tables)
             styleLimit = limit
+            paintedTableFit = tableFit()
         }
         let visibleSpans = limit.isEmpty ? [] : tokenizer.spans(overlapping: limit)
         let focusParagraph = focusMode ? tokenizer.paragraphRange(containing: engine.cursor) : nil
@@ -725,7 +730,8 @@ final class VimTextView: NSTextView {
             caret: engine.cursor,
             focusParagraph: focusParagraph,
             diagnostics: diagnosticRanges,
-            tables: tables
+            tables: tables,
+            tableColumnWidth: textContainer?.size.width
         )
         if let styleLimit, !styleLimit.isEmpty {
             noteStyled(styleLimit)
@@ -806,6 +812,22 @@ final class VimTextView: NSTextView {
                 styledCoverage = styledCoverage.lowerBound..<(styledCoverage.upperBound + delta)
             }
         }
+    }
+
+    private func tableFit() -> Int? {
+        guard let width = textContainer?.size.width else { return nil }
+        return MarkdownStyler.fitColumns(width: width, advance: MarkdownStyler.monoAdvance(theme.monoFont))
+    }
+
+    /// Off-screen tables keep the old decision until they scroll back into view,
+    /// which clearing coverage forces; tables on screen repaint now.
+    private func refitTables() {
+        guard !isDirectoryBuffer, let painted = paintedTableFit, painted != tableFit() else { return }
+        paintedTableFit = nil
+        styledCoverage = 0..<0
+        let viewport = viewportUTF16()
+        guard !tablesOverlapping(viewport).isEmpty else { return }
+        queueRestyle(dirty: nil, edits: [], viewport: viewport)
     }
 
     /// Tables that intersect `limit`, using the tokenizer's line cache.

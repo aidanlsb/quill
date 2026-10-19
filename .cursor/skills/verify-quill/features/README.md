@@ -38,7 +38,7 @@ Each feature file has an H1, one paragraph, then four H2 sections: `Sub-features
 - [Scrolling](scroll.md) covers trackpad scrolling and cursor-follow with `j`, `G`, `gg`, and half-page motions.
 - [Directory buffer](directory.md) covers opening a folder, the mono listing layout, Enter, parent, and a rename that asks before writing.
 - [Theme](theme.md) covers light, dark, and system, including `:theme` and `<leader>tt`.
-- [Tables](tables.md) covers GFM table styling, alignment, clipping, and `:TableFormat`.
+- [Tables](tables.md) covers GFM table styling, alignment, wrapping within the column, and `:TableFormat`.
 - [Performance](perf.md) records launch, editing, and picker timings. It does not assert a speed limit.
 - [Picker](picker.md) covers the `<leader>sf` and `<leader>sg` prompt, caret, placeholder, and live filtering.
 - [Command palette](palette.md) covers ⌘K, the visible query, right-aligned shortcuts, running a command, and Escape restoring the previous mode.

@@ -224,7 +224,8 @@ enum MarkdownStyler {
         caret: Int = 0,
         focusParagraph: Range<Int>? = nil,
         diagnostics: [(NSRange, Int)] = [],
-        tables: [TableBlock]? = nil
+        tables: [TableBlock]? = nil,
+        tableColumnWidth: CGFloat? = nil
     ) {
         let ns = storage.string as NSString
         let full = NSRange(location: 0, length: ns.length)
@@ -265,7 +266,8 @@ enum MarkdownStyler {
             focus: focus,
             focusRange: focusRange,
             spans: spans,
-            tables: discovered
+            tables: discovered,
+            columnWidth: tableColumnWidth
         )
         for (range, severity) in diagnostics {
             let marked = NSIntersectionRange(range, limit)
