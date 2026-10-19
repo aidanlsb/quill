@@ -146,9 +146,11 @@ enum OpenReadyProbe {
             "visible=\(window.isVisible) title=\(window.title)"
         }.joined(separator: "; ")
         let views = NSApplication.shared.windows.compactMap { findTextView(in: $0.contentView) }
-        let shown = views.map { preview($0.string) }.joined(separator: " | ")
+        let shown = views.map { view in
+            "len=\((view.string as NSString).length) \(preview(view.string))"
+        }.joined(separator: " | ")
         fputs(
-            "FAIL \(message) windows=[\(windows)] views=[\(shown)] expected=\(preview(expectedText ?? ""))\n",
+            "FAIL \(message) windows=[\(windows)] textViews=\(views.count) views=[\(shown)] expected=\(preview(expectedText ?? ""))\n",
             stdout
         )
         fflush(stdout)
