@@ -49,142 +49,175 @@ TOP_COLOR = (28, 28, 30)
 BOTTOM_COLOR = (10, 10, 11)
 FEATHER = (255, 255, 255)
 
-# Feather geometry in body space (0–1 across the 824px squircle, y downward).
-# The vane runs from a fine tip at the lower left to a rounded crown at the
-# upper right. Width grows toward the crown. Notches are smooth bites in the
-# lower-right edge. The shaft is a thin cut that drifts toward the inner edge.
-TIP = (0.24, 0.760)
-CAP = (0.710, 0.305)
-CAP_RISE = 0.108
-RIGHT_W = 0.198
-LEFT_W = 0.108
-# Scallops on the lower-right edge: center along the vane, half-width, depth.
-NOTCHES = (
-    (0.44, 0.070, 0.036),
-    (0.60, 0.068, 0.044),
-    (0.75, 0.058, 0.032),
+# Feather in local units, then rotated 45° and fit to the squircle.
+# 0 is the quill point, 1 is the crown. The bare shaft is the first quarter.
+KAPPA = 0.5522847498307936
+VANE_START = 0.25
+VANE_LEN = 1.0 - VANE_START
+VANE_WIDTH = VANE_LEN / 3.2
+HALF_W = VANE_WIDTH / 2.0
+WIDE_X = VANE_START + 0.60 * VANE_LEN
+# (fraction along the vane, mouth width, depth, how far the point leans toward the crown)
+RIGHT_NOTCHES = (
+    (0.35, 0.040, 0.062, 0.018),
+    (0.60, 0.038, 0.070, 0.020),
+    (0.80, 0.032, 0.050, 0.016),
 )
-SHAFT_FROM = 0.36
-SHAFT_TO = 0.74
-SHAFT_HALF = 0.015
+LEFT_NOTCH = (0.88, 0.022, 0.030, 0.010)
+MARK_HEIGHT = 0.62
+SHAFT_HALF = 0.013
 
 
 def mix(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> tuple[int, int, int]:
     return tuple(int(round(a[i] + (b[i] - a[i]) * t)) for i in range(3))  # type: ignore[return-value]
 
 
-def _frame() -> tuple[float, tuple[float, float], tuple[float, float]]:
-    """Axis length, unit direction tip→crown, and the lower-right normal."""
-    dx = CAP[0] - TIP[0]
-    dy = CAP[1] - TIP[1]
-    length = math.hypot(dx, dy)
-    direction = (dx / length, dy / length)
-    normal = (-direction[1], direction[0])
-    return length, direction, normal
-
-
-def _grow(s: float) -> float:
-    """0 at the tip, 1 at the shoulder, with a flat tangent at the shoulder."""
-    return 0.55 * s + 1.9 * s * s - 1.45 * s * s * s
-
-
-def _edge(s: float, side: float, length: float, direction: tuple[float, float], normal: tuple[float, float]) -> tuple[float, float]:
-    grow = _grow(s)
-    width = RIGHT_W * grow if side > 0 else LEFT_W * grow
-    return (
-        TIP[0] + direction[0] * length * s + normal[0] * side * width,
-        TIP[1] + direction[1] * length * s + normal[1] * side * width,
-    )
-
-
-def _scallop(
-    s0: float,
-    s1: float,
-    depth: float,
-    length: float,
-    direction: tuple[float, float],
-    normal: tuple[float, float],
+def _cubic(
+    p0: tuple[float, float],
+    p1: tuple[float, float],
+    p2: tuple[float, float],
+    p3: tuple[float, float],
+    steps: int,
 ) -> list[tuple[float, float]]:
-    """Circular bite opening through the lower-right edge."""
-    p0 = _edge(s0, 1.0, length, direction, normal)
-    p3 = _edge(s1, 1.0, length, direction, normal)
-    chord = (p3[0] - p0[0], p3[1] - p0[1])
-    span = math.hypot(*chord)
-    if span < 1e-4 or depth < 1e-4:
-        return []
-    half = span * 0.5
-    radius = (half * half + depth * depth) / (2 * depth)
-    center = (
-        (p0[0] + p3[0]) * 0.5 + normal[0] * (radius - depth),
-        (p0[1] + p3[1]) * 0.5 + normal[1] * (radius - depth),
-    )
-    a0 = math.atan2(p0[1] - center[1], p0[0] - center[0])
-    a1 = math.atan2(p3[1] - center[1], p3[0] - center[0])
-    sweep = (a1 - a0) % (2 * math.pi)
-    if sweep > math.pi:
-        sweep -= 2 * math.pi
-    steps = 36
-    return [
-        (
-            center[0] + radius * math.cos(a0 + sweep * i / steps),
-            center[1] + radius * math.sin(a0 + sweep * i / steps),
-        )
-        for i in range(1, steps)
-    ]
-
-
-def feather_outline() -> list[tuple[float, float]]:
-    """Leaf-shaped vane: one point at the lower left, round crown at the upper right."""
-    length, direction, normal = _frame()
-    bites = tuple(sorted(NOTCHES))
     points: list[tuple[float, float]] = []
-    steps = 480
-    cursor = 0.0
-    for center, half, depth in bites:
-        s0 = center - half
-        s1 = center + half
-        i0 = int(round(cursor * steps))
-        i1 = int(round(s0 * steps))
-        points.extend(_edge(i / steps, 1.0, length, direction, normal) for i in range(i0, i1))
-        points.append(_edge(s0, 1.0, length, direction, normal))
-        points.extend(_scallop(s0, s1, depth, length, direction, normal))
-        points.append(_edge(s1, 1.0, length, direction, normal))
-        cursor = s1
-    i0 = int(round(cursor * steps)) + 1
-    points.extend(_edge(i / steps, 1.0, length, direction, normal) for i in range(i0, steps))
-    right = _edge(1.0, 1.0, length, direction, normal)
-    left = _edge(1.0, -1.0, length, direction, normal)
-    mid = ((right[0] + left[0]) * 0.5, (right[1] + left[1]) * 0.5)
-    half_cap = ((right[0] - left[0]) * 0.5, (right[1] - left[1]) * 0.5)
-    rise = (direction[0] * CAP_RISE, direction[1] * CAP_RISE)
-    cap_steps = 100
-    for i in range(cap_steps + 1):
-        phi = math.pi * i / cap_steps
+    for i in range(steps + 1):
+        t = i / steps
+        u = 1.0 - t
         points.append((
-            mid[0] + half_cap[0] * math.cos(phi) + rise[0] * math.sin(phi),
-            mid[1] + half_cap[1] * math.cos(phi) + rise[1] * math.sin(phi),
+            u * u * u * p0[0] + 3 * u * u * t * p1[0] + 3 * u * t * t * p2[0] + t * t * t * p3[0],
+            u * u * u * p0[1] + 3 * u * u * t * p1[1] + 3 * u * t * t * p2[1] + t * t * t * p3[1],
         ))
-    points.extend(_edge(i / steps, -1.0, length, direction, normal) for i in range(steps, 0, -1))
     return points
 
 
-def shaft_outline() -> list[tuple[float, float]]:
-    """Thin negative-space shaft from near the tip toward the upper-left inner edge."""
-    length, direction, normal = _frame()
-    steps = 140
+def _at_x(samples: list[tuple[float, float]], x: float) -> tuple[float, float]:
+    if x <= samples[0][0]:
+        return samples[0]
+    if x >= samples[-1][0]:
+        return samples[-1]
+    for i in range(len(samples) - 1):
+        x0, y0 = samples[i]
+        x1, y1 = samples[i + 1]
+        if x0 <= x <= x1 and x1 != x0:
+            t = (x - x0) / (x1 - x0)
+            return (x, y0 + (y1 - y0) * t)
+    return samples[-1]
+
+
+def _side_samples(sign: float) -> list[tuple[float, float]]:
+    """Smooth vane edge from the base to the crown. `sign` is +1 on the lower right."""
+    span_base = WIDE_X - VANE_START
+    span_crown = 1.0 - WIDE_X
+    lower = _cubic(
+        (VANE_START, 0.0),
+        (VANE_START, sign * KAPPA * HALF_W),
+        (WIDE_X - KAPPA * span_base, sign * HALF_W),
+        (WIDE_X, sign * HALF_W),
+        48,
+    )
+    upper = _cubic(
+        (WIDE_X, sign * HALF_W),
+        (WIDE_X + KAPPA * span_crown, sign * HALF_W),
+        (1.0, sign * KAPPA * HALF_W),
+        (1.0, 0.0),
+        40,
+    )
+    return lower[:-1] + upper
+
+
+def _cut_wedges(
+    samples: list[tuple[float, float]],
+    notches: tuple[tuple[float, float, float, float], ...],
+    sign: float,
+) -> list[tuple[float, float]]:
+    """Replace a short stretch of edge with a sharp wedge aimed toward the crown."""
+    out: list[tuple[float, float]] = []
+    index = 0
+    for frac, opening, depth, lean in notches:
+        center = VANE_START + frac * VANE_LEN
+        x_lo = center - opening * 0.55
+        x_hi = center + opening * 0.20
+        while index < len(samples) and samples[index][0] < x_lo:
+            out.append(samples[index])
+            index += 1
+        lip_lo = _at_x(samples, x_lo)
+        lip_hi = _at_x(samples, x_hi)
+        edge_y = _at_x(samples, center + lean)[1]
+        room = abs(edge_y) * 0.72
+        apex_y = edge_y - sign * min(depth, room)
+        apex = (center + lean, apex_y)
+        out.append(lip_lo)
+        out.append(apex)
+        out.append(lip_hi)
+        while index < len(samples) and samples[index][0] <= x_hi:
+            index += 1
+    out.extend(samples[index:])
+    return out
+
+
+def _rotate(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Map local +x to up-right and local +y to down-right."""
+    c = math.cos(math.radians(45))
+    s = math.sin(math.radians(45))
+    return [(x * c + y * s, -x * s + y * c) for x, y in points]
+
+
+def _fit(shapes: list[list[tuple[float, float]]]) -> list[list[tuple[float, float]]]:
+    """Scale the whole mark to MARK_HEIGHT and center its bounding box."""
+    xs = [p[0] for shape in shapes for p in shape]
+    ys = [p[1] for shape in shapes for p in shape]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    scale = MARK_HEIGHT / (max_y - min_y)
+    cx = (min_x + max_x) * 0.5
+    cy = (min_y + max_y) * 0.5
+    fitted = []
+    for shape in shapes:
+        fitted.append([((x - cx) * scale + 0.5, (y - cy) * scale + 0.5) for x, y in shape])
+    return fitted
+
+
+def _mark() -> tuple[list[tuple[float, float]], list[tuple[float, float]], list[tuple[float, float]]]:
+    right = _cut_wedges(_side_samples(1.0), RIGHT_NOTCHES, 1.0)
+    left = _cut_wedges(_side_samples(-1.0), (LEFT_NOTCH,), -1.0)
+    # Base -> lower-right edge -> crown -> upper-left edge -> base.
+    vane = right + list(reversed(left[1:-1]))
+    end = VANE_START + 0.045
+    quill = _cubic((0.0, 0.0), (end * 0.42, SHAFT_HALF * 0.04), (end * 0.78, SHAFT_HALF * 0.82), (end, SHAFT_HALF), 28)
+    quill += _cubic((end, -SHAFT_HALF), (end * 0.78, -SHAFT_HALF * 0.82), (end * 0.42, -SHAFT_HALF * 0.04), (0.0, 0.0), 28)[:-1]
+    rachis = _rachis()
+    placed = _fit([_rotate(vane), _rotate(quill), _rotate(rachis)])
+    return placed[0], placed[1], placed[2]
+
+
+def _rachis() -> list[tuple[float, float]]:
+    """Thin curved slot from the shaft entry toward the crown, biased up-left."""
+    x0 = VANE_START + 0.055
+    x1 = 0.90
+    steps = 56
     forward: list[tuple[float, float]] = []
     back: list[tuple[float, float]] = []
     for i in range(steps + 1):
         t = i / steps
-        s = SHAFT_FROM + (SHAFT_TO - SHAFT_FROM) * t
-        taper = math.sin(math.pi * t) ** 0.7
-        half = SHAFT_HALF * max(0.0, taper)
-        lateral = -(0.012 + 0.048 * t)
-        cx = TIP[0] + direction[0] * length * s + normal[0] * lateral
-        cy = TIP[1] + direction[1] * length * s + normal[1] * lateral
-        forward.append((cx + normal[0] * half, cy + normal[1] * half))
-        back.append((cx - normal[0] * half, cy - normal[1] * half))
+        x = x0 + (x1 - x0) * t
+        bow = math.sin(math.pi * t)
+        offset = -(0.006 + 0.020 * t + 0.010 * bow)
+        width = 0.0068 * (1.0 - t) ** 0.45
+        forward.append((x, offset + width))
+        back.append((x, offset - width))
     return forward + list(reversed(back))
+
+
+def vane_outline() -> list[tuple[float, float]]:
+    return _mark()[0]
+
+
+def quill_outline() -> list[tuple[float, float]]:
+    return _mark()[1]
+
+
+def rachis_outline() -> list[tuple[float, float]]:
+    return _mark()[2]
 
 
 def edges(polygon: list[tuple[float, float]]) -> list[tuple[float, float, float, float]]:
@@ -262,15 +295,17 @@ def render(size: int) -> bytes:
     origin = (size - scale) / 2.0
     center = size / 2.0
     radius = scale / 2.0
-    nib = to_pixels(feather_outline(), origin, scale)
-    slit = to_pixels(shaft_outline(), origin, scale)
+    vane = to_pixels(vane_outline(), origin, scale)
+    quill = to_pixels(quill_outline(), origin, scale)
+    rachis = to_pixels(rachis_outline(), origin, scale)
     icon = bytearray(size * size * 4)
     mask = array("f", [0.0]) * (size * size)
     for py in range(size):
         y = py + 0.5
         ny = (y - center) / radius
-        nib_spans = scanline_spans(nib, y)
-        cut_spans = scanline_spans(slit, y)
+        vane_spans = scanline_spans(vane, y)
+        quill_spans = scanline_spans(quill, y)
+        rachis_spans = scanline_spans(rachis, y)
         row = py * size
         if abs(ny) < 1:
             half_w = math.pow(1 - math.pow(abs(ny), 5), 0.2) * radius
@@ -284,7 +319,8 @@ def render(size: int) -> bytes:
                 if overlap <= 0:
                     continue
                 cover = min(1.0, overlap)
-                ink = max(0.0, span_coverage(px, nib_spans) - span_coverage(px, cut_spans))
+                white = max(span_coverage(px, vane_spans), span_coverage(px, quill_spans))
+                ink = max(0.0, white - span_coverage(px, rachis_spans))
                 color = mix(TOP_COLOR, BOTTOM_COLOR, min(1.0, max(0.0, light_y)))
                 sheen = max(0.0, 1.0 - light_y * 1.35)
                 across = (px + 0.5 - center) / radius
@@ -297,7 +333,7 @@ def render(size: int) -> bytes:
                 icon[i + 2] = int(round(color[2] * (1 - ink) + ink_color[2] * ink))
                 icon[i + 3] = int(round(cover * 255))
                 mask[row + px] = cover
-        elif not nib_spans and not cut_spans:
+        elif not vane_spans and not quill_spans and not rachis_spans:
             continue
     blurred = blur_alpha(mask, size, int(round(size * SHADOW_RADIUS)))
     dy = int(round(size * SHADOW_DY))
@@ -377,7 +413,8 @@ def svg() -> str:
   </defs>
   <path filter="url(#dock-shadow)" fill="url(#bg)" d="{path(squircle)}"/>
   <path clip-path="url(#squircle-clip)" fill="url(#sheen)" d="{path(squircle)}"/>
-  <path fill="#FFFFFF" fill-rule="evenodd" d="{path(feather_outline())} {path(shaft_outline())}"/>
+  <path fill="#FFFFFF" d="{path(quill_outline())}"/>
+  <path fill="#FFFFFF" fill-rule="evenodd" d="{path(vane_outline())} {path(rachis_outline())}"/>
 </svg>
 """
 
