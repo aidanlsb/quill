@@ -11,20 +11,24 @@ public enum Curswant: Equatable, Sendable {
     case end
 }
 
-/// One visual row: a slice of one buffer line's content.
+/// One visual row: a slice of one buffer line's content, or an image preview.
 public struct ScreenLine: Equatable, Sendable {
     public var bufferLine: Int
     /// Row number within the buffer line, from 0.
     public var row: Int
-    /// UTF-16 range of the row's characters. Empty only on an empty buffer line.
+    /// UTF-16 range of the row's characters. Empty on an empty buffer line, and
+    /// empty at the content end when `isGap` (the preview is not text).
     public var range: Range<Int>
     public var isLastRow: Bool
+    /// Image preview under the source line. Not a caret stop.
+    public var isGap: Bool
 
-    public init(bufferLine: Int, row: Int, range: Range<Int>, isLastRow: Bool) {
+    public init(bufferLine: Int, row: Int, range: Range<Int>, isLastRow: Bool, isGap: Bool = false) {
         self.bufferLine = bufferLine
         self.row = row
         self.range = range
         self.isLastRow = isLastRow
+        self.isGap = isGap
     }
 }
 
@@ -35,6 +39,13 @@ public protocol ScreenLayout: AnyObject {
     /// cannot answer (no view, a view that holds different text). `ScreenModel`
     /// treats a missing or malformed answer as one row.
     func rowRanges(of line: BufferLine, in buffer: TextBuffer) -> [Range<Int>]?
+    /// Preview rows drawn under `line`. They are screen space, not characters,
+    /// and `j` / `k` step over the whole run.
+    func gapRows(after line: BufferLine, in buffer: TextBuffer) -> Int
+}
+
+extension ScreenLayout {
+    public func gapRows(after line: BufferLine, in buffer: TextBuffer) -> Int { 0 }
 }
 
 /// No wrapping: one screen line per buffer line. Tests and the fallback.
@@ -107,21 +118,35 @@ public struct ScreenModel {
         insert ? buffer.lineCount - 1 : buffer.lastLine
     }
 
-    /// Rows of buffer line `index`. Always at least one; together they cover
-    /// the line's content exactly, and every break sits on a grapheme boundary.
+    /// Rows of buffer line `index`. Always at least one text row; together the
+    /// text rows cover the line's content exactly, and every break sits on a
+    /// grapheme boundary. Image previews are extra rows after that text.
     public func screenLines(of index: Int) -> [ScreenLine] {
         let line = buffer.line(index)
         let ranges = validated(layout.rowRanges(of: line, in: buffer), for: line) ?? [line.content]
-        return ranges.enumerated().map { row, range in
-            ScreenLine(bufferLine: line.index, row: row, range: range, isLastRow: row == ranges.count - 1)
+        let spans = ImageScreenRows.appending(
+            textRows: ranges,
+            gapRows: layout.gapRows(after: line, in: buffer),
+            contentEnd: line.contentEnd
+        )
+        return spans.enumerated().map { row, span in
+            let lastText = !span.isGap && spans[(row + 1)...].allSatisfy(\.isGap)
+            return ScreenLine(
+                bufferLine: line.index,
+                row: row,
+                range: span.range,
+                isLastRow: lastText,
+                isGap: span.isGap
+            )
         }
     }
 
     /// The row showing `offset`. A soft-wrap boundary belongs to the row it starts;
-    /// the end of a line's content belongs to its last row.
+    /// the end of a line's content belongs to its last text row. A preview is not
+    /// a place the caret can stand.
     public func screenLine(containing offset: Int) -> ScreenLine {
         let clamped = min(max(0, offset), buffer.count)
-        let rows = screenLines(of: buffer.lineIndex(containing: clamped))
+        let rows = screenLines(of: buffer.lineIndex(containing: clamped)).filter { !$0.isGap }
         return rows.first { $0.range.contains(clamped) } ?? rows[rows.count - 1]
     }
 
@@ -156,19 +181,24 @@ public struct ScreenModel {
     /// Neighbors are found by offset, not by `row.row`: a lazy layout can report
     /// a line in more or fewer rows than it did when `row` was read.
     public func next(after row: ScreenLine) -> ScreenLine? {
-        if let below = screenLines(of: row.bufferLine).first(where: { $0.range.lowerBound >= row.range.upperBound && $0.range.lowerBound > row.range.lowerBound }) {
+        if let below = textRows(of: row.bufferLine).first(where: { $0.range.lowerBound >= row.range.upperBound && $0.range.lowerBound > row.range.lowerBound }) {
             return below
         }
         guard row.bufferLine < lastReachableLine else { return nil }
-        return screenLines(of: row.bufferLine + 1).first
+        return textRows(of: row.bufferLine + 1).first
     }
 
     public func previous(before row: ScreenLine) -> ScreenLine? {
-        if let above = screenLines(of: row.bufferLine).last(where: { $0.range.upperBound <= row.range.lowerBound && $0.range.lowerBound < row.range.lowerBound }) {
+        if let above = textRows(of: row.bufferLine).last(where: { $0.range.upperBound <= row.range.lowerBound && $0.range.lowerBound < row.range.lowerBound }) {
             return above
         }
         guard row.bufferLine > 0 else { return nil }
-        return screenLines(of: row.bufferLine - 1).last
+        return textRows(of: row.bufferLine - 1).last
+    }
+
+    /// Text rows only. One `j` or `k` crosses every image row under a line.
+    private func textRows(of index: Int) -> [ScreenLine] {
+        screenLines(of: index).filter { !$0.isGap }
     }
 
     /// Up to `delta` rows away (negative is up). `moved` is how many rows it went.

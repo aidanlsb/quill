@@ -69,6 +69,8 @@ final class AppModel {
     var pendingNavigation: PendingNavigation?
     var themeIdentity = 0
     var themeChoice: ThemeChoice = .system
+    /// Session override of `config.images`. The command palette toggles this.
+    var showImages = true
 
     init() {
         let home = FileManager.default.homeDirectoryForCurrentUser
@@ -77,6 +79,7 @@ final class AppModel {
         config = loaded.config
         if let error = loaded.error { message = error }
         config.apply(to: engine)
+        showImages = config.images
         themeChoice = ThemeChoice.resolved(
             config: config.theme,
             remembered: ThemeMemory.load(from: ThemeMemory.url(home: home))
@@ -93,6 +96,11 @@ final class AppModel {
 
     func setTheme(_ choice: ThemeChoice) {
         applyTheme(choice, remember: true)
+    }
+
+    func toggleImages() {
+        showImages.toggle()
+        message = showImages ? "images on" : "images off"
     }
 
     func toggleTheme() {
