@@ -144,6 +144,96 @@ final class TokenizerTests: XCTestCase {
         XCTAssertTrue(doc.spans.contains { $0.token == .heading(1) })
     }
 
+    func testInlinePrefixesDoNotReadPastTheEnd() {
+        let lines = [
+            "- [ ] task",
+            "**bold**",
+            "[[link]]",
+            "`code`",
+            "*em*",
+            "[",
+            "[ ",
+            "[x",
+            "**",
+            "[[",
+            "[[a]",
+        ]
+        for line in lines {
+            let characters = Array(line)
+            for length in 0...characters.count {
+                let prefix = String(characters.prefix(length))
+                let doc = MarkdownTokenizer(text: prefix)
+                assertSpansInBounds(doc.spans, utf16Count: doc.utf16Count)
+                assertSpansInBounds(Scanner.inline(prefix, lineStart: 0), utf16Count: prefix.utf16.count)
+            }
+            var typed = MarkdownTokenizer(text: "")
+            for character in line {
+                _ = typed.apply(start: typed.utf16Count, removedUTF16: 0, replacement: String(character))
+                assertSpansInBounds(typed.spans, utf16Count: typed.utf16Count)
+            }
+        }
+    }
+
+    func testClosedInlineMarkers() {
+        XCTAssertEqual(MarkdownTokenizer(text: "- [ ] task").spans, [
+            TokenSpan(range: 0..<2, token: .listMarker),
+            TokenSpan(range: 2..<5, token: .taskBox),
+        ])
+        XCTAssertEqual(MarkdownTokenizer(text: "[ ]").spans, [
+            TokenSpan(range: 0..<3, token: .taskBox),
+        ])
+        XCTAssertEqual(MarkdownTokenizer(text: "[x]").spans, [
+            TokenSpan(range: 0..<3, token: .taskBox),
+        ])
+        XCTAssertEqual(MarkdownTokenizer(text: "[X]").spans, [
+            TokenSpan(range: 0..<3, token: .taskBox),
+        ])
+        XCTAssertEqual(MarkdownTokenizer(text: "**bold**").spans, [
+            TokenSpan(range: 0..<2, token: .syntaxMarker),
+            TokenSpan(range: 2..<6, token: .strong),
+            TokenSpan(range: 6..<8, token: .syntaxMarker),
+        ])
+        XCTAssertEqual(MarkdownTokenizer(text: "[[link]]").spans, [
+            TokenSpan(range: 0..<8, token: .wikilink),
+            TokenSpan(range: 0..<2, token: .syntaxMarker),
+        ])
+        XCTAssertEqual(MarkdownTokenizer(text: "`code`").spans, [
+            TokenSpan(range: 0..<1, token: .syntaxMarker),
+            TokenSpan(range: 0..<6, token: .codeSpan),
+            TokenSpan(range: 5..<6, token: .syntaxMarker),
+        ])
+        XCTAssertEqual(MarkdownTokenizer(text: "*em*").spans, [
+            TokenSpan(range: 0..<1, token: .syntaxMarker),
+            TokenSpan(range: 1..<3, token: .emphasis),
+            TokenSpan(range: 3..<4, token: .syntaxMarker),
+        ])
+    }
+
+    func testTruncatedInlineMarkersStayOpen() {
+        XCTAssertEqual(MarkdownTokenizer(text: "[").spans, [])
+        XCTAssertEqual(MarkdownTokenizer(text: "[ ").spans, [])
+        XCTAssertEqual(MarkdownTokenizer(text: "[x").spans, [])
+        XCTAssertEqual(MarkdownTokenizer(text: "**").spans, [])
+        XCTAssertEqual(MarkdownTokenizer(text: "[[").spans, [])
+        XCTAssertEqual(MarkdownTokenizer(text: "[[a]").spans, [])
+        XCTAssertEqual(MarkdownTokenizer(text: "`").spans, [])
+        XCTAssertEqual(MarkdownTokenizer(text: "*em").spans, [])
+        XCTAssertEqual(MarkdownTokenizer(text: "- [ ").spans, [
+            TokenSpan(range: 0..<2, token: .listMarker),
+        ])
+        XCTAssertEqual(MarkdownTokenizer(text: "- [x").spans, [
+            TokenSpan(range: 0..<2, token: .listMarker),
+        ])
+    }
+
+    private func assertSpansInBounds(_ spans: [TokenSpan], utf16Count: Int, file: StaticString = #filePath, line: UInt = #line) {
+        for span in spans {
+            XCTAssertGreaterThanOrEqual(span.range.lowerBound, 0, file: file, line: line)
+            XCTAssertLessThanOrEqual(span.range.upperBound, utf16Count, file: file, line: line)
+            XCTAssertLessThan(span.range.lowerBound, span.range.upperBound, file: file, line: line)
+        }
+    }
+
     func testWikilinkUTF16() {
         let text = "[[note]]"
         XCTAssertEqual(WikilinkQuery.at(cursor: 4, in: text), "note")
