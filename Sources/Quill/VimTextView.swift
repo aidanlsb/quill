@@ -1110,7 +1110,16 @@ final class VimTextView: NSTextView {
         }
         let maxY = max(0, bounds.height - visible.height)
         origin.y = min(max(0, origin.y), maxY)
-        guard abs(origin.y - visible.origin.y) > 0.5 else { return }
+        // The view is as wide as the clip, so this pins x to 0. It also undoes a
+        // sideways scroll that AppKit makes on its own, e.g. for a selection.
+        let caret = caretRect(forcingLayout: false) ?? rect
+        if caret.maxX > visible.maxX {
+            origin.x += caret.maxX - visible.maxX
+        } else if caret.minX < visible.minX {
+            origin.x -= visible.minX - caret.minX
+        }
+        origin.x = min(max(0, origin.x), max(0, bounds.width - visible.width))
+        guard abs(origin.y - visible.origin.y) > 0.5 || abs(origin.x - visible.origin.x) > 0.5 else { return }
         clip.setBoundsOrigin(origin)
         scroll.reflectScrolledClipView(clip)
     }
