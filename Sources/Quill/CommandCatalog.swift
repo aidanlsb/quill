@@ -136,6 +136,15 @@ extension AppModel {
             self?.goToDefinition()
         }
         register(
+            id: "navigate.hover",
+            name: "Show Info Under Cursor",
+            category: "Navigate",
+            bindings: [CommandBinding(.keys("K"))],
+            showsInMenu: true
+        ) { [weak self] _ in
+            self?.showHover()
+        }
+        register(
             id: "navigate.references",
             name: "Find References",
             category: "Navigate",

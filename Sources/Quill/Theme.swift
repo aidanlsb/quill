@@ -195,8 +195,12 @@ struct QuillTheme {
 
 /// Hidden title bar, no toolbar, window fill matches the editor.
 enum WindowChrome {
+    /// How many times the theme-wide apply ran. The editor calls it only when the theme or focus changes.
+    @MainActor static var applyCount = 0
+
     @MainActor
     static func apply(theme: QuillTheme, background: NSColor? = nil) {
+        applyCount += 1
         NSApplication.shared.windows.forEach { apply(theme, to: $0, background: background) }
     }
 

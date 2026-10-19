@@ -194,7 +194,7 @@ extension Probe {
         tv.directoryEntries = model.directorySnapshot?.entries ?? []
         tv.columnWidth = model.theme.columnWidth
         tv.applyTheme(model.theme, focus: false)
-        tv.syncFromEngine()
+        tv.reload()
         tv.layoutSubtreeIfNeeded()
         tv.updateInsets()
         tv.queueRestyle()
@@ -203,11 +203,11 @@ extension Probe {
 
         var guardSteps = 0
         while !model.engine.lineTextUnderCursor().hasPrefix("notes.md"), guardSteps < 10 {
-            let step = tv.press("j") { model.handleEngineResult($0) }
+            let step = tv.press("j") { model.afterEdit($0) }
             guardSteps += 1
             if step.beep { break }
         }
-        let opened = tv.press("<CR>") { model.handleEngineResult($0) }
+        let opened = tv.press("<CR>") { model.afterEdit($0) }
         check(
             opened.actions.contains(.command("file.openEntry")),
             "Enter did not open the entry: \(opened.actions)",
@@ -218,10 +218,10 @@ extension Probe {
             RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.05))
         }
         check(model.engine.text.contains("hello notes"), "Enter did not load notes.md: \(model.engine.text)", failures: failures)
-        tv.syncFromEngine()
+        tv.reload()
         check(tv.string.contains("hello notes"), "text view stayed on the directory after Enter", failures: failures)
 
-        let parent = tv.press("-") { model.handleEngineResult($0) }
+        let parent = tv.press("-") { model.afterEdit($0) }
         check(parent.actions == [.command("file.parent")], "minus actions \(parent.actions)", failures: failures)
         check(model.isDirectory, "minus did not return to the directory (\(model.message))", failures: failures)
         check(model.engine.text.contains("notes.md"), "parent listing lost notes.md", failures: failures)

@@ -90,7 +90,7 @@ enum AppSmoke {
         )
         window.isReleasedWhenClosed = false
         window.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
-        window.contentViewController = NSHostingController(rootView: EditorView(model: model, revision: model.revision))
+        window.contentViewController = NSHostingController(rootView: EditorView(model: model, diagnostics: model.diagnosticRanges))
         window.makeKeyAndOrderFront(nil)
         return wait(model, 2)
     }
@@ -149,51 +149,3 @@ enum AppSmoke {
             if probe { $0.probeAnswered = true }
         }
     }
-}
-private struct SmokeTrace: Sendable {
-    var launchFinished = false, modelAttached = false, windowAppeared = false
-    var smokeStarted = false, probeAnswered = false, windowCount = -1
-    var modelSource = "none", activationPolicy = "unset"
-}
-// quill-concurrency: NSLock guards the snapshot the watchdog thread reads while the main actor writes it.
-private final class SmokeTraceStore: @unchecked Sendable {
-    private let lock = NSLock()
-    private var trace = SmokeTrace()
-    private var armed = false
-    private var cancelled = false
-    func update(_ body: (inout SmokeTrace) -> Void) { lock.lock(); body(&trace); lock.unlock() }
-    func copy() -> SmokeTrace { lock.lock(); defer { lock.unlock() }; return trace }
-    func cancel() { lock.lock(); cancelled = true; lock.unlock() }
-    private func isCancelled() -> Bool { lock.lock(); defer { lock.unlock() }; return cancelled }
-    func arm(seconds: Double) {
-        lock.lock()
-        if armed { lock.unlock(); return }
-        armed = true
-        lock.unlock()
-        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + seconds) { [self] in
-            guard !self.isCancelled() else { return }
-            let ready = DispatchSemaphore(value: 0)
-            DispatchQueue.main.async {
-                // quill-concurrency: The main queue is the main thread; assumeIsolated hops without capturing a non-Sendable self.
-                MainActor.assumeIsolated { AppSmoke.recordProbeSnapshot() }
-                ready.signal()
-            }
-            _ = ready.wait(timeout: .now() + 1)
-            guard !self.isCancelled() else { return }
-            // write(2) rather than stderr: the FILE* global is not concurrency-safe,
-            // and this thread must report even when the main actor never runs again.
-            Self.writeStderr(Self.diagnostic(self.copy(), seconds: seconds))
-            guard !self.isCancelled() else { return }
-            exit(2)
-        }
-    }
-    private static func diagnostic(_ trace: SmokeTrace, seconds: Double) -> String {
-        let waited = Int(seconds.rounded())
-        return "quill smoke watchdog: exiting 2 after \(waited)s\n"
-            + "launchFinished=\(trace.launchFinished) modelAttached=\(trace.modelAttached) modelSource=\(trace.modelSource) windowAppeared=\(trace.windowAppeared) smokeStarted=\(trace.smokeStarted)\n"
-            + "windows=\(trace.windowCount) activationPolicy=\(trace.activationPolicy) probeAnswered=\(trace.probeAnswered)\n\n"
-    }
-    private static func writeStderr(_ text: String) {
-        _ = text.withCString { write(STDERR_FILENO, $0, strlen($0)) }
-    }
-}

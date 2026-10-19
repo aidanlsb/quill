@@ -35,7 +35,7 @@ extension Probe {
             window.close()
         }
         tv.applyTheme(QuillTheme.current(), focus: false)
-        tv.syncFromEngine()
+        tv.reload()
 
         resizeEditor(window, scroll: scroll, width: 640, height: height)
         let narrowClip = scroll.contentView.bounds.width

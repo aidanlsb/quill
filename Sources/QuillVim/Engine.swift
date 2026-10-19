@@ -73,9 +73,13 @@ public final class Engine {
 
     var insertKind: InsertKind = .i
     var insertCount: Int = 1
-    var insertBaseline: String = ""
-    var insertBaselineCursor: Int = 0
-    var insertStarted: Bool = false
+    /// UTF-16 range of text typed since the last insert break. Arrow keys and
+    /// mouse moves restart it, so `.` repeats only the text after the break.
+    private struct InsertSpan {
+        var start: Int
+        var end: Int
+    }
+    private var insertSpan: InsertSpan?
 
     public init(
         text: String = "",
@@ -126,6 +130,7 @@ public final class Engine {
         currentStamp = 0
         savedStamp = 0
         lastRepeatable = nil
+        insertSpan = nil
         resetParser()
         statusMessage = ""
         commandLine = ""
@@ -223,9 +228,21 @@ public final class Engine {
         resetCurswant()
     }
 
-    public func moveCursor(to offset: Int) {
+    @discardableResult
+    public func moveCursor(to offset: Int) -> EngineResult {
+        let before = buffer.cursor
         buffer.cursor = buffer.clampedCursor(offset, normalMode: mode != .insert)
         resetCurswant()
+        if mode == .insert {
+            breakInsert()
+        }
+        return EngineResult(
+            didChangeText: false,
+            beep: false,
+            actions: [],
+            cursorBefore: before,
+            cursorAfter: buffer.cursor
+        )
     }
 
     @discardableResult
@@ -1051,9 +1068,7 @@ public final class Engine {
         if groupDepth == 0 {
             beginTransaction()
         }
-        insertBaseline = buffer.text
-        insertBaselineCursor = buffer.cursor
-        insertStarted = true
+        insertSpan = InsertSpan(start: buffer.cursor, end: buffer.cursor)
         mode = .insert
         count = nil
         operatorKind = nil
@@ -1098,12 +1113,14 @@ public final class Engine {
                 buffer.cursor = buffer.graphemeStart(before: buffer.cursor)
             }
             resetCurswant()
+            breakInsert()
             return .noop
         case .right:
             if buffer.cursor < buffer.bufferLine(containing: buffer.cursor).contentEnd {
                 buffer.cursor = buffer.graphemeSpan(containing: buffer.cursor).upperBound
             }
             resetCurswant()
+            breakInsert()
             return .noop
         case .up, .down:
             settleCurswant()
@@ -1117,6 +1134,7 @@ public final class Engine {
             if !resolved.failed {
                 buffer.cursor = resolved.position
             }
+            breakInsert()
             return .noop
         case .character(let ch):
             return insertText(String(ch))
@@ -1137,7 +1155,8 @@ public final class Engine {
     }
 
     private func finishInsert() -> EngineResult {
-        let inserted = insertedTextSinceBaseline()
+        let inserted = insertedText()
+        insertSpan = nil
         if insertCount > 1, !inserted.isEmpty {
             let extra = String(repeating: inserted, count: insertCount - 1)
             replace(buffer.cursor..<buffer.cursor, with: extra)
@@ -1151,7 +1170,6 @@ public final class Engine {
         default:
             lastRepeatable = .insert(kind: insertKind, text: inserted, count: insertCount)
         }
-        insertStarted = false
         mode = .normal
         operatorKind = nil
         operatorCount = nil
@@ -1176,22 +1194,38 @@ public final class Engine {
         return EngineResult(didChangeText: inserted.count > 0, beep: false, actions: [])
     }
 
-    private func insertedTextSinceBaseline() -> String {
-        // Net text that appeared at the original insert cursor.
-        let old = insertBaseline.utf16
-        let new = buffer.text.utf16
-        if old.elementsEqual(new) { return "" }
-        let start = min(insertBaselineCursor, old.count, new.count)
-        let tail = old.count - start
-        if new.count - tail >= start,
-           new.prefix(start).elementsEqual(old.prefix(start)),
-           new.suffix(tail).elementsEqual(old.suffix(tail)) {
-            return buffer.substring(start..<(new.count - tail))
+    /// Text inside the insert span. O(span), not O(document).
+    private func insertedText() -> String {
+        guard let span = insertSpan else { return "" }
+        let start = min(max(0, span.start), buffer.count)
+        let end = min(max(start, span.end), buffer.count)
+        return buffer.substring(start..<end)
+    }
+
+    /// An arrow key or a mouse move ends the current insert for `.`.
+    private func breakInsert() {
+        guard insertSpan != nil else { return }
+        insertSpan = InsertSpan(start: buffer.cursor, end: buffer.cursor)
+    }
+
+    /// Keep the span aligned with an insert-mode edit. Typing at the end extends
+    /// it, a change inside it shrinks or grows it, and a change outside restarts
+    /// it on the replacement.
+    private func noteInsert(replacing range: Range<Int>, with new: String) {
+        guard var span = insertSpan else { return }
+        let width = buffer.measure(new)
+        if range.isEmpty, range.lowerBound == span.end {
+            span.end += width
+            insertSpan = span
+            return
         }
-        // Fallback: characters currently between original cursor and now.
-        let a = min(insertBaselineCursor, buffer.cursor)
-        let b = max(insertBaselineCursor, buffer.cursor)
-        return buffer.substring(a..<b)
+        if range.lowerBound >= span.start, range.upperBound <= span.end {
+            span.end += width - range.count
+            if span.end < span.start { span.end = span.start }
+            insertSpan = span
+            return
+        }
+        insertSpan = InsertSpan(start: range.lowerBound, end: range.lowerBound + width)
     }
 
     // MARK: Commands
@@ -1685,6 +1719,7 @@ public final class Engine {
         let lower = min(max(0, range.lowerBound), buffer.count)
         let upper = min(max(lower, range.upperBound), buffer.count)
         let span = lower..<upper
+        noteInsert(replacing: span, with: new)
         let old = buffer.substring(span)
         let edit = TextEdit(range: span, replacement: new)
         if groupDepth > 0 {

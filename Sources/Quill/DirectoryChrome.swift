@@ -232,13 +232,30 @@ enum DirectoryStyler {
 
 @MainActor
 extension VimTextView {
+    func invalidateDirectoryStyle() {
+        directoryStyleCache = nil
+    }
+
     func currentDirectoryStyle() -> DirectoryStyle {
-        DirectoryStyleBuilder.style(
+        if let directoryStyleCache { return directoryStyleCache }
+        let style = DirectoryStyleBuilder.style(
             directoryPath: directoryURL?.path ?? "",
             homePath: FileManager.default.homeDirectoryForCurrentUser.path,
             lines: DirectoryStyleBuilder.lines(from: engine.buffer),
             original: directoryEntries
         )
+        directoryStyleCache = style
+        return style
+    }
+
+    func invalidateDirectoryCaret(from oldUTF16: Int, to newUTF16: Int) {
+        guard oldUTF16 != newUTF16 else { return }
+        var dirty: NSRect?
+        if let old = directoryLineRect(at: oldUTF16) { dirty = old }
+        if let new = directoryLineRect(at: newUTF16) {
+            dirty = dirty.map { $0.union(new) } ?? new
+        }
+        if let dirty { setNeedsDisplay(dirty) }
     }
 
     @discardableResult
@@ -255,23 +272,30 @@ extension VimTextView {
         backgroundColor.setFill()
         rect.fill()
         guard engine != nil, engine.buffer.lineCount > 0 else { return }
-        layoutAdapter.ensureFullLayout()
         let index = clampUTF16(selectedRange().location)
-        guard let row = directoryLineRect(at: index) else { return }
+        guard let row = directoryLineRect(at: index), row.intersects(rect) else { return }
         theme.directoryHighlightColor.setFill()
         row.fill()
     }
 
-    func drawDirectoryDecorations() {
+    func drawDirectoryDecorations(in rect: NSRect) {
+        MainActor.assumeIsolated { self.onDirectoryDecorations?() }
         guard engine != nil else { return }
-        layoutAdapter.ensureFullLayout()
         let style = currentDirectoryStyle()
-        drawDirectoryHeader(style.header)
-        var lastMaxY = textContainerOrigin.y
-        for (index, line) in style.lines.enumerated() where index < engine.buffer.lineCount {
+        let header = NSRect(
+            x: 0,
+            y: 0,
+            width: bounds.width,
+            height: QuillMetrics.directoryHeaderHeight + 8
+        )
+        if header.intersects(rect) {
+            drawDirectoryHeader(style.header)
+        }
+        let scan = visibleDirectoryLines(in: rect)
+        for index in scan.lineIndexes where index < style.lines.count && index < engine.buffer.lineCount {
+            let line = style.lines[index]
             let utf16 = engine.buffer.line(index).start
-            guard let box = directoryLineBox(at: utf16) else { continue }
-            lastMaxY = max(lastMaxY, box.row.maxY)
+            guard let box = directoryLineBox(at: utf16), box.row.intersects(rect) else { continue }
             guard let symbol = line.symbolName else { continue }
             let color = DirectoryStyler.foreground(line, theme: theme)
             drawDirectorySymbol(symbol, color: color, row: box.row)
@@ -281,8 +305,20 @@ extension VimTextView {
             }
         }
         let rowHeight = QuillMetrics.directoryRowHeight(for: theme.directoryFont)
+        let anchorY = scan.reachedEnd
+            ? scan.lastMaxY
+            : textContainerOrigin.y + CGFloat(engine.buffer.lineCount) * rowHeight
+        guard !style.deleted.isEmpty else { return }
+        let ghosts = NSRect(
+            x: 0,
+            y: anchorY,
+            width: bounds.width,
+            height: rowHeight * CGFloat(style.deleted.count)
+        )
+        guard ghosts.intersects(rect) else { return }
         for (index, ghost) in style.deleted.enumerated() {
-            let row = NSRect(x: 0, y: lastMaxY + CGFloat(index) * rowHeight, width: bounds.width, height: rowHeight)
+            let row = NSRect(x: 0, y: anchorY + CGFloat(index) * rowHeight, width: bounds.width, height: rowHeight)
+            guard row.intersects(rect) else { continue }
             let color = theme.dimColor
             drawDirectorySymbol(ghost.symbolName, color: color, row: row)
             drawDirectoryMarkBar(theme.directoryDeletedColor, row: row)
@@ -302,6 +338,44 @@ extension VimTextView {
             (ghost.name as NSString).draw(with: name, options: [.usesLineFragmentOrigin], attributes: struck)
             drawDirectoryLabel("delete", color: theme.directoryDeletedColor, after: name, row: row)
         }
+    }
+
+    private struct DirectoryLineScan {
+        var lineIndexes: [Int] = []
+        var reachedEnd = false
+        var lastMaxY: CGFloat = 0
+    }
+
+    /// Fragments that intersect `rect`, laid out from the top of that rect downward.
+    private func visibleDirectoryLines(in rect: NSRect) -> DirectoryLineScan {
+        var scan = DirectoryLineScan()
+        scan.lastMaxY = textContainerOrigin.y
+        guard let lm = textLayoutManager, engine != nil else { return scan }
+        let origin = textContainerOrigin
+        let probe = CGPoint(x: 0, y: max(0, rect.minY - origin.y))
+        let start = lm.textLayoutFragment(for: probe)?.rangeInElement.location ?? lm.documentRange.location
+        let doc = lm.documentRange.location
+        let docEnd = lm.offset(from: doc, to: lm.documentRange.endLocation)
+        lm.enumerateTextLayoutFragments(from: start, options: [.ensuresLayout]) { fragment in
+            let frame = fragment.layoutFragmentFrame
+            let minY = frame.minY + origin.y
+            let maxY = frame.maxY + origin.y
+            if minY >= rect.maxY { return false }
+            scan.lastMaxY = max(scan.lastMaxY, maxY)
+            let utf16 = lm.offset(from: doc, to: fragment.rangeInElement.location)
+            if utf16 != NSNotFound, engine.buffer.lineCount > 0 {
+                let line = engine.buffer.lineIndex(containing: utf16)
+                if scan.lineIndexes.last != line {
+                    scan.lineIndexes.append(line)
+                }
+            }
+            let end = lm.offset(from: doc, to: fragment.rangeInElement.endLocation)
+            if docEnd != NSNotFound, end != NSNotFound, end >= docEnd {
+                scan.reachedEnd = true
+            }
+            return true
+        }
+        return scan
     }
 
     private func drawDirectoryHeader(_ header: String) {

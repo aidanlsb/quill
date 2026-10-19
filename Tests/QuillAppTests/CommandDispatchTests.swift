@@ -37,7 +37,7 @@ final class CommandDispatchTests: QuillAppTestCase {
         model.dismissCommandPalette(restore: false)
 
         let result = model.engine.type(" xx")
-        model.handleEngineResult(result)
+        model.afterEdit(result)
         XCTAssertEqual(result.actions, [.command("search.grep")])
         XCTAssertEqual(model.pickerKind, .grep)
     }
@@ -59,11 +59,11 @@ final class CommandDispatchTests: QuillAppTestCase {
         model.open(url: url)
         await waitUntil("open") { model.engine.text == "hello\n" }
         let theme = model.themeChoice
-        model.handleEngineResult(model.engine.type(" sf"))
+        model.afterEdit(model.engine.type(" sf"))
         await waitUntil("find files") { model.pickerKind == .files }
         model.picker = nil
         model.pickerKind = nil
-        model.handleEngineResult(model.engine.type(" tt"))
+        model.afterEdit(model.engine.type(" tt"))
         XCTAssertNotEqual(model.themeChoice, theme)
         withExtendedLifetime(fixture) {}
     }
@@ -76,7 +76,7 @@ final class CommandDispatchTests: QuillAppTestCase {
         model.open(url: fixture.url.appendingPathComponent("note.md"))
         await waitUntil("open note") { model.engine.text.contains("[[target]]") }
         model.engine.moveCursor(to: 6)
-        model.handleEngineResult(model.engine.type("gd"))
+        model.afterEdit(model.engine.type("gd"))
         await waitUntil("wikilink") { model.engine.text.contains("from the link") }
         withExtendedLifetime(fixture) {}
     }
@@ -90,14 +90,14 @@ final class CommandDispatchTests: QuillAppTestCase {
         XCTAssertEqual(model.engine.keymap.lookup("<CR>"), .command("file.openEntry"))
         var steps = 0
         while !model.engine.lineTextUnderCursor().hasPrefix("notes.md"), steps < 10 {
-            model.handleEngineResult(model.engine.type("j"))
+            model.afterEdit(model.engine.type("j"))
             steps += 1
         }
-        model.handleEngineResult(model.engine.type("<CR>"))
+        model.afterEdit(model.engine.type("<CR>"))
         await waitUntil("opened notes") { model.engine.text.contains("hello notes") }
         XCTAssertEqual(model.engine.keymap.lookup("<CR>"), .none)
         model.engine.load(text: "a\nb\n")
-        model.handleEngineResult(model.engine.type("<CR>"))
+        model.afterEdit(model.engine.type("<CR>"))
         XCTAssertEqual(model.engine.buffer.lineIndex(containing: model.engine.cursor), 1)
         withExtendedLifetime(fixture) {}
     }
@@ -111,22 +111,22 @@ final class CommandDispatchTests: QuillAppTestCase {
         await waitUntil("open") { model.engine.text == "hello\n" }
 
         model.engine.applyHostEdit(replacing: 5..<5, with: "!")
-        model.handleEngineResult(model.engine.type(":e<CR>"))
+        model.afterEdit(model.engine.type(":e<CR>"))
         XCTAssertEqual(model.message, "No write since last change")
         XCTAssertEqual(model.engine.text, "hello!\n")
 
-        model.handleEngineResult(model.engine.type(":e!<CR>"))
+        model.afterEdit(model.engine.type(":e!<CR>"))
         await waitUntil("reload bang") { model.engine.text == "hello\n" }
 
         try Data("changed\n".utf8).write(to: url)
-        model.handleEngineResult(model.engine.type(":e<CR>"))
+        model.afterEdit(model.engine.type(":e<CR>"))
         await waitUntil("reload") { model.engine.text == "changed\n" }
 
         model.engine.applyHostEdit(replacing: 0..<0, with: "x")
-        model.handleEngineResult(model.engine.type(":q<CR>"))
+        model.afterEdit(model.engine.type(":q<CR>"))
         XCTAssertEqual(model.message, "No write since last change")
         XCTAssertEqual(model.closeRequests, 0)
-        model.handleEngineResult(model.engine.type(":q!<CR>"))
+        model.afterEdit(model.engine.type(":q!<CR>"))
         XCTAssertEqual(model.closeRequests, 1)
         XCTAssertFalse(model.engine.isModified)
         withExtendedLifetime(fixture) {}
@@ -134,12 +134,12 @@ final class CommandDispatchTests: QuillAppTestCase {
 
     func testThemeExAndLegacyLeaderNames() {
         let model = AppModel()
-        model.handleEngineResult(model.engine.type(":theme dark<CR>"))
+        model.afterEdit(model.engine.type(":theme dark<CR>"))
         XCTAssertEqual(model.themeChoice, .dark)
-        model.handleEngineResult(model.engine.type(":theme blue<CR>"))
+        model.afterEdit(model.engine.type(":theme blue<CR>"))
         XCTAssertEqual(model.message, "theme must be light, dark, or system")
         XCTAssertEqual(model.themeChoice, .dark)
-        model.handleEngineResult(model.engine.type(":theme<CR>"))
+        model.afterEdit(model.engine.type(":theme<CR>"))
         XCTAssertNotEqual(model.themeChoice, .dark)
         XCTAssertEqual(QuillConfig.commandID(named: "findFiles"), "search.files")
         XCTAssertEqual(QuillConfig.commandID(named: "liveGrep"), "search.grep")
