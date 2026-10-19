@@ -188,6 +188,19 @@ run_many() {
     run_app "$app" "$dest/launch-${i}.json" launch "$fixtures" 60
     i=$((i + 1))
   done
+  # The first suite processes after a cold runner step down by tens of
+  # milliseconds (keyNormalTop was 402, 366, then 305). Drop two more
+  # suites once the launches are done so the measured median sits on the
+  # flat part. Base is measured second and was already flat.
+  if [[ "$quick" -eq 0 ]]; then
+    i=1
+    while [[ "$i" -le 2 ]]; do
+      echo "bench: settle suite ${i}/2 (discarded)"
+      run_app "$app" "$dest/settle-${i}.json" suite "$fixtures" 1260
+      rm -f "$dest/settle-${i}.json" "$dest/settle-${i}.json.log"
+      i=$((i + 1))
+    done
+  fi
   i=1
   while [[ "$i" -le "$suite_runs" ]]; do
     echo "bench: suite ${i}/${suite_runs}"

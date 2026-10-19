@@ -40,8 +40,12 @@ FLOORS = {
     "keyInsertTopMs": (1.8, 1.8, 1.8),
     "keyInsertMidMs": (3.5, 3.5, 3.5),
     "keyInsertEndMs": (2.6, 2.6, 2.6),
-    "keyNormalTopMs": (3.5, 3.5, 3.5),
-    "keyNormalMidMs": (3.0, 3.0, 3.0),
+    # Normal-mode x at the top of the 500k note is ~300ms. On run
+    # 39205979360 the first measured suites were still settling
+    # (402, 366, 305ms), so the median moved 69ms and p95 96ms against
+    # an identical base. The floor sits above that swing.
+    "keyNormalTopMs": (120.0, 160.0, 200.0),
+    "keyNormalMidMs": (100.0, 150.0, 200.0),
     "keyNormalEndMs": (2.3, 2.3, 2.3),
     # j/w medians stay under a millisecond. Their p95 is a hitch: most
     # samples are cheap and one layout sample is ~150ms, so the percentile
