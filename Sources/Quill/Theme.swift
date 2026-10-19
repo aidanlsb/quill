@@ -274,6 +274,7 @@ enum MarkdownStyler {
             tables: discovered,
             columnWidth: tableColumnWidth
         )
+        applyListHangingIndents(storage, theme: theme, spans: spans, limit: limit)
         for (range, severity) in diagnostics {
             let marked = NSIntersectionRange(range, limit)
             guard marked.length > 0, NSMaxRange(marked) <= storage.length else { continue }
