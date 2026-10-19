@@ -3,9 +3,10 @@ import XCTest
 
 let cursorMark: Character = "█"
 
+/// The cursor is a UTF-16 offset, like the engine's, so `"😀█a"` puts it at 2.
 func splitMarked(_ s: String) -> (text: String, cursor: Int) {
     if let idx = s.firstIndex(of: cursorMark) {
-        let cursor = s.distance(from: s.startIndex, to: idx)
+        let cursor = s[..<idx].utf16.count
         var text = s
         text.remove(at: idx)
         return (text, cursor)
@@ -15,8 +16,8 @@ func splitMarked(_ s: String) -> (text: String, cursor: Int) {
 
 func marked(_ text: String, cursor: Int) -> String {
     if text.isEmpty { return String(cursorMark) }
-    let c = min(max(0, cursor), text.count)
-    let i = text.index(text.startIndex, offsetBy: c)
+    let c = min(max(0, cursor), text.utf16.count)
+    let i = String.Index(utf16Offset: c, in: text)
     var out = text
     out.insert(cursorMark, at: i)
     return out
@@ -57,5 +58,17 @@ func XCTAssertVim(
     }
     if let mode {
         XCTAssertEqual(engine.mode, mode, "mode mismatch after \(keys.debugDescription)", file: file, line: line)
+    }
+}
+
+/// SplitMix64: deterministic, so a failing fuzz case reproduces from its seed.
+struct Rng: RandomNumberGenerator {
+    var state: UInt64
+    mutating func next() -> UInt64 {
+        state &+= 0x9E37_79B9_7F4A_7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+        return z ^ (z >> 31)
     }
 }
