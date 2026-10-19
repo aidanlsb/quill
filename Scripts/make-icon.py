@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Draw Quill's app icon and pack a full AppIcon.icns.
 
-The drawing is the source of truth: a warm-slate squircle and a cream pen nib.
-The squircle follows the macOS icon grid — an 824px body centered on the
-1024px canvas, with a transparent margin and a soft drop shadow.
-`python3 Scripts/make-icon.py` rewrites Resources/AppIcon.icns and AppIcon.svg.
-`--check` fails when those files drift. `--preview PATH` also writes a PNG.
+The drawing is the source of truth: a near-black squircle and a solid white
+feather quill. The squircle follows the macOS icon grid — an 824px body
+centered on the 1024px canvas, with a transparent margin and a soft drop
+shadow. `python3 Scripts/make-icon.py` rewrites Resources/AppIcon.icns and
+AppIcon.svg. `--check` fails when those files drift. `--preview PATH` also
+writes a PNG.
 """
 
 from __future__ import annotations
@@ -43,90 +44,147 @@ SHADOW_RADIUS = 18.0 / 1024.0
 SHADOW_PASSES = 3
 SHADOW_OPACITY = 0.38
 
-BASE = (33, 49, 59)
-LIT = (74, 104, 120)
-NIB = (246, 242, 234)
-NIB_EDGE = (232, 224, 210)
+# Near-black squircle. Top is #1C1C1E, bottom is #0A0A0B.
+TOP_COLOR = (28, 28, 30)
+BOTTOM_COLOR = (10, 10, 11)
+FEATHER = (255, 255, 255)
 
-# Nib geometry in body space (0–1 across the 824px squircle, y downward).
-# Flat heel, circular shoulder fillets, then one cubic down to a single point.
-# The fillet ends on a vertical tangent and the cubic starts on that same
-# tangent, so the shoulder has no lump. The slit stops short of the point.
-TOP_Y = 0.200
-HALF_W = 0.278
-CORNER_R = 0.108
-TIP_Y = 0.858
-SLIT_END_Y = 0.748
-HOLE_Y = 0.355
-HOLE_R = 0.056
-SLIT_HALF = 0.046
+# Feather geometry in body space (0–1 across the 824px squircle, y downward).
+# The vane runs from a fine tip at the lower left to a rounded crown at the
+# upper right. Width grows toward the crown. Notches are smooth bites in the
+# lower-right edge. The shaft is a thin cut that drifts toward the inner edge.
+TIP = (0.24, 0.760)
+CAP = (0.710, 0.305)
+CAP_RISE = 0.108
+RIGHT_W = 0.198
+LEFT_W = 0.108
+# Scallops on the lower-right edge: center along the vane, half-width, depth.
+NOTCHES = (
+    (0.44, 0.070, 0.036),
+    (0.60, 0.068, 0.044),
+    (0.75, 0.058, 0.032),
+)
+SHAFT_FROM = 0.36
+SHAFT_TO = 0.74
+SHAFT_HALF = 0.015
 
 
 def mix(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> tuple[int, int, int]:
     return tuple(int(round(a[i] + (b[i] - a[i]) * t)) for i in range(3))  # type: ignore[return-value]
 
 
-def _cubic(p0, p1, p2, p3, steps: int, include_end: bool) -> list[tuple[float, float]]:
-    count = steps + (1 if include_end else 0)
+def _frame() -> tuple[float, tuple[float, float], tuple[float, float]]:
+    """Axis length, unit direction tip→crown, and the lower-right normal."""
+    dx = CAP[0] - TIP[0]
+    dy = CAP[1] - TIP[1]
+    length = math.hypot(dx, dy)
+    direction = (dx / length, dy / length)
+    normal = (-direction[1], direction[0])
+    return length, direction, normal
+
+
+def _grow(s: float) -> float:
+    """0 at the tip, 1 at the shoulder, with a flat tangent at the shoulder."""
+    return 0.55 * s + 1.9 * s * s - 1.45 * s * s * s
+
+
+def _edge(s: float, side: float, length: float, direction: tuple[float, float], normal: tuple[float, float]) -> tuple[float, float]:
+    grow = _grow(s)
+    width = RIGHT_W * grow if side > 0 else LEFT_W * grow
+    return (
+        TIP[0] + direction[0] * length * s + normal[0] * side * width,
+        TIP[1] + direction[1] * length * s + normal[1] * side * width,
+    )
+
+
+def _scallop(
+    s0: float,
+    s1: float,
+    depth: float,
+    length: float,
+    direction: tuple[float, float],
+    normal: tuple[float, float],
+) -> list[tuple[float, float]]:
+    """Circular bite opening through the lower-right edge."""
+    p0 = _edge(s0, 1.0, length, direction, normal)
+    p3 = _edge(s1, 1.0, length, direction, normal)
+    chord = (p3[0] - p0[0], p3[1] - p0[1])
+    span = math.hypot(*chord)
+    if span < 1e-4 or depth < 1e-4:
+        return []
+    half = span * 0.5
+    radius = (half * half + depth * depth) / (2 * depth)
+    center = (
+        (p0[0] + p3[0]) * 0.5 + normal[0] * (radius - depth),
+        (p0[1] + p3[1]) * 0.5 + normal[1] * (radius - depth),
+    )
+    a0 = math.atan2(p0[1] - center[1], p0[0] - center[0])
+    a1 = math.atan2(p3[1] - center[1], p3[0] - center[0])
+    sweep = (a1 - a0) % (2 * math.pi)
+    if sweep > math.pi:
+        sweep -= 2 * math.pi
+    steps = 36
+    return [
+        (
+            center[0] + radius * math.cos(a0 + sweep * i / steps),
+            center[1] + radius * math.sin(a0 + sweep * i / steps),
+        )
+        for i in range(1, steps)
+    ]
+
+
+def feather_outline() -> list[tuple[float, float]]:
+    """Leaf-shaped vane: one point at the lower left, round crown at the upper right."""
+    length, direction, normal = _frame()
+    bites = tuple(sorted(NOTCHES))
     points: list[tuple[float, float]] = []
-    for i in range(count):
-        t = i / steps
-        u = 1 - t
+    steps = 480
+    cursor = 0.0
+    for center, half, depth in bites:
+        s0 = center - half
+        s1 = center + half
+        i0 = int(round(cursor * steps))
+        i1 = int(round(s0 * steps))
+        points.extend(_edge(i / steps, 1.0, length, direction, normal) for i in range(i0, i1))
+        points.append(_edge(s0, 1.0, length, direction, normal))
+        points.extend(_scallop(s0, s1, depth, length, direction, normal))
+        points.append(_edge(s1, 1.0, length, direction, normal))
+        cursor = s1
+    i0 = int(round(cursor * steps)) + 1
+    points.extend(_edge(i / steps, 1.0, length, direction, normal) for i in range(i0, steps))
+    right = _edge(1.0, 1.0, length, direction, normal)
+    left = _edge(1.0, -1.0, length, direction, normal)
+    mid = ((right[0] + left[0]) * 0.5, (right[1] + left[1]) * 0.5)
+    half_cap = ((right[0] - left[0]) * 0.5, (right[1] - left[1]) * 0.5)
+    rise = (direction[0] * CAP_RISE, direction[1] * CAP_RISE)
+    cap_steps = 100
+    for i in range(cap_steps + 1):
+        phi = math.pi * i / cap_steps
         points.append((
-            u * u * u * p0[0] + 3 * u * u * t * p1[0] + 3 * u * t * t * p2[0] + t * t * t * p3[0],
-            u * u * u * p0[1] + 3 * u * u * t * p1[1] + 3 * u * t * t * p2[1] + t * t * t * p3[1],
+            mid[0] + half_cap[0] * math.cos(phi) + rise[0] * math.sin(phi),
+            mid[1] + half_cap[1] * math.cos(phi) + rise[1] * math.sin(phi),
         ))
+    points.extend(_edge(i / steps, -1.0, length, direction, normal) for i in range(steps, 0, -1))
     return points
 
 
-def _blade(side: float) -> tuple[tuple[float, float], tuple[float, float], tuple[float, float], tuple[float, float]]:
-    """Cubic from the shoulder fillet to the tip. `side` is +1 on the right."""
-    shoulder = (0.5 + side * HALF_W, TOP_Y + CORNER_R)
-    tip = (0.5, TIP_Y)
-    dist = math.hypot(tip[0] - shoulder[0], tip[1] - shoulder[1])
-    # Vertical at the shoulder, then 22° off vertical at the point.
-    p1 = (shoulder[0], shoulder[1] + dist * 0.40)
-    arrive = (side * -math.sin(math.radians(22)), math.cos(math.radians(22)))
-    handle = dist * 0.34
-    p2 = (tip[0] - arrive[0] * handle, tip[1] - arrive[1] * handle)
-    return shoulder, p1, p2, tip
-
-
-def nib_outline() -> list[tuple[float, float]]:
-    """Broad flat heel, round shoulders, one writing point."""
-    right = _blade(1.0)
-    # Tip -> right shoulder, so the polygon starts on the single point.
-    points = _cubic(right[3], right[2], right[1], right[0], 280, include_end=False)
-    cy = TOP_Y + CORNER_R
-    rx = 0.5 + HALF_W - CORNER_R
-    steps = 72
-    for i in range(1, steps + 1):
-        theta = 0 - (math.pi / 2) * i / steps
-        points.append((rx + CORNER_R * math.cos(theta), cy + CORNER_R * math.sin(theta)))
-    lx = 0.5 - (HALF_W - CORNER_R)
-    for i in range(1, steps + 1):
-        theta = -math.pi / 2 - (math.pi / 2) * i / steps
-        points.append((lx + CORNER_R * math.cos(theta), cy + CORNER_R * math.sin(theta)))
-    left = _blade(-1.0)
-    points.extend(_cubic(left[0], left[1], left[2], left[3], 280, include_end=False))
-    return points
-
-
-def slit_outline() -> list[tuple[float, float]]:
-    """Circular breather hole with a slit that ends in one point above the tip."""
-    cx = 0.5
-    cy = HOLE_Y
-    r = HOLE_R
-    right_a = math.acos(SLIT_HALF / r)
-    left_a = math.acos(-SLIT_HALF / r)
-    points = [(cx, SLIT_END_Y), (cx + r * math.cos(right_a), cy + r * math.sin(right_a))]
-    end = left_a - 2 * math.pi
-    steps = 100
-    for i in range(1, steps):
-        t = right_a + (end - right_a) * i / steps
-        points.append((cx + r * math.cos(t), cy + r * math.sin(t)))
-    points.append((cx + r * math.cos(left_a), cy + r * math.sin(left_a)))
-    return points
+def shaft_outline() -> list[tuple[float, float]]:
+    """Thin negative-space shaft from near the tip toward the upper-left inner edge."""
+    length, direction, normal = _frame()
+    steps = 140
+    forward: list[tuple[float, float]] = []
+    back: list[tuple[float, float]] = []
+    for i in range(steps + 1):
+        t = i / steps
+        s = SHAFT_FROM + (SHAFT_TO - SHAFT_FROM) * t
+        taper = math.sin(math.pi * t) ** 0.7
+        half = SHAFT_HALF * max(0.0, taper)
+        lateral = -(0.012 + 0.048 * t)
+        cx = TIP[0] + direction[0] * length * s + normal[0] * lateral
+        cy = TIP[1] + direction[1] * length * s + normal[1] * lateral
+        forward.append((cx + normal[0] * half, cy + normal[1] * half))
+        back.append((cx - normal[0] * half, cy - normal[1] * half))
+    return forward + list(reversed(back))
 
 
 def edges(polygon: list[tuple[float, float]]) -> list[tuple[float, float, float, float]]:
@@ -204,8 +262,8 @@ def render(size: int) -> bytes:
     origin = (size - scale) / 2.0
     center = size / 2.0
     radius = scale / 2.0
-    nib = to_pixels(nib_outline(), origin, scale)
-    slit = to_pixels(slit_outline(), origin, scale)
+    nib = to_pixels(feather_outline(), origin, scale)
+    slit = to_pixels(shaft_outline(), origin, scale)
     icon = bytearray(size * size * 4)
     mask = array("f", [0.0]) * (size * size)
     for py in range(size):
@@ -227,10 +285,12 @@ def render(size: int) -> bytes:
                     continue
                 cover = min(1.0, overlap)
                 ink = max(0.0, span_coverage(px, nib_spans) - span_coverage(px, cut_spans))
-                light = max(0.0, 1.0 - ((px + 0.5 - origin) / scale * 0.55 + light_y * 0.9))
-                color = mix(BASE, LIT, light * 0.62)
-                tip = min(1.0, max(0.0, (light_y - 0.45) / 0.4))
-                ink_color = mix(NIB, NIB_EDGE, tip * 0.55)
+                color = mix(TOP_COLOR, BOTTOM_COLOR, min(1.0, max(0.0, light_y)))
+                sheen = max(0.0, 1.0 - light_y * 1.35)
+                across = (px + 0.5 - center) / radius
+                sheen *= max(0.0, 1.0 - across * across * 0.55)
+                color = mix(color, (255, 255, 255), sheen * 0.04)
+                ink_color = FEATHER
                 i = (row + px) * 4
                 icon[i] = int(round(color[0] * (1 - ink) + ink_color[0] * ink))
                 icon[i + 1] = int(round(color[1] * (1 - ink) + ink_color[1] * ink))
@@ -300,12 +360,24 @@ def svg() -> str:
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
   <defs>
+    <linearGradient id="bg" x1="0" y1="100" x2="0" y2="924" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1C1C1E"/>
+      <stop offset="1" stop-color="#0A0A0B"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="100" x2="0" y2="480" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.04"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
     <filter id="dock-shadow" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
       <feDropShadow dx="0" dy="16" stdDeviation="18" flood-color="#000000" flood-opacity="0.30"/>
     </filter>
+    <clipPath id="squircle-clip">
+      <path d="{path(squircle)}"/>
+    </clipPath>
   </defs>
-  <path filter="url(#dock-shadow)" fill="#21313B" d="{path(squircle)}"/>
-  <path fill="#F6F2EA" fill-rule="evenodd" d="{path(nib_outline())} {path(slit_outline())}"/>
+  <path filter="url(#dock-shadow)" fill="url(#bg)" d="{path(squircle)}"/>
+  <path clip-path="url(#squircle-clip)" fill="url(#sheen)" d="{path(squircle)}"/>
+  <path fill="#FFFFFF" fill-rule="evenodd" d="{path(feather_outline())} {path(shaft_outline())}"/>
 </svg>
 """
 
