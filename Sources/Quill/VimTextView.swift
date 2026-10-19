@@ -172,6 +172,8 @@ final class VimTextView: NSTextView {
     /// Mono cells that fit the column when a table was last painted. Whether a
     /// table is aligned or shown as typed depends on it, so a change repaints.
     private var paintedTableFit: Int?
+    /// Set when the column width changes; `layout()` then makes sure the caret is visible.
+    private var revealAfterRewrap = false
     /// Read by `EditorView` in this file. `private` would hide them from that type.
     fileprivate var appliedThemeID = -1
     fileprivate var appliedFocus = false
@@ -279,7 +281,10 @@ final class VimTextView: NSTextView {
         defer {
             if columnChanged {
                 refitTables()
-                if hadInsets { revealCaretIfHidden() }
+                if hadInsets {
+                    revealAfterRewrap = true
+                    needsLayout = true
+                }
             }
         }
         let caretBefore = (hadInsets && columnChanged) ? caretDocumentMidY() : nil
@@ -452,6 +457,10 @@ final class VimTextView: NSTextView {
     override func layout() {
         super.layout()
         silenceSystemCarets()
+        if revealAfterRewrap, !sizing {
+            revealAfterRewrap = false
+            revealCaretIfHidden()
+        }
         placeCaret(forcingLayout: false)
     }
 
@@ -1129,8 +1138,9 @@ final class VimTextView: NSTextView {
         scroll.reflectScrolledClipView(clip)
     }
 
-    /// Rewrapping moves the caret's row. The anchor above keeps it where it was
-    /// on screen when it can measure it; this catches the case where it cannot.
+    /// Rewrapping moves the caret's row. The resize anchor measures it before
+    /// TextKit lays the new width out, so on a large rewrap it can leave the caret
+    /// off screen. After layout the caret rect is current.
     private func revealCaretIfHidden() {
         guard let clip = enclosingScrollView?.contentView, engine != nil,
               let caret = caretRect(forcingLayout: true) else { return }
