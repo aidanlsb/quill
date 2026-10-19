@@ -125,6 +125,7 @@ extension AppModel {
             guard self.document.generation == generation, self.lsp === link else {
                 await link.close()
                 if self.lsp === link { self.installLSP(nil) }
+                return
             }
         }
     }
