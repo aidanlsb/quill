@@ -169,13 +169,14 @@ struct QuillTheme {
         return font.isFixedPitch ? font : monoFont
     }
 
-    /// Table lines do not wrap. A wide row clips at the column instead of breaking the grid.
+    /// A row wider than the column wraps like any other line. Clipping hid the
+    /// end of the row and let the caret walk off the right edge of the column.
     @MainActor
     func tableParagraphStyle() -> NSParagraphStyle {
         let para = NSMutableParagraphStyle()
         para.lineHeightMultiple = lineHeight
         para.paragraphSpacing = 0
-        para.lineBreakMode = .byClipping
+        para.lineBreakMode = .byWordWrapping
         para.allowsDefaultTighteningForTruncation = false
         return para
     }

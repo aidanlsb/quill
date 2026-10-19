@@ -290,7 +290,7 @@ extension VimTextView {
         drawDirectoryHeader(style.header)
         var lastMaxY = textContainerOrigin.y
         for (index, line) in style.lines.enumerated() where index < engine.buffer.lineCount {
-            let utf16 = engine.buffer.lineStarts[index]
+            let utf16 = engine.buffer.line(index).start
             guard let box = directoryLineBox(at: utf16) else { continue }
             lastMaxY = max(lastMaxY, box.row.maxY)
             guard let symbol = line.symbolName else { continue }

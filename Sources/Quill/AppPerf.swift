@@ -143,7 +143,7 @@ enum AppPerf {
         let typicalText = sample(lines: 3_000)
         let typical = host(typicalText)
         typical.view.syncFromEngine()
-        let at = typical.view.engine.buffer.lineStarts[2_000]
+        let at = typical.view.engine.buffer.line(2_000).start
         typical.view.engine.moveCursor(to: at)
         typical.view.syncFromEngine()
         typical.view.engine.mode = .insert
