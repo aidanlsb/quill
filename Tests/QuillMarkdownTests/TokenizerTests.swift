@@ -234,6 +234,35 @@ final class TokenizerTests: XCTestCase {
         }
     }
 
+    func testListHangPrefix() {
+        XCTAssertEqual(MarkdownTokenizer.listHangPrefixUTF16("- item"), 2)
+        XCTAssertEqual(MarkdownTokenizer.listHangPrefixUTF16("* item"), 2)
+        XCTAssertEqual(MarkdownTokenizer.listHangPrefixUTF16("+ item"), 2)
+        XCTAssertEqual(MarkdownTokenizer.listHangPrefixUTF16("1. item"), 3)
+        XCTAssertEqual(MarkdownTokenizer.listHangPrefixUTF16("12. item"), 4)
+        XCTAssertEqual(MarkdownTokenizer.listHangPrefixUTF16("- [ ] item"), 6)
+        XCTAssertEqual(MarkdownTokenizer.listHangPrefixUTF16("- [x] item"), 6)
+        XCTAssertEqual(MarkdownTokenizer.listHangPrefixUTF16("- [X] item"), 6)
+        XCTAssertEqual(MarkdownTokenizer.listHangPrefixUTF16("* [ ] item"), 6)
+        XCTAssertEqual(MarkdownTokenizer.listHangPrefixUTF16("1. [x] item"), 7)
+        XCTAssertEqual(MarkdownTokenizer.listHangPrefixUTF16("  - nested"), 4)
+        XCTAssertEqual(MarkdownTokenizer.listHangPrefixUTF16("    * nested"), 6)
+        XCTAssertEqual(MarkdownTokenizer.listHangPrefixUTF16("\t- nested"), 3)
+        XCTAssertEqual(MarkdownTokenizer.listHangPrefixUTF16("- [ ]"), 5)
+        XCTAssertEqual(MarkdownTokenizer.listHangPrefixUTF16("- [x]"), 5)
+        XCTAssertEqual(MarkdownTokenizer.listHangPrefixUTF16("- [y] item"), 2)
+        XCTAssertEqual(MarkdownTokenizer.listHangPrefixUTF16("- see [x] later"), 2)
+        XCTAssertEqual(MarkdownTokenizer.listHangPrefixUTF16("- café"), 2)
+        XCTAssertNil(MarkdownTokenizer.listHangPrefixUTF16("plain"))
+        XCTAssertNil(MarkdownTokenizer.listHangPrefixUTF16("-item"))
+        XCTAssertNil(MarkdownTokenizer.listHangPrefixUTF16("1.item"))
+        XCTAssertNil(MarkdownTokenizer.listHangPrefixUTF16(""))
+        XCTAssertNil(MarkdownTokenizer.listHangPrefixUTF16("---"))
+        XCTAssertNil(MarkdownTokenizer.listHangPrefixUTF16("> - item"))
+        let fenced = MarkdownTokenizer(text: "```\n- [ ] item\n```\n")
+        XCTAssertFalse(fenced.spans.contains { $0.token == .listMarker })
+    }
+
     func testWikilinkUTF16() {
         let text = "[[note]]"
         XCTAssertEqual(WikilinkQuery.at(cursor: 4, in: text), "note")

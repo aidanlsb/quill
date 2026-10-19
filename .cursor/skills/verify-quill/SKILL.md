@@ -1,13 +1,13 @@
 ---
 name: verify-quill
-description: "Drive the Quill macOS editor and prove the caret, scrolling, directory buffer, picker prompt, command palette, and markdown tables. Use when changing the app target, TextKit layout, vim key handling, oil-style directories, the Telescope-style picker, the command palette, or markdown table styling. The harness is QuillAppTests plus the QUILL_SMOKE launch check, via Scripts/verify-quill."
+description: "Drive the Quill macOS editor and prove the caret, scrolling, directory buffer, picker prompt, command palette, markdown tables, and list hanging indents. Use when changing the app target, TextKit layout, vim key handling, oil-style directories, the Telescope-style picker, the command palette, markdown table styling, or list wrapping. The harness is QuillAppTests plus the QUILL_SMOKE launch check, via Scripts/verify-quill."
 ---
 
 # Verify Quill
 
 Quill is a native macOS markdown editor (SwiftUI + AppKit + TextKit 2). The user-facing surface is the app window and the `quill` launcher. Linux `swift test` does not compile the app and is not proof that the editor works.
 
-The harness is `Scripts/verify-quill`. It runs `swift test --filter QuillAppTests` (unless `--bin` is set and `QUILL_SKIP_APP_TESTS=1`), then launches the release binary with `QUILL_SMOKE=1`. QuillAppTests drives the caret, scrolling, a real temporary directory, the file and grep pickers, and markdown table styling through `keyDown`. The launch smoke checks that the app comes up, the editor is wired, one keystroke changes the buffer, and a resize does not crash. CI runs the tests in its `swift test` step and the launch smoke with `QUILL_SKIP_APP_TESTS=1`.
+The harness is `Scripts/verify-quill`. It runs `swift test --filter QuillAppTests` (unless `--bin` is set and `QUILL_SKIP_APP_TESTS=1`), then launches the release binary with `QUILL_SMOKE=1`. QuillAppTests drives the caret, scrolling, a real temporary directory, the file and grep pickers, markdown table styling, and list hanging indents through `keyDown`. The launch smoke checks that the app comes up, the editor is wired, one keystroke changes the buffer, and a resize does not crash. CI runs the tests in its `swift test` step and the launch smoke with `QUILL_SKIP_APP_TESTS=1`.
 
 ## Launch
 

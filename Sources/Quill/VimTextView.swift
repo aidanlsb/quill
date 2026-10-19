@@ -797,7 +797,7 @@ final class VimTextView: NSTextView {
                     afterSpans,
                     editAt: edit.range.lowerBound,
                     delta: delta
-                ) {
+                ) || Self.editRewritesListMarker(beforeSpans, edit) {
                     plainShift = false
                 }
                 if covered.isEmpty {
@@ -870,6 +870,21 @@ final class VimTextView: NSTextView {
         }
         imagePreviews.restoreSpacing(in: styleLimit)
         noteContentSizeChanged()
+    }
+
+    /// Replacing the bullet or the checkbox changes the hanging indent without
+    /// changing the token's range. A plain shift would keep the old width.
+    private static func editRewritesListMarker(_ spans: [TokenSpan], _ edit: TextEdit) -> Bool {
+        let start = edit.range.lowerBound
+        let end = edit.range.isEmpty ? start + 1 : edit.range.upperBound
+        for span in spans where span.token == .listMarker || span.token == .taskBox {
+            // The space after a checkbox is part of the hang and not its own token.
+            let upper = span.token == .taskBox ? span.range.upperBound + 1 : span.range.upperBound
+            if start < upper && end > span.range.lowerBound {
+                return true
+            }
+        }
+        return false
     }
 
     /// Lines that fit in the clip, plus a short margin, so a keystroke does not

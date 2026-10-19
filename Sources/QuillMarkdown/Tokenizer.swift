@@ -413,6 +413,12 @@ public struct MarkdownTokenizer: Equatable, Sendable {
         return true
     }
 
+    /// UTF-16 length of the list prefix a wrapped row should line up under.
+    /// Nil when `line` is not a list item. The source is not rewritten.
+    public static func listHangPrefixUTF16(_ line: String) -> Int? {
+        Scanner.listHangPrefixUTF16(line)
+    }
+
     /// UTF-16 span of `changed` lines. The caller restyles that span; later lines
     /// keep the attributes AppKit shifted with the edit.
     public func lineSpan(_ changed: Range<Int>) -> Range<Int> {
@@ -784,6 +790,32 @@ enum Scanner {
             return indent + digits + 2
         }
         return nil
+    }
+
+    /// UTF-16 length of the prefix a wrapped list line hangs under.
+    /// The marker, a task box written against that marker (`[ ]`, `[x]`, `[X]`),
+    /// and the single space or tab after the box. Nil when `line` is not a list item.
+    static func listHangPrefixUTF16(_ line: String) -> Int? {
+        guard let marker = listMarkerUTF16(line) else { return nil }
+        let units = line.utf16
+        guard let box = units.index(units.startIndex, offsetBy: marker, limitedBy: units.endIndex),
+              let mark = units.index(box, offsetBy: 1, limitedBy: units.endIndex),
+              let close = units.index(box, offsetBy: 2, limitedBy: units.endIndex),
+              close < units.endIndex
+        else { return marker }
+        let openUnit = units[box]
+        let markUnit = units[mark]
+        let closeUnit = units[close]
+        guard openUnit == 0x5B, closeUnit == 0x5D, markUnit == 0x20 || markUnit == 0x78 || markUnit == 0x58 else {
+            return marker
+        }
+        var end = marker + 3
+        let after = units.index(after: close)
+        if after < units.endIndex {
+            let unit = units[after]
+            if unit == 0x20 || unit == 0x09 { end += 1 }
+        }
+        return end
     }
 
     static func inline(_ line: String, lineStart: Int) -> [TokenSpan] {
