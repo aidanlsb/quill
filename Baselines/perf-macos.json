@@ -1,436 +1,436 @@
 {
   "version": 1,
   "lowerIsBetter": true,
-  "note": "Absolute medians from macos-26 run 39198744980 (VirtualMac2,1). This is the pull-request side, measured before origin/main's line-model merge and before the discarded warmup. The PR gate does not fail on this file. It builds the pull request and the base commit on the same runner and compares those. Refresh with Scripts/bench.sh --update-baseline. Thresholds live in Scripts/bench_compare.py.",
-  "recordedFrom": "https://github.com/aidanlsb/quill/actions/runs/39198744980",
-  "sha": "39f52b6d1965bb545f1389498394c7c102bae0bc",
+  "note": "Absolute medians from the base side of macos pull_request run 39200933604 (VirtualMac2,1), commit b94fa3f, which is the line-model editor plus image previews. The PR gate does not fail on this file. It builds the pull request and the base commit on the same runner and compares those. Refresh with Scripts/bench.sh --update-baseline. Thresholds live in Scripts/bench_compare.py.",
+  "recordedFrom": "https://github.com/aidanlsb/quill/actions/runs/39200933604",
+  "sha": "b94fa3f128f1c2dba22ca94cd0110125ef12ab87",
   "host": {
     "os": "Version 26.6.2 (Build 25G83)",
     "model": "VirtualMac2,1",
-    "name": "iad20-eo1210-16c67464-0651-45e3-9246-042ad53806d4-8ad728a6f02a.local"
+    "name": "sjc20-bb711-3cceef13-1464-4657-b519-14f2a3c2e9a3-c635f779e7f4.local"
   },
   "metrics": {
     "directoryColdMs": {
-      "median": 5.5684,
-      "p95": 6.82588,
-      "p99": 6.937656,
+      "median": 7.1727,
+      "p95": 9.65499,
+      "p99": 9.875638,
       "n": 3
     },
     "directoryMs": {
-      "median": 6.3301,
-      "p95": 9.4315,
-      "p99": 9.7861,
+      "median": 5.1802,
+      "p95": 6.0818,
+      "p99": 6.1681,
       "n": 5
     },
     "keyInsertEndMs": {
-      "median": 2.9767,
-      "p95": 3.4642,
-      "p99": 3.5071,
+      "median": 1.7575,
+      "p95": 2.0423,
+      "p99": 3.0006,
       "n": 20
     },
     "keyInsertMidMs": {
-      "median": 3.2286,
-      "p95": 4.0848,
-      "p99": 4.4678,
+      "median": 3.0969,
+      "p95": 4.9902,
+      "p99": 5.943,
       "n": 20
     },
     "keyInsertTopMs": {
-      "median": 4.0304,
-      "p95": 7.044,
-      "p99": 9.5421,
+      "median": 2.786,
+      "p95": 5.479,
+      "p99": 5.6488,
       "n": 20
     },
     "keyNormalEndMs": {
-      "median": 2.6049,
-      "p95": 3.0991,
-      "p99": 3.1305,
+      "median": 1.9609,
+      "p95": 2.2468,
+      "p99": 2.2548,
       "n": 20
     },
     "keyNormalMidMs": {
-      "median": 4.6187,
-      "p95": 5.0157,
-      "p99": 5.4856,
+      "median": 298.8315,
+      "p95": 386.0541,
+      "p99": 414.7481,
       "n": 20
     },
     "keyNormalTopMs": {
-      "median": 4.7305,
-      "p95": 6.883,
-      "p99": 8.0997,
+      "median": 301.1186,
+      "p95": 393.877,
+      "p99": 431.298,
       "n": 20
     },
     "launchToKeyMs": {
-      "median": 139.8995,
-      "p95": 187.49962,
-      "p99": 188.641124,
+      "median": 208.1352,
+      "p95": 293.54711999999995,
+      "p99": 308.112864,
       "n": 5
     },
     "motionDdMs": {
-      "median": 9.8933,
-      "p95": 10.2931,
-      "p99": 10.3007,
+      "median": 330.8268,
+      "p95": 359.2121,
+      "p99": 359.3609,
       "n": 4
     },
     "motionGFirstMs": {
-      "median": 0.8918,
-      "p95": 0.9890899999999999,
-      "p99": 0.9977379999999999,
+      "median": 233.8193,
+      "p95": 276.6539,
+      "p99": 280.46142,
       "n": 3
     },
     "motionGMs": {
-      "median": 0.7308,
-      "p95": 0.7818,
-      "p99": 0.7863,
+      "median": 141.207,
+      "p95": 142.4749,
+      "p99": 142.5876,
       "n": 2
     },
     "motionGgMs": {
-      "median": 0.742,
-      "p95": 0.7747,
-      "p99": 0.7776,
+      "median": 249.0629,
+      "p95": 262.0751,
+      "p99": 263.7238,
       "n": 2
     },
     "motionJMs": {
-      "median": 0.3259,
-      "p95": 0.9799,
-      "p99": 1.198,
+      "median": 6.4263,
+      "p95": 186.8789,
+      "p99": 396.3075,
       "n": 20
     },
     "motionKMs": {
-      "median": 0.9377,
-      "p95": 1.7844,
-      "p99": 1.9793,
+      "median": 260.6649,
+      "p95": 343.6651,
+      "p99": 349.7935,
       "n": 20
     },
     "motionRedoMs": {
-      "median": 8.9144,
-      "p95": 9.8462,
-      "p99": 9.9598,
+      "median": 301.2547,
+      "p95": 323.3073,
+      "p99": 323.8908,
       "n": 4
     },
     "motionSearchMs": {
-      "median": 41.6083,
-      "p95": 51.7746,
-      "p99": 52.5805,
+      "median": 725.373,
+      "p95": 758.0425,
+      "p99": 760.2641,
       "n": 3
     },
     "motionUndoMs": {
-      "median": 8.9646,
-      "p95": 10.9977,
-      "p99": 11.2791,
+      "median": 311.0238,
+      "p95": 345.9726,
+      "p99": 349.6554,
       "n": 4
     },
     "motionWMs": {
-      "median": 0.3321,
-      "p95": 0.694,
-      "p99": 0.8241,
+      "median": 0.5491,
+      "p95": 277.2407,
+      "p99": 373.3335,
       "n": 20
     },
     "open1kMs": {
-      "median": 2.5815,
-      "p95": 3.125,
-      "p99": 3.1317,
+      "median": 2.9782,
+      "p95": 4.1728,
+      "p99": 4.411,
       "n": 5
     },
     "open500kColdMs": {
-      "median": 1179.9525,
-      "p95": 1396.55775,
-      "p99": 1415.81155,
+      "median": 856.2418,
+      "p95": 947.4270100000001,
+      "p99": 955.5323620000001,
       "n": 3
     },
     "open500kMs": {
-      "median": 1391.2772,
-      "p95": 1445.8521,
-      "p99": 1450.7032,
+      "median": 1014.2886,
+      "p95": 1018.557,
+      "p99": 1018.9364,
       "n": 2
     },
     "open50kMs": {
-      "median": 133.7782,
-      "p95": 145.8692,
-      "p99": 146.9439,
+      "median": 137.9425,
+      "p95": 145.7449,
+      "p99": 146.4384,
       "n": 3
     },
     "openHeavyMs": {
-      "median": 8.4199,
-      "p95": 9.0164,
-      "p99": 9.0695,
+      "median": 7.98,
+      "p95": 10.3121,
+      "p99": 10.5495,
       "n": 3
     },
     "pickerSfColdMs": {
-      "median": 127.7387,
-      "p95": 155.91752,
-      "p99": 158.422304,
+      "median": 180.9393,
+      "p95": 266.97102,
+      "p99": 274.618284,
       "n": 3
     },
     "pickerSfKeyMs": {
-      "median": 1.3491,
-      "p95": 1.5114,
-      "p99": 1.5322,
+      "median": 1.4675,
+      "p95": 2.2854,
+      "p99": 2.4014,
       "n": 5
     },
     "pickerSfMs": {
-      "median": 51.5253,
-      "p95": 54.9106,
-      "p99": 54.9571,
+      "median": 55.9155,
+      "p95": 61.7781,
+      "p99": 62.2286,
       "n": 5
     },
     "pickerSgColdMs": {
-      "median": 305.538,
-      "p95": 823.12062,
-      "p99": 869.127964,
+      "median": 198.9903,
+      "p95": 231.93147,
+      "p99": 234.85957399999998,
       "n": 3
     },
     "pickerSgMs": {
-      "median": 155.843,
-      "p95": 169.6875,
-      "p99": 171.0988,
+      "median": 195.6832,
+      "p95": 234.0925,
+      "p99": 241.3723,
       "n": 5
     },
     "resizeMs": {
-      "median": 5.3667,
-      "p95": 9.3876,
-      "p99": 10.1804,
+      "median": 9.4856,
+      "p95": 15.7782,
+      "p99": 16.9051,
       "n": 6
     },
     "restyleProseMs": {
-      "median": 0.2125,
-      "p95": 0.2415,
-      "p99": 0.2607,
+      "median": 0.1786,
+      "p95": 0.3761,
+      "p99": 0.4289,
       "n": 16
     },
     "restyleTableMs": {
-      "median": 0.3689,
-      "p95": 0.456,
-      "p99": 0.5249,
+      "median": 0.465,
+      "p95": 1.073,
+      "p99": 1.139,
       "n": 16
     },
     "rssPeakMb": {
-      "median": 304.8906,
-      "p95": 305.32656000000003,
-      "p99": 305.365312,
+      "median": 1780.7969,
+      "p95": 1783.90469,
+      "p99": 1784.1809380000002,
       "n": 3
     },
     "rssSteadyMb": {
-      "median": 88.4219,
-      "p95": 88.4344,
-      "p99": 88.4369,
+      "median": 89.5,
+      "p95": 89.5,
+      "p99": 89.5,
       "n": 5
     },
     "scrollMs": {
-      "median": 0.3575,
-      "p95": 0.9161,
-      "p99": 0.9713,
+      "median": 166.9469,
+      "p95": 198.8799,
+      "p99": 203.9603,
       "n": 20
     }
   },
   "noise": {
     "directoryColdMs": {
-      "spread": 1.447,
-      "spreadRatio": 0.2598592055168451,
-      "min": 5.5186,
-      "max": 6.9656
+      "spread": 3.7445999999999993,
+      "spreadRatio": 0.5220628215316407,
+      "min": 6.1862,
+      "max": 9.9308
     },
     "directoryMs": {
-      "spread": 2.7416,
-      "spreadRatio": 0.43310532219080267,
-      "min": 4.8965,
-      "max": 7.6381
+      "spread": 1.8038999999999996,
+      "spreadRatio": 0.3482297980772942,
+      "min": 4.4819,
+      "max": 6.2858
     },
     "keyInsertEndMs": {
-      "spread": 0.8636000000000004,
-      "spreadRatio": 0.29011993146773285,
-      "min": 2.3524,
-      "max": 3.216
+      "spread": 0.13059999999999983,
+      "spreadRatio": 0.07431009957325736,
+      "min": 1.7212,
+      "max": 1.8518
     },
     "keyInsertMidMs": {
-      "spread": 1.1447000000000003,
-      "spreadRatio": 0.3545499597348697,
-      "min": 3.2196,
-      "max": 4.3643
+      "spread": 1.0621,
+      "spreadRatio": 0.34295585908489135,
+      "min": 2.8477,
+      "max": 3.9098
     },
     "keyInsertTopMs": {
-      "spread": 0.5894999999999997,
-      "spreadRatio": 0.14626339817387843,
-      "min": 3.7369,
-      "max": 4.3264
+      "spread": 0.18699999999999983,
+      "spreadRatio": 0.06712132089016505,
+      "min": 2.6594,
+      "max": 2.8464
     },
     "keyNormalEndMs": {
-      "spread": 0.7576,
-      "spreadRatio": 0.2908365004414757,
-      "min": 2.3346,
-      "max": 3.0922
+      "spread": 0.2036,
+      "spreadRatio": 0.10382987403743178,
+      "min": 1.8419,
+      "max": 2.0455
     },
     "keyNormalMidMs": {
-      "spread": 0.9904000000000006,
-      "spreadRatio": 0.21443263255894532,
-      "min": 3.8947,
-      "max": 4.8851
+      "spread": 62.47890000000001,
+      "spreadRatio": 0.20907735630279944,
+      "min": 294.108,
+      "max": 356.5869
     },
     "keyNormalTopMs": {
-      "spread": 1.1520000000000001,
-      "spreadRatio": 0.24352605432829513,
-      "min": 4.546,
-      "max": 5.698
+      "spread": 65.88620000000003,
+      "spreadRatio": 0.21880481644109673,
+      "min": 292.9756,
+      "max": 358.8618
     },
     "launchToKeyMs": {
-      "spread": 68.25160000000001,
-      "spreadRatio": 0.4878616435369677,
-      "min": 120.6749,
-      "max": 188.9265
+      "spread": 112.41810000000001,
+      "spreadRatio": 0.5401205562538197,
+      "min": 199.3362,
+      "max": 311.7543
     },
     "motionDdMs": {
-      "spread": 1.4862000000000002,
-      "spreadRatio": 0.1502228781094276,
-      "min": 8.4961,
-      "max": 9.9823
+      "spread": 89.2842,
+      "spreadRatio": 0.2698820047227129,
+      "min": 296.8463,
+      "max": 386.1305
     },
     "motionGFirstMs": {
-      "spread": 0.11560000000000004,
-      "spreadRatio": 0.1296254765642521,
-      "min": 0.8843,
-      "max": 0.9999
+      "spread": 87.74189999999999,
+      "spreadRatio": 0.37525516499279565,
+      "min": 193.6714,
+      "max": 281.4133
     },
     "motionGMs": {
-      "spread": 0.7394000000000001,
-      "spreadRatio": 1.011767925561029,
-      "min": 0.6652,
-      "max": 1.4046
+      "spread": 36.86590000000001,
+      "spreadRatio": 0.26107700043199,
+      "min": 121.7936,
+      "max": 158.6595
     },
     "motionGgMs": {
-      "spread": 1.1094,
-      "spreadRatio": 1.4951482479784366,
-      "min": 0.5983,
-      "max": 1.7077
+      "spread": 53.814599999999984,
+      "spreadRatio": 0.2160683104549091,
+      "min": 243.5269,
+      "max": 297.3415
     },
     "motionJMs": {
-      "spread": 0.07750000000000001,
-      "spreadRatio": 0.23780300705737958,
-      "min": 0.2762,
-      "max": 0.3537
+      "spread": 0.7108000000000008,
+      "spreadRatio": 0.11060797037175368,
+      "min": 6.084,
+      "max": 6.7948
     },
     "motionKMs": {
-      "spread": 0.48029999999999995,
-      "spreadRatio": 0.512210728377946,
-      "min": 0.6308,
-      "max": 1.1111
+      "spread": 61.88459999999998,
+      "spreadRatio": 0.23741056045520506,
+      "min": 248.9173,
+      "max": 310.8019
     },
     "motionRedoMs": {
-      "spread": 3.7165000000000017,
-      "spreadRatio": 0.4169097191061655,
-      "min": 8.5781,
-      "max": 12.2946
+      "spread": 75.03840000000002,
+      "spreadRatio": 0.2490862383225889,
+      "min": 290.7938,
+      "max": 365.8322
     },
     "motionSearchMs": {
-      "spread": 4.552099999999996,
-      "spreadRatio": 0.10940365263661327,
-      "min": 38.1559,
-      "max": 42.708
+      "spread": 75.41559999999993,
+      "spreadRatio": 0.10396802748379098,
+      "min": 657.6339,
+      "max": 733.0495
     },
     "motionUndoMs": {
-      "spread": 3.703000000000001,
-      "spreadRatio": 0.41306918323182307,
-      "min": 8.7244,
-      "max": 12.4274
+      "spread": 85.4812,
+      "spreadRatio": 0.27483813135843627,
+      "min": 302.8196,
+      "max": 388.3008
     },
     "motionWMs": {
-      "spread": 0.07279999999999998,
-      "spreadRatio": 0.2192110809996988,
-      "min": 0.2972,
-      "max": 0.37
+      "spread": 0.18689999999999996,
+      "spreadRatio": 0.34037515935166623,
+      "min": 0.5303,
+      "max": 0.7172
     },
     "open1kMs": {
-      "spread": 0.31590000000000007,
-      "spreadRatio": 0.12237071470075539,
-      "min": 2.3573,
-      "max": 2.6732
+      "spread": 0.8628,
+      "spreadRatio": 0.28970519105499964,
+      "min": 2.4577,
+      "max": 3.3205
     },
     "open500kColdMs": {
-      "spread": 255.7853,
-      "spreadRatio": 0.21677592953953653,
-      "min": 1164.8397,
-      "max": 1420.625
+      "spread": 252.53240000000005,
+      "spreadRatio": 0.2949311748153384,
+      "min": 705.0263,
+      "max": 957.5587
     },
     "open500kMs": {
-      "spread": 203.16329999999994,
-      "spreadRatio": 0.14602647121651957,
-      "min": 1272.6337,
-      "max": 1475.797
+      "spread": 87.25670000000002,
+      "spreadRatio": 0.08602748764010561,
+      "min": 968.9316,
+      "max": 1056.1883
     },
     "open50kMs": {
-      "spread": 45.21890000000002,
-      "spreadRatio": 0.33801396640110287,
-      "min": 130.2479,
-      "max": 175.4668
+      "spread": 47.0213,
+      "spreadRatio": 0.34087608967504573,
+      "min": 94.5728,
+      "max": 141.5941
     },
     "openHeavyMs": {
-      "spread": 7.635900000000001,
-      "spreadRatio": 0.9068872551930547,
-      "min": 8.2351,
-      "max": 15.871
+      "spread": 4.070299999999999,
+      "spreadRatio": 0.5100626566416038,
+      "min": 7.6412,
+      "max": 11.7115
     },
     "pickerSfColdMs": {
-      "spread": 51.54129999999999,
-      "spreadRatio": 0.40349009344857895,
-      "min": 107.5072,
-      "max": 159.0485
+      "spread": 133.24620000000002,
+      "spreadRatio": 0.7364138139143902,
+      "min": 143.2839,
+      "max": 276.5301
     },
     "pickerSfKeyMs": {
-      "spread": 0.5281,
-      "spreadRatio": 0.39144614928470833,
-      "min": 1.3413,
-      "max": 1.8694
+      "spread": 0.19579999999999997,
+      "spreadRatio": 0.1334241908006814,
+      "min": 1.2982,
+      "max": 1.494
     },
     "pickerSfMs": {
-      "spread": 25.4144,
-      "spreadRatio": 0.4932411844278442,
-      "min": 46.8939,
-      "max": 72.3083
+      "spread": 20.1381,
+      "spreadRatio": 0.36015237277677925,
+      "min": 47.1591,
+      "max": 67.2972
     },
     "pickerSgColdMs": {
-      "spread": 648.5767000000001,
-      "spreadRatio": 2.122736615412813,
-      "min": 232.0531,
-      "max": 880.6298
+      "spread": 49.026700000000005,
+      "spreadRatio": 0.2463773359806986,
+      "min": 186.5649,
+      "max": 235.5916
     },
     "pickerSgMs": {
-      "spread": 43.740999999999985,
-      "spreadRatio": 0.28067349832844585,
-      "min": 139.8564,
-      "max": 183.5974
+      "spread": 56.3125,
+      "spreadRatio": 0.28777380991316576,
+      "min": 149.8241,
+      "max": 206.1366
     },
     "resizeMs": {
-      "spread": 1.2388000000000003,
-      "spreadRatio": 0.230830864404569,
-      "min": 4.26,
-      "max": 5.4988
+      "spread": 3.4221999999999992,
+      "spreadRatio": 0.3607784431137724,
+      "min": 6.091,
+      "max": 9.5132
     },
     "restyleProseMs": {
-      "spread": 0.0373,
-      "spreadRatio": 0.17552941176470588,
-      "min": 0.2087,
-      "max": 0.246
+      "spread": 0.05479999999999999,
+      "spreadRatio": 0.30683090705487115,
+      "min": 0.1686,
+      "max": 0.2234
     },
     "restyleTableMs": {
-      "spread": 0.05939999999999995,
-      "spreadRatio": 0.16101924640824058,
-      "min": 0.3531,
-      "max": 0.4125
+      "spread": 0.15139999999999998,
+      "spreadRatio": 0.3255913978494623,
+      "min": 0.4527,
+      "max": 0.6041
     },
     "rssPeakMb": {
-      "spread": 5.6875,
-      "spreadRatio": 0.01865423204257527,
-      "min": 299.6875,
-      "max": 305.375
+      "spread": 4.406199999999899,
+      "spreadRatio": 0.0024742855291358034,
+      "min": 1779.8438,
+      "max": 1784.25
     },
     "rssSteadyMb": {
-      "spread": 1.4218999999999937,
-      "spreadRatio": 0.016080857796541285,
-      "min": 87.8281,
-      "max": 89.25
+      "spread": 0.25,
+      "spreadRatio": 0.002793296089385475,
+      "min": 89.4844,
+      "max": 89.7344
     },
     "scrollMs": {
-      "spread": 0.07900000000000001,
-      "spreadRatio": 0.22097902097902103,
-      "min": 0.3029,
-      "max": 0.3819
+      "spread": 48.323200000000014,
+      "spreadRatio": 0.28945251454204907,
+      "min": 160.2645,
+      "max": 208.5877
     }
   }
 }

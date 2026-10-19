@@ -52,7 +52,7 @@ p95 is gated when a run kept at least 5 samples. p99 is gated at 15 samples. One
 
 Floors live in `Scripts/bench_compare.py`. They exist so noise does not fail the job, while a real editing regression still does. A floor is about three times the spread of run medians (`max - min`) measured on the macOS runner. If a later job shows a larger spread, raise that floor in the same change and say why.
 
-The numbers below are from run `39198744980` on `macos-26` (host `VirtualMac2,1`, macOS 26.6.2), three suite processes and five launches, before the discarded warmup existed. `QUILL_PERF` on that runner is not this gate: an earlier probe printed `launchToKeyMs` around 237ms, and the bench's own five launches were 121, 124, 140, 182, and 189ms (spread 68ms). Keystrokes that include the text view landed around 3–6ms, not a fraction of a millisecond.
+The numbers below are from run `39198744980` on `macos-26` (host `VirtualMac2,1`, macOS 26.6.2), three suite processes and five launches, before the discarded warmup existed. `QUILL_PERF` on that runner is not this gate: an earlier probe printed `launchToKeyMs` around 237ms, and the bench's own five launches were 121, 124, 140, 182, and 189ms (spread 68ms). Insert keystrokes that include the text view landed around 3–6ms. After the line-model merge, normal-mode `x` at the top and middle of the 500k-line note is about 300ms; identical trees on run `39200933604` moved that median by about 1ms, and moved motion p95 by 50–90ms.
 
 | Metric | Median floor | Spread that set it |
 |---|---|---|
@@ -62,7 +62,8 @@ The numbers below are from run `39198744980` on `macos-26` (host `VirtualMac2,1`
 | Open 500k | 610ms steady, 770ms cold | 203ms steady, 256ms cold. |
 | Open heavy note | 24ms | 7.6ms. |
 | Keystrokes | 1.8–3.5ms | 0.6–1.2ms. The timed section is the engine plus the text view. |
-| `j` / `w` / scroll / restyle | 0.25–0.40ms | Under 0.1ms. |
+| `j` / `w` median | 0.40ms | The median stays under a millisecond. |
+| `j` / `w` / `k` p95 and p99 | 190–430ms | On the line-model editor the percentile is a layout hitch around 150–300ms. Identical builds on run 39200933604 moved that p95 by 50–90ms, so the floor is three times that spread. The median of `k` stays on its own row below. |
 | `k`, `G` / `gg`, search, `dd` / undo / redo | 1.5–14ms | Up to 4.6ms. The first `G` stayed at 20ms; this run's first `G` only spread by 0.1ms. |
 | File picker | 80ms steady, 160ms cold, 1.6ms per key | 25ms, 52ms, and 0.5ms. |
 | Grep picker | 140ms steady, 2000ms cold | 44ms steady. The cold sample spread by 649ms (233–881ms) because the first process pays to read the fixture. |
