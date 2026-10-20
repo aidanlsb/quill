@@ -359,8 +359,16 @@ check_cli_windows() {
     local count
     count="$(bundle_pids | wc -l | tr -d ' ')"
     if [[ "$count" != "1" ]]; then
+      # A second Quill that finds the socket calls exit(0). Count again after
+      # that handoff instead of failing on the process that is already exiting.
+      echo "verify-quill: warm $label saw $count processes" >&2
+      ps -axww -o pid=,command= | awk -v needle="$app_bin" 'index($0, needle) { print }' >&2 || true
+      sleep 0.4
+      count="$(bundle_pids | wc -l | tr -d ' ')"
+    fi
+    if [[ "$count" != "1" ]]; then
       echo "verify-quill: warm $label started another process ($count)" >&2
-      ps -ax -o pid=,command= | awk 'index($0, "Quill") { print }' >&2 || true
+      ps -axww -o pid=,command= | awk -v needle="$app_bin" 'index($0, needle) { print }' >&2 || true
       return 1
     fi
     echo "verify-quill: cli warm $label window pid $pid"

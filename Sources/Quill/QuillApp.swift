@@ -30,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private var hostedWindow: NSWindow?
     private let handoff = HandoffBox()
     private var instance: InstanceServer?
+    private var termSource: DispatchSourceSignal?
     static weak var current: AppDelegate?
 
     var model: AppModel {
@@ -120,6 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        watchTerminationSignal()
         StartupProbe.mark("didFinish")
         installURLHandler()
         model.consumeLaunchArguments(Array(CommandLine.arguments.dropFirst()), immediate: true)
@@ -222,6 +224,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     private func show(_ window: NSWindow) {
         AppActivation.activate(window)
+    }
+
+    /// The runner that starts the CLI often has SIGTERM ignored, and
+    /// `posix_spawn` keeps that disposition. `kill` then cannot quit the editor.
+    private func watchTerminationSignal() {
+        signal(SIGTERM, SIG_IGN)
+        let source = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        source.setEventHandler {
+            // The main queue is the main thread. assumeIsolated hops onto the main actor.
+            MainActor.assumeIsolated {
+                NSApplication.shared.terminate(nil)
+            }
+        }
+        source.resume()
+        termSource = source
     }
 
     /// `QUILL_SOCKET` in the environment, or the same path passed on argv.
@@ -361,39 +378,6 @@ enum AppActivation {
             window.orderFrontRegardless()
             if !app.isActive {
                 FrontProcess.makeCurrentFront()
-            }
-        }
-        scheduleForegroundRetry()
-    }
-
-    /// `NSWorkspace.openApplication` on a posix_spawn'd bundle starts a second
-    /// process: Launch Services does not treat that pid as the running instance,
-    /// even with `createsNewApplicationInstance = false`. The duplicate hands
-    /// off over the socket and exits. Retry the foreground request instead.
-    private static var foregroundRetries = 0
-
-    private static func scheduleForegroundRetry() {
-        guard foregroundRetries == 0 else { return }
-        guard !NSApplication.shared.isActive else { return }
-        guard ProcessInfo.processInfo.environment["QUILL_FOREGROUND"] == "1" else { return }
-        foregroundRetries = 1
-        kickForeground(8)
-    }
-
-    private static func kickForeground(_ left: Int) {
-        DispatchQueue.main.async {
-            // The main queue is the main thread. assumeIsolated hops onto the main actor.
-            MainActor.assumeIsolated {
-                let app = NSApplication.shared
-                if app.isActive || left == 0 {
-                    foregroundRetries = 0
-                    return
-                }
-                app.activate(ignoringOtherApps: true)
-                _ = NSRunningApplication.current.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
-                FrontProcess.makeCurrentFront()
-                (app.keyWindow ?? app.mainWindow)?.makeKeyAndOrderFront(nil)
-                kickForeground(left - 1)
             }
         }
     }
