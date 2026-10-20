@@ -69,7 +69,8 @@ enum DetachedSpawn {
             var status: Int32 = 0
             let waited = waitpid(pid, &status, 0)
             if waited == pid {
-                if WIFEXITED(status) { return Int32(WEXITSTATUS(status)) }
+                // wait.h WIFEXITED / WEXITSTATUS. Swift does not import those macros.
+                if status & 0x7f == 0 { return (status >> 8) & 0xff }
                 return 1
             }
             if errno == EINTR { continue }
@@ -80,7 +81,9 @@ enum DetachedSpawn {
     /// `responsibility_spawnattrs_setdisclaim` is not in the public SDK. When it
     /// is present, file-access prompts name Quill rather than the terminal.
     private static func disclaim(_ attrs: inout posix_spawnattr_t?) {
-        guard let symbol = dlsym(RTLD_DEFAULT, "responsibility_spawnattrs_setdisclaim") else { return }
+        // RTLD_DEFAULT is ((void *) -2). The macro is not imported into Swift.
+        guard let image = UnsafeMutableRawPointer(bitPattern: -2),
+              let symbol = dlsym(image, "responsibility_spawnattrs_setdisclaim") else { return }
         typealias Disclaim = @convention(c) (UnsafeMutablePointer<posix_spawnattr_t?>, Int32) -> Int32
         let function = unsafeBitCast(symbol, to: Disclaim.self)
         _ = function(&attrs, 1)

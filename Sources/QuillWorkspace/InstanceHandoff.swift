@@ -31,7 +31,8 @@ public enum InstanceSocket {
         var buffer = [CChar](repeating: 0, count: needed)
         let wrote = confstr(_CS_DARWIN_USER_TEMP_DIR, &buffer, needed)
         guard wrote > 1 else { return "/tmp/" }
-        let text = String(cString: buffer)
+        let bytes = buffer.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }
+        let text = String(decoding: bytes, as: UTF8.self)
         return text.hasSuffix("/") ? text : text + "/"
     }
     #endif
