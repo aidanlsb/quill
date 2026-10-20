@@ -7,21 +7,21 @@ import QuillVim
 import QuillWorkspace
 
 extension AppModel {
-    func open(url: URL) {
+    func open(url: URL, immediate: Bool = false) {
         if let target = LaunchRequest.target(from: url) {
-            openTarget(target)
+            openTarget(target, immediate: immediate)
             return
         }
-        openTarget(LaunchTarget(path: url.path))
+        openTarget(LaunchTarget(path: url.path), immediate: immediate)
     }
 
     /// Last parsed launch argument wins. `open` delivers `quill://` URLs separately.
-    func consumeLaunchArguments(_ arguments: [String]) {
+    func consumeLaunchArguments(_ arguments: [String], immediate: Bool = false) {
         guard let target = LaunchRequest.parse(arguments).last else { return }
-        openTarget(target)
+        openTarget(target, immediate: immediate)
     }
 
-    func openTarget(_ target: LaunchTarget) {
+    func openTarget(_ target: LaunchTarget, immediate: Bool = false) {
         let path = LaunchRequest.standardized(target.path)
         if LaunchRequest.sameFile(open: document.url?.path, isDirectory: document.isDirectory, target: path) {
             jump(to: target)
@@ -33,7 +33,7 @@ extension AppModel {
         case .prompt(let text):
             presentUnsaved(.open(url), message: text)
         case .allow:
-            beginOpen(url)
+            beginOpen(url, immediate: immediate)
         }
     }
 
@@ -304,11 +304,24 @@ extension AppModel {
         open(url: snap.directory.appendingPathComponent(parsed.name))
     }
 
-    func beginOpen(_ url: URL) {
+    func beginOpen(_ url: URL, immediate: Bool = false) {
+        let began = StartupProbe.begin("openSyncMs")
+        let installed: Bool
         do {
-            if try document.openSynchronously(url) { return }
+            installed = try document.openSynchronously(url)
         } catch {
+            StartupProbe.end("openSyncMs", began)
             message = error.localizedDescription
+            return
+        }
+        StartupProbe.end("openSyncMs", began)
+        if installed { return }
+        if immediate {
+            do {
+                try document.readImmediately(url)
+            } catch {
+                message = error.localizedDescription
+            }
             return
         }
         Task {

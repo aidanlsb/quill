@@ -4,7 +4,7 @@
 
 ## Sub-features
 
-- `launch` records milliseconds from process start to `applicationDidFinishLaunching`, and to the first key window when one appears.
+- `launch` records milliseconds from process start to `applicationDidFinishLaunching`, to the first key window when one appears, and to the first editable frame (`launchToEditableMs`). That frame has been drawn and has accepted a key. `Scripts/startup-bench.py` repeats the cold launch and `quill <file.md>` and prints medians.
 - `style` records a full tokenize of 10k markdown lines and one trailing-character `apply` on the cached lines of that same document.
 - `edit` records applying 20 insert keystrokes and 40 `j` motions on a real text view, plus one forced full TextKit layout of that document. An insert restyles the edited lines. Opening the buffer (`textSyncMs`) tokenizes and styles the visible lines, not every line. `j` does not restyle and does not lay out the whole document. A keystroke does not resync the buffer, request hover, or look up a language server.
 - `picker` records ignore loading plus the file walk, and the mean of three query keystrokes over 400 names.

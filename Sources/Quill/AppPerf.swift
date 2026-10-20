@@ -27,8 +27,13 @@ enum AppPerf {
         started = true
         let finish = QuillTrace.millisSinceStart()
         let deadline = Date().addingTimeInterval(1.5)
-        while keyWindowMs == nil, Date() < deadline {
-            RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.05))
+        while Date() < deadline {
+            let editable = StartupProbe.editableMilliseconds != nil
+            if keyWindowMs != nil, editable { break }
+            StartupUI.considerReady()
+            let ready = StartupProbe.editableMilliseconds != nil
+            if keyWindowMs != nil, ready { break }
+            RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.02))
         }
         run(launchToFinishMs: finish)
         exit(0)
@@ -37,6 +42,7 @@ enum AppPerf {
     private static func run(launchToFinishMs: Double) {
         emit("launchToFinishMs", launchToFinishMs)
         emit("launchToKeyMs", keyWindowMs ?? -1)
+        emit("launchToEditableMs", StartupProbe.editableMilliseconds ?? -1)
 
         let big = sample(lines: 10_000)
         let full = millis {

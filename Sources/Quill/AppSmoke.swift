@@ -21,7 +21,7 @@ enum AppSmoke {
     static func noteAttachedModel() {
         trace.update {
             $0.modelAttached = true
-            if $0.modelSource == "none" { $0.modelSource = "swiftui" }
+            if $0.modelSource == "none" { $0.modelSource = "appkit" }
         }
     }
     @MainActor
@@ -36,7 +36,7 @@ enum AppSmoke {
         let resolved = model ?? AppModel()
         trace.update {
             $0.modelAttached = true
-            if $0.modelSource == "none" { $0.modelSource = model == nil ? "synthesized" : "swiftui" }
+            if $0.modelSource == "none" { $0.modelSource = model == nil ? "synthesized" : "appkit" }
         }
         runIfRequested(model: resolved)
     }

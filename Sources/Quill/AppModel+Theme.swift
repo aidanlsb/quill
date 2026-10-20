@@ -3,22 +3,25 @@ import AppKit
 extension AppModel {
     convenience init() {
         let home = FileManager.default.homeDirectoryForCurrentUser
+        let configBegan = StartupProbe.begin("configMs")
         let loaded = QuillConfig.loadReporting()
+        StartupProbe.end("configMs", configBegan)
+        let memoryBegan = StartupProbe.begin("themeMemoryMs")
         let choice = ThemeChoice.resolved(
             config: loaded.config.theme,
             remembered: ThemeMemory.load(from: ThemeMemory.url(home: home))
         )
+        StartupProbe.end("themeMemoryMs", memoryBegan)
         self.init(
             config: loaded.config,
             home: home,
             notice: loaded.error,
+            themeChoice: choice,
             isDark: {
                 let appearance = NSApp?.effectiveAppearance ?? NSAppearance.currentDrawing()
                 return appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             }
         )
-        themeChoice = choice
-        theme = makeTheme(choice)
         session.appearanceObserver = NSApplication.shared.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
             Task { @MainActor [weak self] in
                 guard let self, self.themeChoice == .system else { return }

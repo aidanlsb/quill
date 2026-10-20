@@ -99,10 +99,13 @@ struct QuillTheme {
         scheme: ThemeChoice = .system,
         systemIsDark: Bool? = nil
     ) -> QuillTheme {
+        let themeBegan = StartupProbe.begin("themeMs")
+        defer { StartupProbe.end("themeMs", themeBegan) }
         let appearance = NSApp?.effectiveAppearance ?? NSAppearance.currentDrawing()
         let detected = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let dark = scheme.isDark(systemIsDark: systemIsDark ?? detected)
         let size = CGFloat(QuillMetrics.fontSize(fontSize))
+        let fontsBegan = StartupProbe.begin("fontsMs")
         let body = QuillMetrics.bodyFont(family: fontFamily, size: size)
         let mono = QuillMetrics.monoFont(ofSize: size * QuillMetrics.monoScale)
         let headings = QuillMetrics.headingScale.map { scale in
@@ -112,8 +115,11 @@ struct QuillTheme {
         let directorySize = QuillMetrics.directoryFontSize(body: size)
         let directoryFont = QuillMetrics.monoFont(ofSize: directorySize)
         let directoryHeaderFont = QuillMetrics.monoFont(ofSize: max(10, directorySize - 1))
+        StartupProbe.end("fontsMs", fontsBegan)
+        let glyphBegan = StartupProbe.begin("glyphMs")
         let sample = "abcdefghijklmnopqrstuvwxyz" as NSString
         let average = sample.size(withAttributes: [.font: body]).width / 26
+        StartupProbe.end("glyphMs", glyphBegan)
         return QuillTheme(
             bodyFont: body,
             monoFont: mono,

@@ -2,7 +2,7 @@
 
 A native macOS markdown editor for long-form writing. It opens and saves plain `.md` files in place, speaks vim motions through a from-scratch engine, and keeps YAML frontmatter and `[[wikilinks]]` untouched.
 
-There is no WKWebView, Electron, or JavaScript. The editor is SwiftUI + AppKit on **TextKit 2 / `NSTextView`**.
+There is no WKWebView, Electron, or JavaScript. The editor is AppKit on **TextKit 2 / `NSTextView`**. SwiftUI presents the picker and the sheets.
 
 ## Layout
 

@@ -12,46 +12,68 @@ final class AppModel {
     let commands = QuillSearch.CommandRegistry()
     let document: Document
     private(set) var lsp: LSPLink?
-    var prompt: Prompt = .none
+    var prompt: Prompt = .none { didSet { noteInterface() } }
     var theme: QuillTheme
     var themeChoice: ThemeChoice = .system
-    var themeIdentity = 0
-    var focusMode = false
-    var status = "NORMAL"
-    var message = ""
-    var completions: [String] = []
+    var themeIdentity = 0 { didSet { noteInterface() } }
+    var focusMode = false { didSet { noteInterface() } }
+    var status = "NORMAL" { didSet { noteInterface() } }
+    var message = "" { didSet { noteInterface() } }
+    var completions: [String] = [] { didSet { noteInterface() } }
     /// `-1` until Ctrl-n/p or an arrow chooses a row. The first Ctrl-n selects the first match.
-    var completionIndex = -1
+    var completionIndex = -1 { didSet { noteInterface() } }
     var diagnostics: [Diagnostic] = [] {
         didSet { rebuildDiagnosticRanges() }
     }
     /// UTF-16 ranges computed once when diagnostics arrive.
-    var diagnosticRanges: [(NSRange, Int)] = []
+    var diagnosticRanges: [(NSRange, Int)] = [] { didSet { noteInterface() } }
     /// Session override of `config.images`. The command palette toggles this.
-    var showImages = true
+    var showImages = true { didSet { noteInterface() } }
     let session: AppSession
     /// The live text view. Nil in tests that drive the engine without a window.
     @ObservationIgnored
     weak var editor: VimTextView?
+    /// The AppKit shell syncs chrome from here. SwiftUI is not on the first frame, so nothing else is observing these properties.
+    @ObservationIgnored
+    var onInterfaceChange: (@MainActor () -> Void)?
+    @ObservationIgnored
+    private var deliveringInterface = false
 
-    init(config: QuillConfig, home: URL, notice: String? = nil, isDark: @escaping @MainActor () -> Bool) {
+    func noteInterface() {
+        if deliveringInterface { return }
+        deliveringInterface = true
+        defer { deliveringInterface = false }
+        onInterfaceChange?()
+    }
+
+    init(
+        config: QuillConfig,
+        home: URL,
+        notice: String? = nil,
+        themeChoice: ThemeChoice = .system,
+        isDark: @escaping @MainActor () -> Bool
+    ) {
         self.config = config
         self.session = AppSession(home: home, isDark: isDark)
         self.document = Document(engine: Engine(clipboard: PasteboardClipboard()), root: home)
-        self.themeChoice = .system
+        self.themeChoice = themeChoice
         self.theme = QuillTheme.current(
             fontFamily: config.font,
             fontSize: config.fontSize,
             columnCharacters: config.columnWidth,
-            scheme: .system,
+            scheme: themeChoice,
             systemIsDark: isDark()
         )
         self.showImages = config.images
         if let notice, !notice.isEmpty { self.message = notice }
         session.hop.model = self
         document.onReplaced = { [weak self] in self?.documentReplaced() }
+        let commandsBegan = StartupProbe.begin("commandsMs")
         installCommands()
+        StartupProbe.end("commandsMs", commandsBegan)
+        let applyBegan = StartupProbe.begin("configApplyMs")
         config.apply(to: self)
+        StartupProbe.end("configApplyMs", applyBegan)
     }
 
     func installLSP(_ link: LSPLink?) {
@@ -122,10 +144,16 @@ final class AppModel {
     }
 
     func refreshStatus() {
+        let wasModified = document.modified
+        let title = document.title
         document.noteEdit()
         setIfChanged(\.status, document.engine.mode.displayName)
         if document.engine.mode == .commandLine || document.engine.mode == .search {
             setIfChanged(\.message, document.engine.commandLine)
+        }
+        // Mode and message notify on their own. Title and the modified mark live on the document.
+        if wasModified != document.modified || title != document.title {
+            noteInterface()
         }
     }
 
@@ -139,6 +167,7 @@ final class AppModel {
         rebuildKeymap()
         editor?.reload()
         refreshStatus()
+        noteInterface()
         if let url = document.url, let target = document.takeJump(for: url) {
             jump(to: target)
         }

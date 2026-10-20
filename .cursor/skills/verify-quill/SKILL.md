@@ -5,7 +5,7 @@ description: "Drive the Quill macOS editor and prove the caret, scrolling, direc
 
 # Verify Quill
 
-Quill is a native macOS markdown editor (SwiftUI + AppKit + TextKit 2). The user-facing surface is the app window and the `quill` launcher. Linux `swift test` does not compile the app and is not proof that the editor works.
+Quill is a native macOS markdown editor (AppKit + TextKit 2, SwiftUI for the picker and sheets). The user-facing surface is the app window and the `quill` launcher. Linux `swift test` does not compile the app and is not proof that the editor works.
 
 The harness is `Scripts/verify-quill`. It runs `swift test --filter QuillAppTests` (unless `--bin` is set and `QUILL_SKIP_APP_TESTS=1`), then launches the release binary with `QUILL_SMOKE=1`. QuillAppTests drives the caret, scrolling, a real temporary directory, the file and grep pickers, markdown table styling, and list hanging indents through `keyDown`. The launch smoke checks that the app comes up, the editor is wired, one keystroke changes the buffer, and a resize does not crash. CI runs the tests in its `swift test` step and the launch smoke with `QUILL_SKIP_APP_TESTS=1`.
 
@@ -23,7 +23,7 @@ Scripts/verify-quill --bin "$bin"
 
 Ready means QuillAppTests passed (when not skipped) and the launch process has exited 0 with `quill smoke passed` in `artifacts/verify-quill/smoke.log`. A process that is merely alive is not ready: without `QUILL_SMOKE=1` the app stays open, and with it the app exits on purpose. Test output is `artifacts/verify-quill/app-tests.log`.
 
-Smoke starts from `applicationDidFinishLaunching`, not from the window's `onAppear`. Launching the binary from a background shell does not activate the app, so SwiftUI may never show a window and `onAppear` never runs. The main thread then sits in the run loop and prints nothing. `QUILL_SMOKE=1` also activates the app and, at `applicationWillFinishLaunching`, arms a watchdog. If the process has not exited after 20 seconds, the watchdog prints whether launch finished, whether a model was attached, whether `onAppear` ran, whether smoke started, the window count, and the activation policy, then exits 2.
+Smoke starts from `applicationDidFinishLaunching`. The document window is created there, before the run loop draws. Launching the binary from a background shell does not activate the app, so the window can be on screen without becoming key. `QUILL_SMOKE=1` activates the app and, at `applicationWillFinishLaunching`, arms a watchdog. If the process has not exited after 20 seconds, the watchdog prints whether launch finished, whether a model was attached, whether the window appeared, whether smoke started, the window count, and the activation policy, then exits 2.
 
 Each invocation is its own process. The directory fixture uses a new temporary directory, so two smokes can run at once. Do not point this at `/Applications/Quill.app` unless that bundle is the binary you just built.
 
