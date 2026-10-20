@@ -91,17 +91,20 @@ enum DetachedSpawn {
             return nil
         }
 
-        var argv = arguments.map { strdup($0) }
-        argv.append(nil)
-        defer { argv.forEach { free($0) } }
+        let copiedArgs = arguments.map { strdup($0) }
         let pairs = environment.map { "\($0.key)=\($0.value)" }.sorted()
-        var envp = pairs.map { strdup($0) }
-        envp.append(nil)
-        defer { envp.forEach { free($0) } }
-        if argv.contains(where: { $0 == nil }) || envp.contains(where: { $0 == nil }) {
+        let copiedEnv = pairs.map { strdup($0) }
+        if copiedArgs.contains(where: { $0 == nil }) || copiedEnv.contains(where: { $0 == nil }) {
+            (copiedArgs + copiedEnv).forEach { free($0) }
             error = Int32(ENOMEM)
             return nil
         }
+        var argv: [UnsafeMutablePointer<CChar>?] = copiedArgs
+        argv.append(nil)
+        defer { argv.forEach { free($0) } }
+        var envp: [UnsafeMutablePointer<CChar>?] = copiedEnv
+        envp.append(nil)
+        defer { envp.forEach { free($0) } }
 
         var pid: pid_t = 0
         let spawned = argv.withUnsafeBufferPointer { argvBuf in
