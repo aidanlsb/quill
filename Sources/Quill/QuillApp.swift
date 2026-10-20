@@ -386,17 +386,20 @@ enum AppActivation {
 }
 
 private enum FrontProcess {
-    private static let services = dlopen(
-        "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices",
-        RTLD_LAZY
-    )
-
     static func makeCurrentFront() {
-        guard let services, let symbol = dlsym(services, "SetFrontProcess") else { return }
-        typealias SetFront = @convention(c) (UnsafeMutablePointer<Serial>) -> Int32
+        // Already-loaded frameworks make a repeated dlopen a handle lookup.
+        // A stored handle is a non-Sendable global under strict concurrency.
+        guard let services = dlopen(
+            "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices",
+            RTLD_LAZY
+        ), let symbol = dlsym(services, "SetFrontProcess") else { return }
+        // A nested Swift struct is not a C type, so the function takes a raw pointer.
+        typealias SetFront = @convention(c) (UnsafeMutableRawPointer) -> Int32
         let function = unsafeBitCast(symbol, to: SetFront.self)
         var serial = Serial(high: 0, low: 2)
-        _ = function(&serial)
+        withUnsafeMutablePointer(to: &serial) { pointer in
+            _ = function(UnsafeMutableRawPointer(pointer))
+        }
     }
 
     /// Carbon `ProcessSerialNumber`. `unsigned long` is pointer-sized.
