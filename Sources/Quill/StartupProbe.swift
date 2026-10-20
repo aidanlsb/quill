@@ -286,13 +286,16 @@ private final class StartupLog: @unchecked Sendable {
     }
 
     func publishSuccess() {
-        let unstyled: Bool = {
+        let (unstyled, exitsNow): (Bool, Bool) = {
             lock.lock()
             defer { lock.unlock() }
-            return unstyledDraw
+            return (unstyledDraw, exits)
         }()
-        let reason = unstyled ? "unstyled first draw" : ""
-        publish(snapshot(ok: !unstyled, reason: reason), signalNanos: machNanos())
+        // A warm file switch draws once before the new styles land. The cold
+        // launch still fails when its first frame was unstyled.
+        let failUnstyled = unstyled && exitsNow
+        let reason = failUnstyled ? "unstyled first draw" : ""
+        publish(snapshot(ok: !failUnstyled, reason: reason), signalNanos: machNanos())
     }
 
     private func claimTimeout() -> Report? {
@@ -603,9 +606,12 @@ enum StartupUI {
     private static func drawMatches(_ length: Int, log: StartupLog, view: VimTextView, window: NSWindow) -> Bool {
         let draw = log.drawSnapshot()
         if draw.length == length, length == 0 || draw.styled { return true }
+        // The styled frame can land before the probe is re-armed, and AppKit
+        // then has nothing dirty to draw. Force one so the snapshot is current.
+        view.needsDisplay = true
         view.layoutSubtreeIfNeeded()
         window.layoutIfNeeded()
-        view.displayIfNeeded()
+        view.display()
         let again = log.drawSnapshot()
         return again.length == length && (length == 0 || again.styled)
     }
