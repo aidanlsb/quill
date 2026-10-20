@@ -46,10 +46,7 @@ enum DetachedSpawn {
                 return status
             }
         }
-        let line = "quill: spawn failed \(last)\n"
-        _ = line.withUTF8 { bytes in
-            write(STDERR_FILENO, bytes.baseAddress, bytes.count)
-        }
+        FileHandle.standardError.write(Data("quill: spawn failed \(last)\n".utf8))
         return nil
     }
 
