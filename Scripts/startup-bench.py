@@ -27,7 +27,6 @@ from pathlib import Path
 from urllib.parse import quote
 
 REQUEST = "/tmp/quill-startup-request"
-STATUS = "/tmp/quill-startup-status"
 PREFIX = "Quill startup sample"
 
 
@@ -172,10 +171,6 @@ def run_once(
         os.remove(REQUEST)
     except FileNotFoundError:
         pass
-    try:
-        os.remove(STATUS)
-    except FileNotFoundError:
-        pass
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists():
         dest.unlink()
@@ -278,16 +273,11 @@ def run_once(
                 report["ok"] = False
                 snippet = " ".join(text.split())
                 report["reason"] = "launcher did not hand off: " + snippet[:240]
-        status = ""
-        if os.path.exists(STATUS):
-            status = open(STATUS, encoding="utf-8").read().strip()
-        if report.get("ok") is not True and status:
-            report["reason"] = f"{report.get('reason') or 'not ready'}; status={status}"
         dest.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         print(
             f"  ok={report.get('ok')} wall={wall} focused={report.get('focused')} "
             f"active={report.get('active')} waiting={report.get('waiting')} "
-            f"status={status!r} pids={after} source={source}",
+            f"pids={after} source={source}",
             flush=True,
         )
         printed = timeline(report)
