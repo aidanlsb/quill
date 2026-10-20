@@ -1,5 +1,7 @@
 import AppKit
 import SwiftUI
+import QuillFS
+import QuillVim
 
 /// The document window. AppKit owns the text view and the status line so the first frame does not wait on a SwiftUI scene.
 @MainActor
