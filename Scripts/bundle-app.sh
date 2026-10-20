@@ -5,9 +5,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-echo "bundle-app: swift build -c release --product Quill" >&2
+echo "bundle-app: swift build -c release --product Quill --product QuillCLI" >&2
 set +e
-swift build -c release --product Quill -Xswiftc -strict-concurrency=complete
+swift build -c release --product Quill --product QuillCLI -Xswiftc -strict-concurrency=complete
 build_status=$?
 set -e
 if [[ "$build_status" -ne 0 ]]; then
@@ -17,8 +17,13 @@ fi
 
 bin_dir="$(swift build -c release --product Quill -Xswiftc -strict-concurrency=complete --show-bin-path)"
 BIN="${bin_dir}/Quill"
+CLI="${bin_dir}/QuillCLI"
 if [[ ! -x "$BIN" ]]; then
   echo "bundle-app: build reported success but the binary is missing: ${BIN}" >&2
+  exit 1
+fi
+if [[ ! -x "$CLI" ]]; then
+  echo "bundle-app: build reported success but the launcher is missing: ${CLI}" >&2
   exit 1
 fi
 
@@ -41,6 +46,8 @@ DEST="${1:-dist/Quill.app}"
 rm -rf "$DEST"
 mkdir -p "$DEST/Contents/MacOS" "$DEST/Contents/Resources"
 cp "$BIN" "$DEST/Contents/MacOS/Quill"
+cp "$CLI" "$DEST/Contents/MacOS/QuillCLI"
+chmod +x "$DEST/Contents/MacOS/Quill" "$DEST/Contents/MacOS/QuillCLI"
 cp Sources/Quill/Info.plist "$DEST/Contents/Info.plist"
 icon_src="Resources/AppIcon.icns"
 if [[ ! -s "$icon_src" ]]; then
