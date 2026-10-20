@@ -47,7 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         if !Self.standaloneLaunch() {
             let targets = LaunchRequest.parse(Array(CommandLine.arguments.dropFirst()))
             let box = handoff
-            switch InstanceBridge.claim(socket: InstanceSocket.path(), targets: targets, onMessage: { box.deliver($0) }) {
+            switch InstanceBridge.claim(socket: Self.socketPath(), targets: targets, onMessage: { box.deliver($0) }) {
             case .delivered:
                 exit(0)
             case .primary(let server):
@@ -222,6 +222,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     private func show(_ window: NSWindow) {
         AppActivation.activate(window)
+    }
+
+    /// `QUILL_SOCKET` in the environment, or the same path passed on argv.
+    /// The spawn can drop the variable; the argument still names the socket.
+    private static func socketPath() -> String {
+        let args = CommandLine.arguments
+        if let index = args.firstIndex(of: "--quill-socket"), index + 1 < args.count {
+            return args[index + 1]
+        }
+        return InstanceSocket.path()
     }
 
     private static func standaloneLaunch() -> Bool {

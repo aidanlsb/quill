@@ -20,7 +20,7 @@ enum QuillCLI {
                 openApp(app, urls: urls, wait: wait)
             }
         )
-        if code != 0 {
+        if code != 0, !CommandLine.arguments.contains("--wait") {
             FileHandle.standardError.write(Data("quill: could not launch Quill\n".utf8))
         }
         exit(code)

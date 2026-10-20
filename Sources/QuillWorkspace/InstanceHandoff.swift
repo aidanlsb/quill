@@ -329,6 +329,10 @@ private struct PeerCred {
 private func withUnixAddress(_ path: String, _ body: (UnsafePointer<sockaddr>, socklen_t) -> Int32) -> Int32 {
     var addr = sockaddr_un()
     addr.sun_family = sa_family_t(AF_UNIX)
+    #if os(macOS)
+    // Darwin rejects an address whose sun_len is still zero.
+    addr.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
+    #endif
     let capacity = MemoryLayout.size(ofValue: addr.sun_path)
     let bytes = Array(path.utf8CString)
     guard bytes.count <= capacity else { return -1 }

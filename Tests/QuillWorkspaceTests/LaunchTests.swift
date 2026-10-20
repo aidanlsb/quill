@@ -30,7 +30,7 @@ final class LaunchMaterializeTests: XCTestCase {
 
     func testStandaloneFlagIsNotAPath() {
         XCTAssertEqual(
-            LaunchRequest.parse(["--quill-standalone", "note.md:4"]),
+            LaunchRequest.parse(["--quill-socket", "/tmp/q.sock", "--quill-standalone", "note.md:4"]),
             [LaunchTarget(path: "note.md", line: 4)]
         )
     }
@@ -216,6 +216,7 @@ final class QuillCommandTests: XCTestCase {
                 "PATH": "/custom/bin",
                 "GITHUB_TOKEN": "nope",
                 "HOME": root,
+                "QUILL_SOCKET": "/tmp/q.sock",
             ],
             cwd: root,
             send: { _ in .notRunning },
@@ -235,8 +236,8 @@ final class QuillCommandTests: XCTestCase {
         XCTAssertFalse(waited)
         XCTAssertEqual(binary, app(root) + "/Contents/MacOS/Quill")
         XCTAssertEqual(args.first, binary)
-        XCTAssertEqual(args.count, 2)
-        XCTAssertTrue(args[1].contains("line=2"))
+        XCTAssertEqual(Array(args.dropFirst().prefix(2)), ["--quill-socket", "/tmp/q.sock"])
+        XCTAssertTrue(args.last?.contains("line=2") == true)
         XCTAssertEqual(env["QUILL_FOREGROUND"], "1")
         XCTAssertEqual(env["PATH"], "/custom/bin")
         XCTAssertNil(env["GITHUB_TOKEN"])

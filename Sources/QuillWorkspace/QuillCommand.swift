@@ -142,6 +142,10 @@ public enum QuillCommand {
             if wait { env["QUILL_STANDALONE"] = "1" }
             var args = [binary]
             if wait { args.append("--quill-standalone") }
+            if let socket = environment["QUILL_SOCKET"], !socket.isEmpty {
+                args.append("--quill-socket")
+                args.append(socket)
+            }
             args.append(contentsOf: LaunchRequest.urls(for: targets))
             return .spawn(binary: binary, arguments: args, environment: env, wait: wait)
         }

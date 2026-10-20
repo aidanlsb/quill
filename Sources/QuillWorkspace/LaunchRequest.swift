@@ -28,8 +28,17 @@ public enum LaunchRequest {
     public static func parse(_ arguments: [String]) -> [LaunchTarget] {
         var targets: [LaunchTarget] = []
         var pendingLine: Int?
+        var skipNext = false
         for arg in arguments {
+            if skipNext {
+                skipNext = false
+                continue
+            }
             if arg == "--wait" || arg == "--" || arg == "--quill-standalone" { continue }
+            if arg == "--quill-socket" {
+                skipNext = true
+                continue
+            }
             if let url = URL(string: arg), url.scheme == "quill", let target = target(from: url) {
                 pendingLine = nil
                 targets.append(target)
