@@ -223,8 +223,13 @@ check_cli_windows() {
   app_bin="$dest/Contents/MacOS/Quill"
   helper="$parent/onscreen-window"
   work="$parent/work"
+  # The needle stays in the environment. awk's own argv must not contain the
+  # binary path, or ps counts the search and a warm launch looks like two Quills.
   bundle_pids() {
-    ps -axww -o pid=,command= | awk -v needle="$app_bin" 'index($0, needle) { print $1 }'
+    ps -axww -o pid=,command= | QUILL_PID_NEEDLE="$app_bin" awk 'index($0, ENVIRON["QUILL_PID_NEEDLE"]) { print $1 }'
+  }
+  print_bundle() {
+    ps -axww -o pid=,command= | QUILL_PID_NEEDLE="$app_bin" awk 'index($0, ENVIRON["QUILL_PID_NEEDLE"]) { print }' >&2 || true
   }
   cleanup_cli() {
     local pid
@@ -279,7 +284,7 @@ check_cli_windows() {
       kill "$pid" 2>/dev/null || true
     done
     local i=0
-    while [[ "$i" -lt 20 ]]; do
+    while [[ "$i" -lt 8 ]]; do
       pids="$(bundle_pids)"
       if [[ -z "$pids" ]]; then
         return 0
@@ -313,7 +318,7 @@ check_cli_windows() {
     local label="$1"
     echo "verify-quill: no onscreen window for $label" >&2
     "$helper" --list >&2 || true
-    ps -ax -o pid=,command= | awk 'index($0, "Quill") { print }' >&2 || true
+    print_bundle
     return 1
   }
 
@@ -359,16 +364,8 @@ check_cli_windows() {
     local count
     count="$(bundle_pids | wc -l | tr -d ' ')"
     if [[ "$count" != "1" ]]; then
-      # A second Quill that finds the socket calls exit(0). Count again after
-      # that handoff instead of failing on the process that is already exiting.
-      echo "verify-quill: warm $label saw $count processes" >&2
-      ps -axww -o pid=,command= | awk -v needle="$app_bin" 'index($0, needle) { print }' >&2 || true
-      sleep 0.4
-      count="$(bundle_pids | wc -l | tr -d ' ')"
-    fi
-    if [[ "$count" != "1" ]]; then
       echo "verify-quill: warm $label started another process ($count)" >&2
-      ps -axww -o pid=,command= | awk -v needle="$app_bin" 'index($0, needle) { print }' >&2 || true
+      print_bundle
       return 1
     fi
     echo "verify-quill: cli warm $label window pid $pid"
