@@ -189,6 +189,12 @@ final class VimTextView: NSTextView {
     /// UTF-16 ranges already given span attributes. A gap between two styled
     /// screens is not covered; scrolling into it styles that screen only.
     private var styledCoverage = 0..<0
+    /// Set when this document's visible spans have been written into the text storage.
+    var didApplyDocumentStyle = false
+    /// The startup probe counts one acceptance key. Stays false for every other key.
+    var startupCountKeys = false
+    var startupKeyEvents = 0
+    var startupDidAcceptKey = false
     /// Mono cells that fit the column when a table was last painted. Whether a
     /// table is aligned or shown as typed depends on it, so a change repaints.
     private var paintedTableFit: Int?
@@ -219,6 +225,8 @@ final class VimTextView: NSTextView {
         engine: Engine,
         frame: NSRect = NSRect(x: 0, y: 0, width: 800, height: 600)
     ) -> (scroll: NSScrollView, view: VimTextView) {
+        let hostBegan = StartupProbe.begin("hostMs")
+        defer { StartupProbe.end("hostMs", hostBegan) }
         let scroll = NSScrollView(frame: frame)
         scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = false
@@ -371,11 +379,14 @@ final class VimTextView: NSTextView {
     }
 
     func reload() {
+        let reloadBegan = StartupProbe.begin("reloadMs")
+        defer { StartupProbe.end("reloadMs", reloadBegan) }
         MainActor.assumeIsolated { self.onReload?() }
         invalidateDirectoryStyle()
         let text = engine.text
         let replaced = string != text
         if replaced {
+            didApplyDocumentStyle = false
             let began = DispatchTime.now().uptimeNanoseconds
             string = text
             QuillPerfSplit.add("syncStringMs", since: began)
@@ -504,6 +515,7 @@ final class VimTextView: NSTextView {
             return
         }
         engine.scrollLineCount = halfPageLines()
+        if startupCountKeys { startupKeyEvents += 1 }
         let result = engine.handle(key)
         applyResult(result)
         if result.beep {
@@ -576,7 +588,13 @@ final class VimTextView: NSTextView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        let probing = StartupProbe.recordsDraw
+        let styled = probing && didApplyDocumentStyle
+        let length = probing ? (textStorage?.length ?? 0) : 0
         super.draw(dirtyRect)
+        if probing {
+            StartupProbe.noteDrew(length: length, styled: styled)
+        }
         guard isDirectoryBuffer, engine != nil else { return }
         drawDirectoryDecorations(in: dirtyRect)
     }
@@ -758,6 +776,8 @@ final class VimTextView: NSTextView {
     }
 
     func queueRestyle(dirty: Int? = nil, edits: [TextEdit] = [], viewport: Range<Int>? = nil) {
+        let styleBegan = StartupProbe.begin("restyleMs")
+        defer { StartupProbe.end("restyleMs", styleBegan) }
         if isDirectoryBuffer {
             directoryGhostHeight = restyleDirectoryBuffer()
             needsDisplay = true
@@ -834,6 +854,7 @@ final class VimTextView: NSTextView {
             // The edit did not change tokens. AppKit shifted the runs already
             // on this line; painting them again invalidates layout past the caret.
             shiftCoverage(for: edits)
+            didApplyDocumentStyle = true
             return
         }
         if styleLimit == nil {
@@ -868,6 +889,7 @@ final class VimTextView: NSTextView {
         if let styleLimit, !styleLimit.isEmpty {
             noteStyled(styleLimit)
         }
+        didApplyDocumentStyle = true
         imagePreviews.restoreSpacing(in: styleLimit)
         noteContentSizeChanged()
     }
@@ -1791,6 +1813,8 @@ struct EditorView: NSViewRepresentable {
     var refresh: Int
 
     func makeNSView(context: Context) -> NSScrollView {
+        let began = StartupProbe.begin("makeNSViewMs")
+        defer { StartupProbe.end("makeNSViewMs", began) }
         let hosted = VimTextView.host(engine: model.engine)
         let scroll = hosted.scroll
         let tv = hosted.view
@@ -1803,7 +1827,9 @@ struct EditorView: NSViewRepresentable {
         tv.isDirectoryBuffer = model.document.isDirectory
         tv.directoryURL = model.document.isDirectory ? model.document.url : nil
         tv.directoryEntries = model.document.isDirectory ? (model.document.snapshot?.entries ?? []) : []
+        let themeBegan = StartupProbe.begin("applyThemeMs")
         tv.applyTheme(model.theme, focus: model.focusMode)
+        StartupProbe.end("applyThemeMs", themeBegan)
         tv.seenRefresh = refresh
         tv.reload()
         return scroll

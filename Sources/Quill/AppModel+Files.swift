@@ -305,12 +305,17 @@ extension AppModel {
     }
 
     func beginOpen(_ url: URL) {
+        let began = StartupProbe.begin("openSyncMs")
+        let installed: Bool
         do {
-            if try document.openSynchronously(url) { return }
+            installed = try document.openSynchronously(url)
         } catch {
+            StartupProbe.end("openSyncMs", began)
             message = error.localizedDescription
             return
         }
+        StartupProbe.end("openSyncMs", began)
+        if installed { return }
         Task {
             do {
                 _ = try await self.document.open(url)

@@ -7,9 +7,14 @@ import UniformTypeIdentifiers
 struct QuillApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
+    init() {
+        StartupProbe.mark("appInit")
+    }
+
     private var model: AppModel { appDelegate.model }
 
     var body: some Scene {
+        let _ = StartupProbe.markOnce("sceneBody")
         WindowGroup {
             EditorRoot(model: appDelegate.model, delegate: appDelegate)
         }
@@ -74,6 +79,7 @@ private struct EditorRoot: View {
     var delegate: AppDelegate
 
     var body: some View {
+        let _ = StartupProbe.markOnce("editorRoot")
         ContentView(model: model)
             .frame(minWidth: 720, minHeight: 480)
             .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
@@ -97,14 +103,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     var model: AppModel {
         if let ownedModel { return ownedModel }
+        let began = StartupProbe.begin("modelMs")
         let created = AppModel()
+        StartupProbe.end("modelMs", began)
         ownedModel = created
+        StartupUI.attach(created)
         return created
     }
 
     override init() {
         super.init()
         QuillTrace.event("delegateInit")
+        StartupProbe.arm()
     }
 
     func attach(_ model: AppModel) {
@@ -121,6 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         WindowChrome.apply(theme: model.theme)
         QuillTrace.event("keyWindow")
         AppPerf.noteKeyWindow()
+        StartupUI.noteKeyWindow()
         AppSmoke.noteWindowAppeared()
         AppSmoke.runIfRequested(model: model)
         ensureDocumentWindowIfNeeded()
@@ -128,6 +139,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationWillFinishLaunching(_ notification: Notification) {
+        StartupProbe.mark("willFinish")
         installURLHandler()
         // `.regular` before any window exists. A quill:// open from the CLI
         // otherwise comes up behind the terminal.
@@ -174,6 +186,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        StartupProbe.mark("didFinish")
         launched = true
         installURLHandler()
         drainPending()

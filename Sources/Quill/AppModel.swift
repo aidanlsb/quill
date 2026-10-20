@@ -50,8 +50,12 @@ final class AppModel {
         if let notice, !notice.isEmpty { self.message = notice }
         session.hop.model = self
         document.onReplaced = { [weak self] in self?.documentReplaced() }
+        let commandsBegan = StartupProbe.begin("commandsMs")
         installCommands()
+        StartupProbe.end("commandsMs", commandsBegan)
+        let applyBegan = StartupProbe.begin("configApplyMs")
         config.apply(to: self)
+        StartupProbe.end("configApplyMs", applyBegan)
     }
 
     func installLSP(_ link: LSPLink?) {

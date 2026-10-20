@@ -3,11 +3,15 @@ import AppKit
 extension AppModel {
     convenience init() {
         let home = FileManager.default.homeDirectoryForCurrentUser
+        let configBegan = StartupProbe.begin("configMs")
         let loaded = QuillConfig.loadReporting()
+        StartupProbe.end("configMs", configBegan)
+        let memoryBegan = StartupProbe.begin("themeMemoryMs")
         let choice = ThemeChoice.resolved(
             config: loaded.config.theme,
             remembered: ThemeMemory.load(from: ThemeMemory.url(home: home))
         )
+        StartupProbe.end("themeMemoryMs", memoryBegan)
         self.init(
             config: loaded.config,
             home: home,

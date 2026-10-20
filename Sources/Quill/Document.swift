@@ -148,14 +148,22 @@ final class Document {
         if try openSynchronously(url) { return true }
         let ticket = bumpTicket()
         let data: Data
+        let readBegan = StartupProbe.begin("fileReadMs")
         do {
             data = try await readFile(url)
         } catch {
+            StartupProbe.end("fileReadMs", readBegan)
             guard ticket == openTicket else { return false }
             throw error
         }
+        StartupProbe.end("fileReadMs", readBegan)
         guard ticket == openTicket else { return false }
-        installFile(try TextCodec.decode(data), url: url)
+        let decodeBegan = StartupProbe.begin("fileDecodeMs")
+        let decoded = try TextCodec.decode(data)
+        StartupProbe.end("fileDecodeMs", decodeBegan)
+        let installBegan = StartupProbe.begin("fileInstallMs")
+        installFile(decoded, url: url)
+        StartupProbe.end("fileInstallMs", installBegan)
         return true
     }
 
@@ -324,6 +332,7 @@ final class Document {
         notedStamp = engine.changeStamp
         renderToken += 1
         onReplaced?()
+        StartupUI.noteContent()
     }
 
     private func modificationDate(_ url: URL) -> Date? {

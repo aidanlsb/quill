@@ -11,6 +11,7 @@ struct ContentView: View {
     }
 
     var body: some View {
+        let _ = StartupProbe.markOnce("contentBody")
         ZStack {
             EditorView(model: model, diagnostics: model.diagnosticRanges, refresh: model.document.refreshID)
                 .background(Color(editorBackground))

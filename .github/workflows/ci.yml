@@ -24,6 +24,8 @@ jobs:
           python3 Scripts/check_boundaries.py --self-test
       - name: Shellcheck
         run: shellcheck -s bash Scripts/quill Scripts/verify-quill Scripts/*.sh
+      - name: Startup bench self-test
+        run: python3 Scripts/startup-bench.py --self-test
       - name: Check app icon
         run: python3 Scripts/make-icon.py --check
 
@@ -79,6 +81,11 @@ jobs:
         run: swift build -c release --product Quill -Xswiftc -strict-concurrency=complete
       - name: Bundle the app and check the icon
         run: Scripts/bundle-app.sh
+      - name: Measure startup
+        run: |
+          bin="$(swift build -c release --product Quill -Xswiftc -strict-concurrency=complete --show-bin-path)/Quill"
+          python3 Scripts/startup-bench.py --self-test
+          python3 Scripts/startup-bench.py --bin "$bin" --app dist/Quill.app --runs 7 --warmup 1 --out artifacts/startup
       - name: Launch the app
         run: |
           bin="$(swift build -c release --product Quill -Xswiftc -strict-concurrency=complete --show-bin-path)/Quill"
