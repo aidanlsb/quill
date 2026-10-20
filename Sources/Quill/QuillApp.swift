@@ -12,10 +12,10 @@ struct QuillApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
-            Color.clear
+        // No document scene. Settings is inert until opened; the delegate makes the editor window.
+        Settings {
+            EmptyView()
         }
-        .defaultLaunchBehavior(.suppressed)
     }
 }
 
@@ -99,6 +99,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         model.consumeLaunchArguments(Array(CommandLine.arguments.dropFirst()), immediate: true)
         drainPending()
         let window = ensureShell()
+        StartupProbe.mark("windowMade")
         shell?.displayDocument()
         installMenus()
         show(window)
