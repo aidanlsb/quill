@@ -36,3 +36,4 @@ Preconditions:
 - `textSyncMs` is the visible-range style of a buffer that was just assigned. It is not a full-document restyle. `keystrokeMs` is one insert at the start of that same view.
 - `ignoreWalkAllMs` visits every file, which is what ignore loading used to do. `pickerOpenMs` is the load that skips ignored directories.
 - A five-second launch without `QUILL_PERF` does not produce this log.
+- `QUILL_PERF` is not the regression gate. `Scripts/bench.sh` (`QUILL_BENCH=1`) is. It repeats launch, markdown opens, keystrokes, motions, restyle, resize, scrolling, the directory buffer, and the pickers, then `Scripts/bench_compare.py` fails a pull request that gets slower than its base commit on the same runner.

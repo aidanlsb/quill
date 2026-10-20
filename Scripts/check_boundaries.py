@@ -187,6 +187,28 @@ def workflow_passes_complete_checking() -> list[str]:
     return [f"ci.yml is missing `{item}`" for item in needed if item not in text]
 
 
+def workflow_has_perf_gate() -> list[str]:
+    text = (ROOT / ".github/workflows/ci.yml").read_text()
+    needed = (
+        "Scripts/bench.sh",
+        "python3 Scripts/bench_compare.py --self-test",
+    )
+    return [f"ci.yml is missing `{item}`" for item in needed if item not in text]
+
+
+def agents_mentions_principles() -> list[str]:
+    path = ROOT / "AGENTS.md"
+    if not path.is_file():
+        return ["AGENTS.md is missing"]
+    text = path.read_text()
+    needed = (
+        "perf gate",
+        "fast, simple, and keyboard driven",
+        "great markdown editing experience",
+    )
+    return [f"AGENTS.md is missing `{item}`" for item in needed if item not in text]
+
+
 def self_test() -> int:
     failed = False
     for name, text in HISTORICAL.items():
@@ -242,7 +264,7 @@ def self_test() -> int:
         print("self-test: VimTextView.host(engine:) or make inside VimTextView.swift was rejected", file=sys.stderr)
         failed = True
     repo = scan_tree() + scan_shell_tree()
-    workflow = workflow_passes_complete_checking()
+    workflow = workflow_passes_complete_checking() + workflow_has_perf_gate() + agents_mentions_principles()
     if repo or workflow:
         print("self-test: repository failed the boundary check", file=sys.stderr)
         for error in repo + workflow:
@@ -260,7 +282,13 @@ def self_test() -> int:
 def main() -> int:
     if "--self-test" in sys.argv:
         return self_test()
-    errors = scan_tree() + scan_shell_tree() + workflow_passes_complete_checking()
+    errors = (
+        scan_tree()
+        + scan_shell_tree()
+        + workflow_passes_complete_checking()
+        + workflow_has_perf_gate()
+        + agents_mentions_principles()
+    )
     for error in errors:
         print(error, file=sys.stderr)
     if errors:

@@ -40,6 +40,18 @@ Or open `Package.swift` in Xcode and run the **Quill** target. The app is not sa
 
 `QuillAppTests` (macOS) drives the editor through `keyDown`. `Scripts/verify-quill` runs those tests, then a short launch smoke (`quill smoke passed`). A green Linux test run is not a substitute. The recipe lives in `.cursor/skills/verify-quill/`.
 
+## Performance
+
+On a Mac, including Aidan's Mac:
+
+```bash
+Scripts/bench.sh                  # build, measure, compare to Baselines/perf-macos.json
+Scripts/bench.sh --update-baseline
+Scripts/bench.sh doctor --bin "$bin"
+```
+
+`QUILL_BENCH=1` times cold launch, opening 1k / 50k / 500k-line markdown plus a dense note (prose, headings, lists, tables, links, code), keystroke latency, vim motions, live restyle, resize, scrolling, the directory buffer, and `<leader>sf` / `<leader>sg`. The PR job runs that suite on the pull request and on the base commit on one runner, and fails if a metric regresses. See `CONTRIBUTING.md`.
+
 ## CLI
 
 ```bash

@@ -121,6 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         WindowChrome.apply(theme: model.theme)
         QuillTrace.event("keyWindow")
         AppPerf.noteKeyWindow()
+        AppBench.noteKeyWindow()
         AppSmoke.noteWindowAppeared()
         AppSmoke.runIfRequested(model: model)
         ensureDocumentWindowIfNeeded()
@@ -189,6 +190,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // to start smoke, and it never runs when no window becomes key.
         AppSmoke.launchDidFinish(model: ownedModel)
         AppPerf.launchDidFinish()
+        AppBench.launchDidFinish()
         Task { @MainActor in
             installURLHandler()
             ensureDocumentWindowIfNeeded()
@@ -264,10 +266,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        // The perf probe opens a window and orders it out. Closing that last
-        // window must not terminate the process before `quill perf done`.
+        // The perf probe and the benchmark order a window out. Closing that
+        // last window must not terminate the process before they finish.
         // The launch smoke exits on its own and does not open throwaway windows.
-        ProcessInfo.processInfo.environment["QUILL_PERF"] != "1"
+        let env = ProcessInfo.processInfo.environment
+        return env["QUILL_PERF"] != "1" && env["QUILL_BENCH"] != "1"
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
