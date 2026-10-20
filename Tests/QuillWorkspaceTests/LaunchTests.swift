@@ -42,40 +42,6 @@ final class LaunchMaterializeTests: XCTestCase {
     }
 }
 
-final class LaunchEnvironmentTests: XCTestCase {
-    func testDropsSecretsAndKeepsPath() {
-        let cleaned = LaunchEnvironment.sanitize([
-            "PATH": "/custom/bin",
-            "HOME": "/Users/me",
-            "JAVA_HOME": "/Library/Java",
-            "LC_ALL": "en_US.UTF-8",
-            "GITHUB_TOKEN": "ghp_secret",
-            "DYLD_INSERT_LIBRARIES": "/tmp/evil.dylib",
-            "LD_PRELOAD": "/tmp/evil.so",
-            "AWS_SECRET_ACCESS_KEY": "secret",
-            "NPM_TOKEN": "npm",
-            "QUILL_SMOKE": "1",
-            "QUILL_SOCKET": "/tmp/quill.sock",
-        ])
-        XCTAssertEqual(cleaned["PATH"], "/custom/bin")
-        XCTAssertEqual(cleaned["HOME"], "/Users/me")
-        XCTAssertEqual(cleaned["JAVA_HOME"], "/Library/Java")
-        XCTAssertEqual(cleaned["LC_ALL"], "en_US.UTF-8")
-        XCTAssertEqual(cleaned["QUILL_SOCKET"], "/tmp/quill.sock")
-        XCTAssertNil(cleaned["GITHUB_TOKEN"])
-        XCTAssertNil(cleaned["DYLD_INSERT_LIBRARIES"])
-        XCTAssertNil(cleaned["LD_PRELOAD"])
-        XCTAssertNil(cleaned["AWS_SECRET_ACCESS_KEY"])
-        XCTAssertNil(cleaned["NPM_TOKEN"])
-        XCTAssertNil(cleaned["QUILL_SMOKE"])
-    }
-
-    func testSuppliesPathWhenMissing() {
-        let cleaned = LaunchEnvironment.sanitize(["HOME": "/Users/me"])
-        XCTAssertEqual(cleaned["PATH"], LaunchEnvironment.defaultPath)
-    }
-}
-
 final class InstanceHandoffTests: XCTestCase {
     func testDeliversToTheRunningInstance() throws {
         let (path, server, received) = try startServer()
@@ -175,10 +141,9 @@ private final class Received: @unchecked Sendable {
 }
 
 final class QuillCommandTests: XCTestCase {
-    func testHandoffDoesNotSpawn() throws {
+    func testHandoffDoesNotOpen() throws {
         let root = try bundle()
         defer { try? FileManager.default.removeItem(atPath: root) }
-        var spawned = 0
         var opened = 0
         let code = QuillCommand.run(
             arguments: ["note.md"],
@@ -188,96 +153,50 @@ final class QuillCommandTests: XCTestCase {
                 XCTAssertEqual(targets.map(\.path), [root + "/note.md"])
                 return .delivered
             },
-            spawn: { _, _, _, _ in
-                spawned += 1
-                return 0
-            },
             openApp: { _, _, _ in
                 opened += 1
                 return 0
             }
         )
         XCTAssertEqual(code, 0)
-        XCTAssertEqual(spawned, 0)
         XCTAssertEqual(opened, 0)
     }
 
-    func testColdLaunchSpawnsDetachedWithForegroundAndPath() throws {
+    func testColdLaunchUsesOpenAndPassesTheSocket() throws {
         let root = try bundle()
         defer { try? FileManager.default.removeItem(atPath: root) }
-        var binary = ""
-        var args: [String] = []
-        var env: [String: String] = [:]
+        var openedApp = ""
+        var urls: [String] = []
         var waited = true
         let code = QuillCommand.run(
             arguments: ["note.md:2"],
             environment: [
                 "QUILL_APP": app(root),
-                "PATH": "/custom/bin",
-                "GITHUB_TOKEN": "nope",
-                "HOME": root,
                 "QUILL_SOCKET": "/tmp/q.sock",
             ],
             cwd: root,
             send: { _ in .notRunning },
-            spawn: { path, arguments, environment, wait in
-                binary = path
-                args = arguments
-                env = environment
+            openApp: { app, arguments, wait in
+                openedApp = app
+                urls = arguments
                 waited = wait
                 return 0
-            },
-            openApp: { _, _, _ in
-                XCTFail("open fallback")
-                return 1
             }
         )
         XCTAssertEqual(code, 0)
         XCTAssertFalse(waited)
-        XCTAssertEqual(binary, app(root) + "/Contents/MacOS/Quill")
-        XCTAssertEqual(args.first, binary)
-        XCTAssertEqual(Array(args.dropFirst().prefix(2)), ["--quill-socket", "/tmp/q.sock"])
-        XCTAssertTrue(args.last?.contains("line=2") == true)
-        XCTAssertEqual(env["QUILL_FOREGROUND"], "1")
-        XCTAssertEqual(env["PATH"], "/custom/bin")
-        XCTAssertNil(env["GITHUB_TOKEN"])
-        XCTAssertNil(env["QUILL_STANDALONE"])
-    }
-
-    func testSpawnFailureFallsBackToOpen() throws {
-        let root = try bundle()
-        defer { try? FileManager.default.removeItem(atPath: root) }
-        var openedApp = ""
-        var opened = false
-        let code = QuillCommand.run(
-            arguments: ["note.md"],
-            environment: ["QUILL_APP": app(root)],
-            cwd: root,
-            send: { _ in .notRunning },
-            spawn: { _, _, _, _ in nil },
-            openApp: { app, urls, wait in
-                openedApp = app
-                opened = !urls.isEmpty
-                XCTAssertFalse(wait)
-                return 0
-            }
-        )
-        XCTAssertEqual(code, 0)
         XCTAssertEqual(openedApp, app(root))
-        XCTAssertTrue(opened)
+        XCTAssertEqual(Array(urls.prefix(2)), ["--quill-socket", "/tmp/q.sock"])
+        XCTAssertTrue(urls.last?.contains("line=2") == true)
     }
 
-    func testMissingBinaryUsesOpen() {
+    func testMissingBundleUsesOpen() {
         var opened = ""
         let code = QuillCommand.run(
             arguments: [],
             environment: ["QUILL_APP": "/no/such/Quill.app"],
             cwd: "/tmp",
             send: { _ in .notRunning },
-            spawn: { _, _, _, _ in
-                XCTFail("spawned without a binary")
-                return 0
-            },
             openApp: { app, urls, wait in
                 opened = app
                 XCTAssertTrue(urls.isEmpty)
@@ -289,7 +208,7 @@ final class QuillCommandTests: XCTestCase {
         XCTAssertEqual(opened, "/no/such/Quill.app")
     }
 
-    func testRejectedHandoffDoesNotSpawn() throws {
+    func testRejectedHandoffDoesNotOpen() throws {
         let root = try bundle()
         defer { try? FileManager.default.removeItem(atPath: root) }
         var opened = false
@@ -298,10 +217,6 @@ final class QuillCommandTests: XCTestCase {
             environment: ["QUILL_APP": app(root)],
             cwd: root,
             send: { _ in .failed },
-            spawn: { _, _, _, _ in
-                XCTFail("spawned beside a live instance")
-                return 0
-            },
             openApp: { _, _, _ in
                 opened = true
                 return 0
@@ -311,34 +226,28 @@ final class QuillCommandTests: XCTestCase {
         XCTAssertFalse(opened)
     }
 
-    func testWaitSpawnsStandaloneAndDoesNotHandOff() throws {
+    func testWaitOpensANewInstanceAndDoesNotHandOff() throws {
         let root = try bundle()
         defer { try? FileManager.default.removeItem(atPath: root) }
         var sent = false
         var waited = false
-        var standalone = false
         let code = QuillCommand.run(
             arguments: ["--wait", "note.md"],
-            environment: ["QUILL_APP": app(root), "PATH": "/bin"],
+            environment: ["QUILL_APP": app(root), "QUILL_SOCKET": "/tmp/q.sock"],
             cwd: root,
             send: { _ in
                 sent = true
                 return .delivered
             },
-            spawn: { _, arguments, environment, wait in
+            openApp: { _, urls, wait in
                 waited = wait
-                standalone = environment["QUILL_STANDALONE"] == "1" && arguments.contains("--quill-standalone")
+                XCTAssertFalse(urls.contains("--quill-socket"))
                 return 0
-            },
-            openApp: { _, _, _ in
-                XCTFail("open fallback")
-                return 1
             }
         )
         XCTAssertEqual(code, 0)
         XCTAssertFalse(sent)
         XCTAssertTrue(waited)
-        XCTAssertTrue(standalone)
     }
 
     private func bundle() throws -> String {

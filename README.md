@@ -52,7 +52,7 @@ quill .                  # open this folder as a directory buffer
 quill some/dir           # same, for that directory
 ```
 
-The `quill` command resolves `/Applications/Quill.app` (or a local `dist/Quill.app`). If Quill is already running, it hands the path to that instance over a per-user Unix socket and brings the window forward. Otherwise it spawns `Quill.app/Contents/MacOS/Quill` in a new session, with stdio closed, and returns immediately. `open -a` is the fallback when that binary cannot be started. A line or column is `quill://open?path&line&column`. If that file is already the open buffer, Quill moves the cursor and leaves unsaved edits in place. After `Scripts/install.sh`, `quill` is `/usr/local/bin/quill`.
+The `quill` command resolves `/Applications/Quill.app` (or a local `dist/Quill.app`). If Quill is already running, it hands the path to that instance over a per-user Unix socket and brings the window forward. Otherwise it launches with `open -a` and returns when `open` does. A line or column is `quill://open?path&line&column`. If that file is already the open buffer, Quill moves the cursor and leaves unsaved edits in place. After `Scripts/install.sh`, `quill` is `/usr/local/bin/quill`.
 
 ## Writing feel
 

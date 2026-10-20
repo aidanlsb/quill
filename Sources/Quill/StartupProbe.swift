@@ -4,13 +4,14 @@ import Foundation
 import QuillVim
 import os
 
-/// Cold-start probe. A normal launch only reads one immutable flag.
+/// Launch probe. A normal launch only reads one immutable flag.
 ///
 /// `QUILL_PERF=1` records time to the first editable frame in the perf log.
 /// `/tmp/quill-startup-request` (or `QUILL_STARTUP=1`) asks the process to
-/// prove the frame, write JSON, signal a fifo, and exit. The request file is
-/// how a CLI open is measured: `open -a` drops the environment, and a direct
-/// spawn keeps the shell environment minus injected libraries and secrets.
+/// prove the frame, write JSON, and signal a fifo. A request present at
+/// startup exits the process. A request that arrives with a later file open
+/// arms the same proof on the running app and leaves it up. `open -a` drops
+/// the environment, so the bench writes the request file instead.
 enum StartupProbe {
     static func begin(_ name: StaticString) -> UInt64 {
         guard StartupLog.shared.tracing else { return 0 }
@@ -50,8 +51,16 @@ enum StartupProbe {
         StartupLog.shared.armWatchdog()
     }
 
-    static var recordsDraw: Bool { StartupLog.shared.hookDraw }
+    static var recordsDraw: Bool { StartupLog.shared.config().hookDraw }
     static var editableMilliseconds: Double? { StartupLog.shared.editableMilliseconds }
+}
+
+private struct ProbeConfig {
+    var wantsEditable: Bool
+    var hookDraw: Bool
+    var exits: Bool
+    var expectPath: String?
+    var prefix: String
 }
 
 /// Draw facts and the report. The main thread writes; the watchdog reads.
@@ -62,15 +71,15 @@ private final class StartupLog: @unchecked Sendable {
 
     /// Spans and marks. Off during the perf suite so keystrokes do not take the log lock.
     let tracing: Bool
-    /// Time-to-editable in `QUILL_PERF` and in the exiting probe.
-    let wantsEditable: Bool
-    /// `draw` records the frame only for the exiting probe. The perf suite does not.
-    let hookDraw: Bool
-    let exits: Bool
-    let expectPath: String?
-    let prefix: String
-    let outPath: String?
-    let fifoPath: String?
+    /// Time-to-editable in `QUILL_PERF` and in the probe. A warm file open turns this on.
+    var wantsEditable: Bool
+    /// `draw` records the frame for the probe. The perf suite does not.
+    var hookDraw: Bool
+    var exits: Bool
+    var expectPath: String?
+    var prefix: String
+    var outPath: String?
+    var fifoPath: String?
 
     private let lock = NSLock()
     private var finished = false
@@ -212,6 +221,47 @@ private final class StartupLog: @unchecked Sendable {
         lock.unlock()
     }
 
+    func config() -> ProbeConfig {
+        lock.lock()
+        defer { lock.unlock() }
+        return ProbeConfig(
+            wantsEditable: wantsEditable,
+            hookDraw: hookDraw,
+            exits: exits,
+            expectPath: expectPath,
+            prefix: prefix
+        )
+    }
+
+    /// A file opened into the running app. The request was not there at startup.
+    func rearmFromRequest() -> Bool {
+        guard let request = Self.loadRequest(), let expect = request.expect else { return false }
+        lock.lock()
+        wantsEditable = true
+        hookDraw = true
+        exits = false
+        expectPath = expect
+        prefix = request.prefix
+        outPath = request.out
+        fifoPath = request.fifo
+        finished = false
+        marks = []
+        spans = []
+        once = []
+        firstDrawMs = nil
+        lastDrawLength = -1
+        lastDrawStyled = false
+        unstyledDraw = false
+        keyAccepted = false
+        editableMs = nil
+        readyQueued = false
+        waiting = ""
+        focused = false
+        appActive = false
+        lock.unlock()
+        return true
+    }
+
     func finish(editableMs: Double) -> Bool {
         lock.lock()
         defer { lock.unlock() }
@@ -281,22 +331,29 @@ private final class StartupLog: @unchecked Sendable {
     }
 
     private func publish(_ report: Report, signalNanos: UInt64) {
+        let paths = outputPaths()
         let object = report.json(signalNanos: signalNanos)
         guard JSONSerialization.isValidJSONObject(object),
               let data = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
         else { return }
-        if let outPath {
+        if let outPath = paths.out {
             try? data.write(to: URL(fileURLWithPath: outPath), options: .atomic)
         }
         let text = String(data: data, encoding: .utf8) ?? ""
         QuillTrace.write("quill startup report\n\(text)\n")
         // One byte, after the file is on disk, so the shell's wait is not a poll
         // and a slow reader cannot fill the pipe and stall exit.
-        guard let fifoPath else { return }
+        guard let fifoPath = paths.fifo else { return }
         let fd = Darwin.open(fifoPath, O_WRONLY | O_NONBLOCK)
         guard fd >= 0 else { return }
         _ = Darwin.write(fd, ".\n", 2)
         Darwin.close(fd)
+    }
+
+    private func outputPaths() -> (out: String?, fifo: String?) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (outPath, fifoPath)
     }
 
     private static func loadRequest() -> Request? {
@@ -385,19 +442,27 @@ enum StartupUI {
     private static var notifications = false
 
     static func attach(_ model: AppModel) {
-        guard StartupLog.shared.wantsEditable else { return }
+        guard StartupLog.shared.config().wantsEditable else { return }
         self.model = model
     }
 
     static func noteKeyWindow() {
-        guard StartupLog.shared.wantsEditable else { return }
+        guard StartupLog.shared.config().wantsEditable else { return }
         StartupProbe.mark("keyWindow")
         considerReady()
     }
 
     static func noteContent() {
-        guard StartupLog.shared.wantsEditable else { return }
+        guard StartupLog.shared.config().wantsEditable else { return }
         StartupProbe.mark("contentInstalled")
+        considerReady()
+    }
+
+    /// The running app opened a path. Arm the probe if a warm request is waiting.
+    static func noteFileArrival(_ model: AppModel) {
+        guard StartupLog.shared.rearmFromRequest() else { return }
+        self.model = model
+        model.editor?.startupDidAcceptKey = false
         considerReady()
     }
 
@@ -405,32 +470,33 @@ enum StartupUI {
 
     static func considerReady() {
         let log = StartupLog.shared
-        guard log.wantsEditable, !log.isFinished, !inReady else { return }
+        let cfg = log.config()
+        guard cfg.wantsEditable, !log.isFinished, !inReady else { return }
         inReady = true
         log.clearReadyQueue()
         defer {
             inReady = false
-            if log.exits, !log.isFinished { scheduleRetry() }
+            if !log.isFinished, cfg.exits || cfg.expectPath != nil { scheduleRetry() }
         }
         guard let model, let view = model.editor, view.engine != nil, let window = view.window else {
             log.setWaiting("editor")
             return
         }
-        if log.exits {
+        if cfg.exits || cfg.expectPath != nil {
             let needsFocus = !window.isVisible || !window.isKeyWindow || window.firstResponder !== view
-            if needsFocus || (log.expectPath != nil && !NSApplication.shared.isActive) {
+            if needsFocus || (cfg.expectPath != nil && !NSApplication.shared.isActive) {
                 prepare(window, view: view)
             }
         }
 
-        if let expect = log.expectPath {
+        if let expect = cfg.expectPath {
             let got = model.document.url?.standardizedFileURL.path
             let want = URL(fileURLWithPath: expect).standardizedFileURL.path
             if got != want {
                 log.setWaiting("file")
                 return
             }
-            if !log.prefix.isEmpty, !model.engine.text.hasPrefix(log.prefix) {
+            if !cfg.prefix.isEmpty, !model.engine.text.hasPrefix(cfg.prefix) {
                 log.setWaiting("prefix")
                 return
             }
@@ -441,7 +507,7 @@ enum StartupUI {
             log.setWaiting("style")
             return
         }
-        if log.hookDraw {
+        if cfg.hookDraw {
             if !drawMatches(length, log: log, view: view, window: window) {
                 log.setWaiting("draw")
                 return
@@ -451,7 +517,7 @@ enum StartupUI {
             window.layoutIfNeeded()
             view.displayIfNeeded()
         }
-        if length > 0, log.expectPath != nil, !headingIsStyled(view) {
+        if length > 0, cfg.expectPath != nil, !headingIsStyled(view) {
             log.setWaiting("heading")
             return
         }
@@ -460,10 +526,9 @@ enum StartupUI {
             log.setWaiting("visible")
             return
         }
-        // A direct binary launch from a background shell is not activated, so the
-        // window can be on screen and still not key. `quill <file>` has to come
-        // forward, including when it was spawned instead of `open -a`.
-        let foreground = log.expectPath != nil
+        // The file case has to be key and active. Cold `open -a` does that.
+        // A later open into the running app has to do it again.
+        let foreground = cfg.expectPath != nil
         if foreground {
             if !window.isKeyWindow {
                 log.setWaiting("key")
@@ -503,9 +568,10 @@ enum StartupUI {
 
         let ms = QuillTrace.millisSinceStart()
         guard log.finish(editableMs: ms) else { return }
-        guard log.exits else { return }
         log.publishSuccess()
-        exit(0)
+        if cfg.exits {
+            exit(0)
+        }
     }
 
     private static func prepare(_ window: NSWindow, view: VimTextView) {

@@ -8,8 +8,8 @@
 #   quill .
 #   quill --wait new-note.md
 #
-# The Swift CLI (QuillCLI) spawns the app in a new session, or hands the path
-# to the running instance. QUILL_LAUNCH=open skips that and uses `open -a`.
+# The Swift CLI (QuillCLI) hands the path to the running instance, or uses
+# `open -a` when nothing is listening. QUILL_LAUNCH=open skips the CLI.
 set -euo pipefail
 
 resolve_app() {

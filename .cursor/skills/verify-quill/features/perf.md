@@ -4,7 +4,7 @@
 
 ## Sub-features
 
-- `launch` records milliseconds from process start to `applicationDidFinishLaunching`, to the first key window when one appears, and to the first editable frame (`launchToEditableMs`). That frame has been drawn and has accepted a key. `Scripts/startup-bench.py` repeats the cold launch and `quill <file.md>` and prints medians.
+- `launch` records milliseconds from process start to `applicationDidFinishLaunching`, to the first key window when one appears, and to the first editable frame (`launchToEditableMs`). That frame has been drawn and has accepted a key. `Scripts/startup-bench.py` measures a warm `quill <file.md>` against `open -a` while Quill is already running, and prints medians of wall time until the file is editable and focused.
 - `style` records a full tokenize of 10k markdown lines and one trailing-character `apply` on the cached lines of that same document.
 - `edit` records applying 20 insert keystrokes and 40 `j` motions on a real text view, plus one forced full TextKit layout of that document. An insert restyles the edited lines. Opening the buffer (`textSyncMs`) tokenizes and styles the visible lines, not every line. `j` does not restyle and does not lay out the whole document. A keystroke does not resync the buffer, request hover, or look up a language server.
 - `picker` records ignore loading plus the file walk, and the mean of three query keystrokes over 400 names.
@@ -15,7 +15,7 @@
 
 ## How to get to it (user POV)
 
-- Launch with `quill` or `open -a Quill`. `quill` spawns the app directly and brings the window forward. `QUILL_TRACE=1` prints the same intervals while you work.
+- Launch with `quill` or `open -a Quill`. If Quill is already running, `quill` hands the path over the per-user socket and brings the window forward. A cold launch uses `open -a`. `QUILL_TRACE=1` prints the same intervals while you work.
 - Open a long markdown file, type, and scroll. The trace lines are the keystroke and motion cost.
 
 ## Driving it with verify-quill

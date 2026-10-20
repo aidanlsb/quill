@@ -1,5 +1,4 @@
 import AppKit
-import Darwin
 import QuillSearch
 import QuillWorkspace
 import SwiftUI
@@ -30,7 +29,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private var hostedWindow: NSWindow?
     private let handoff = HandoffBox()
     private var instance: InstanceServer?
-    private var termSource: DispatchSourceSignal?
     static weak var current: AppDelegate?
 
     var model: AppModel {
@@ -118,10 +116,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             show(hostedWindow)
         }
         AppActivation.bringForward()
+        StartupUI.noteFileArrival(model)
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        watchTerminationSignal()
         StartupProbe.mark("didFinish")
         installURLHandler()
         model.consumeLaunchArguments(Array(CommandLine.arguments.dropFirst()), immediate: true)
@@ -226,23 +224,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         AppActivation.activate(window)
     }
 
-    /// The runner that starts the CLI often has SIGTERM ignored, and
-    /// `posix_spawn` keeps that disposition. `kill` then cannot quit the editor.
-    private func watchTerminationSignal() {
-        signal(SIGTERM, SIG_IGN)
-        let source = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
-        source.setEventHandler {
-            // The main queue is the main thread. assumeIsolated hops onto the main actor.
-            MainActor.assumeIsolated {
-                NSApplication.shared.terminate(nil)
-            }
-        }
-        source.resume()
-        termSource = source
-    }
-
     /// `QUILL_SOCKET` in the environment, or the same path passed on argv.
-    /// The spawn can drop the variable; the argument still names the socket.
+    /// `open` drops the environment; the argument still names the socket.
     private static func socketPath() -> String {
         let args = CommandLine.arguments
         if let index = args.firstIndex(of: "--quill-socket"), index + 1 < args.count {
@@ -343,9 +326,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 }
 
-/// A direct spawn is not Launch Services, so `activate()` alone leaves the
-/// window behind Terminal on macOS 14+. `SetFrontProcess` still moves the
-/// process forward. Opening the bundle URL does not: it starts a second process.
+/// Cold launches come from `open -a`, which is what macOS 14+ will activate.
+/// A handoff to the running app orders that same window forward.
 @MainActor
 enum AppActivation {
     static func prepare() {
@@ -368,43 +350,11 @@ enum AppActivation {
         if !app.isActive {
             app.activate(ignoringOtherApps: true)
         }
-        if !app.isActive {
-            StartupProbe.mark("setFrontProcess")
-            FrontProcess.makeCurrentFront()
-        }
         if let window {
             window.collectionBehavior.insert(.moveToActiveSpace)
             window.makeKeyAndOrderFront(nil)
             window.orderFrontRegardless()
-            if !app.isActive {
-                FrontProcess.makeCurrentFront()
-            }
         }
-    }
-}
-
-private enum FrontProcess {
-    static func makeCurrentFront() {
-        // Already-loaded frameworks make a repeated dlopen a handle lookup.
-        // A stored handle is a non-Sendable global under strict concurrency.
-        guard let services = dlopen(
-            "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices",
-            RTLD_LAZY
-        ), let symbol = dlsym(services, "SetFrontProcess") else { return }
-        // A nested Swift struct is not a C type, so the function takes a raw pointer.
-        typealias SetFront = @convention(c) (UnsafeMutableRawPointer) -> Int32
-        let function = unsafeBitCast(symbol, to: SetFront.self)
-        var serial = Serial(high: 0, low: 2)
-        withUnsafeMutablePointer(to: &serial) { pointer in
-            _ = function(UnsafeMutableRawPointer(pointer))
-        }
-    }
-
-    /// Carbon `ProcessSerialNumber`. `unsigned long` is pointer-sized.
-    /// `low == 2` is `kCurrentProcess`.
-    private struct Serial {
-        var high: CUnsignedLong
-        var low: CUnsignedLong
     }
 }
 
