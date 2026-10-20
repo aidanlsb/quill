@@ -8,9 +8,9 @@ import os
 ///
 /// `QUILL_PERF=1` records time to the first editable frame in the perf log.
 /// `/tmp/quill-startup-request` (or `QUILL_STARTUP=1`) asks the process to
-/// prove the frame, write JSON, signal a fifo, and exit. `Scripts/quill` goes
-/// through Launch Services, which drops the environment, so the request file
-/// is how a CLI open is measured.
+/// prove the frame, write JSON, signal a fifo, and exit. The request file is
+/// how a CLI open is measured: `open -a` drops the environment, and a direct
+/// spawn keeps the shell environment minus injected libraries and secrets.
 enum StartupProbe {
     static func begin(_ name: StaticString) -> UInt64 {
         guard StartupLog.shared.tracing else { return 0 }
@@ -460,9 +460,9 @@ enum StartupUI {
             log.setWaiting("visible")
             return
         }
-        // A direct binary launch from CI is not activated, so the window can be
-        // on screen and still not key. `quill <file>` goes through `open -a`,
-        // which does activate, and that case has to come forward.
+        // A direct binary launch from a background shell is not activated, so the
+        // window can be on screen and still not key. `quill <file>` has to come
+        // forward, including when it was spawned instead of `open -a`.
         let foreground = log.expectPath != nil
         if foreground {
             if !window.isKeyWindow {

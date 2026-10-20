@@ -1,5 +1,7 @@
 import AppKit
+import Darwin
 import QuillSearch
+import QuillWorkspace
 import SwiftUI
 
 /// SwiftUI starts the process. It does not build the document window: that scene was the launch.
@@ -26,6 +28,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private var launchWindowShown = false
     private var shell: EditorShell?
     private var hostedWindow: NSWindow?
+    private let handoff = HandoffBox()
+    private var instance: InstanceServer?
+    static weak var current: AppDelegate?
 
     var model: AppModel {
         if let ownedModel { return ownedModel }
@@ -39,11 +44,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     override init() {
         super.init()
+        if !Self.standaloneLaunch() {
+            let targets = LaunchRequest.parse(Array(CommandLine.arguments.dropFirst()))
+            let box = handoff
+            switch InstanceBridge.claim(socket: InstanceSocket.path(), targets: targets, onMessage: { box.deliver($0) }) {
+            case .delivered:
+                exit(0)
+            case .primary(let server):
+                instance = server
+            case .unavailable:
+                break
+            }
+        }
         QuillTrace.event("delegateInit")
         StartupProbe.arm()
+        Self.current = self
     }
 
     func applicationWillFinishLaunching(_ notification: Notification) {
+        handoff.set { targets in
+            DispatchQueue.main.async {
+                // The main queue is the main thread. assumeIsolated hops onto the main actor.
+                MainActor.assumeIsolated {
+                    AppDelegate.current?.acceptHandoff(targets)
+                }
+            }
+        }
         StartupProbe.mark("willFinish")
         installURLHandler()
         // `.regular` before any window exists. A quill:// open from the CLI
@@ -120,6 +146,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         AppPerf.launchDidFinish()
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        instance?.stop()
+    }
+
+    func acceptHandoff(_ targets: [LaunchTarget]) {
+        for target in targets {
+            accept(LaunchRequest.url(for: target))
+        }
+        guard launchWindowShown else { return }
+        if let hostedWindow {
+            show(hostedWindow)
+            if let textView = shell?.textView {
+                hostedWindow.makeFirstResponder(textView)
+            }
+        }
+        AppActivation.bringForward()
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         // The perf probe opens a window and orders it out. Closing that last
         // window must not terminate the process before `quill perf done`.
@@ -177,12 +221,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     private func show(_ window: NSWindow) {
-        window.collectionBehavior.insert(.moveToActiveSpace)
-        let app = NSApplication.shared
-        app.activate()
-        window.makeKeyAndOrderFront(nil)
-        window.orderFrontRegardless()
-        app.activate()
+        AppActivation.activate(window)
+    }
+
+    private static func standaloneLaunch() -> Bool {
+        let env = ProcessInfo.processInfo.environment
+        if env["QUILL_SMOKE"] == "1" || env["QUILL_PERF"] == "1" || env["QUILL_STANDALONE"] == "1" {
+            return true
+        }
+        return CommandLine.arguments.contains("--quill-standalone")
     }
 
     private func drainPending() {
@@ -269,11 +316,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 }
 
-/// `open -a` asks Launch Services to activate Quill. The window still has to
-/// be ordered front: a quill:// delivery can arrive before the window exists,
-/// and a direct binary launch never becomes key on its own.
+/// A direct spawn is not Launch Services, so `activate()` alone leaves the
+/// window behind Terminal on macOS 14+. `SetFrontProcess` still moves the
+/// process forward. If that does not, and the CLI asked for the foreground,
+/// Launch Services activates this bundle once.
 @MainActor
 enum AppActivation {
+    private static var askedLaunchServices = false
+
     static func prepare() {
         let app = NSApplication.shared
         if app.activationPolicy() != .regular {
@@ -282,15 +332,105 @@ enum AppActivation {
     }
 
     static func bringForward() {
+        let app = NSApplication.shared
+        let window = app.keyWindow ?? app.windows.first { $0.canBecomeKey } ?? app.windows.first
+        activate(window)
+    }
+
+    static func activate(_ window: NSWindow?) {
         prepare()
         let app = NSApplication.shared
         app.activate()
-        if let key = app.keyWindow {
-            key.makeKeyAndOrderFront(nil)
-            return
+        if !app.isActive {
+            app.activate(ignoringOtherApps: true)
         }
-        if let window = app.windows.first(where: { $0.canBecomeKey }) ?? app.windows.first {
+        if !app.isActive {
+            StartupProbe.mark("setFrontProcess")
+            FrontProcess.makeCurrentFront()
+        }
+        if let window {
+            window.collectionBehavior.insert(.moveToActiveSpace)
             window.makeKeyAndOrderFront(nil)
+            window.orderFrontRegardless()
+            if !app.isActive {
+                FrontProcess.makeCurrentFront()
+            }
         }
+        guard !app.isActive, !askedLaunchServices else { return }
+        guard ProcessInfo.processInfo.environment["QUILL_FOREGROUND"] == "1" else { return }
+        askedLaunchServices = true
+        DispatchQueue.main.async {
+            guard !NSApplication.shared.isActive else { return }
+            askLaunchServices()
+        }
+    }
+
+    private static func askLaunchServices() {
+        let bundle = Bundle.main.bundleURL
+        guard bundle.pathExtension == "app" else { return }
+        StartupProbe.mark("launchServices")
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+        config.createsNewApplicationInstance = false
+        config.promptsUserIfNeeded = false
+        NSWorkspace.shared.openApplication(at: bundle, configuration: config) { _, _ in
+            DispatchQueue.main.async {
+                // The main queue is the main thread. assumeIsolated hops onto the main actor.
+                MainActor.assumeIsolated {
+                    guard !NSApplication.shared.isActive else { return }
+                    AppActivation.bringForward()
+                }
+            }
+        }
+    }
+}
+
+private enum FrontProcess {
+    private static let services = dlopen(
+        "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices",
+        RTLD_LAZY
+    )
+
+    static func makeCurrentFront() {
+        guard let services, let symbol = dlsym(services, "SetFrontProcess") else { return }
+        typealias SetFront = @convention(c) (UnsafeMutablePointer<Serial>) -> Int32
+        let function = unsafeBitCast(symbol, to: SetFront.self)
+        var serial = Serial(high: 0, low: 2)
+        _ = function(&serial)
+    }
+
+    /// Carbon `ProcessSerialNumber`. `unsigned long` is pointer-sized.
+    /// `low == 2` is `kCurrentProcess`.
+    private struct Serial {
+        var high: CUnsignedLong
+        var low: CUnsignedLong
+    }
+}
+
+// quill-concurrency: NSLock guards the handler the accept thread calls before the delegate is ready.
+private final class HandoffBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var handler: (@Sendable ([LaunchTarget]) -> Void)?
+    private var queued: [[LaunchTarget]] = []
+
+    func set(_ handler: @escaping @Sendable ([LaunchTarget]) -> Void) {
+        lock.lock()
+        self.handler = handler
+        let pending = queued
+        queued.removeAll()
+        lock.unlock()
+        for batch in pending {
+            handler(batch)
+        }
+    }
+
+    func deliver(_ targets: [LaunchTarget]) {
+        lock.lock()
+        let handler = self.handler
+        if handler == nil {
+            queued.append(targets)
+        }
+        lock.unlock()
+        handler?(targets)
     }
 }

@@ -256,6 +256,16 @@ check_cli_windows() {
   fi
   swiftc -O -o "$helper" "$root/Scripts/onscreen-window.swift"
 
+  local cli_bin
+  cli_bin="$(dirname "$bin")/QuillCLI"
+  if [[ ! -x "$cli_bin" ]]; then
+    echo "verify-quill: QuillCLI is not next to $bin" >&2
+    echo "verify-quill: swift build -c release --product QuillCLI -Xswiftc -strict-concurrency=complete" >&2
+    return 1
+  fi
+  export QUILL_CLI="$cli_bin"
+  export QUILL_SOCKET="$parent/q.sock"
+
   note="$work/README.md"
   printf 'alpha\nbeta\n' > "$note"
   mkdir -p "$work/notes"
@@ -344,6 +354,13 @@ check_cli_windows() {
         "$helper" --list >&2 || true
         return 1
       fi
+    fi
+    local count
+    count="$(bundle_pids | wc -l | tr -d ' ')"
+    if [[ "$count" != "1" ]]; then
+      echo "verify-quill: warm $label started another process ($count)" >&2
+      ps -ax -o pid=,command= | awk 'index($0, "Quill") { print }' >&2 || true
+      return 1
     fi
     echo "verify-quill: cli warm $label window pid $pid"
   }

@@ -14,8 +14,8 @@ The harness is `Scripts/verify-quill`. It runs `swift test --filter QuillAppTest
 From the repo root, on macOS, with Swift 6.2 selected (CI uses Xcode 26.3 at `/Applications/Xcode_26.3.app`; Xcode 16.4 cannot compile this app):
 
 ```bash
-swift build -c release --product Quill -Xswiftc -strict-concurrency=complete
-bin="$(swift build -c release --product Quill -Xswiftc -strict-concurrency=complete --show-bin-path)/Quill"
+swift build -c release --product Quill --product QuillCLI -Xswiftc -strict-concurrency=complete
+bin="$(swift build -c release --product Quill --product QuillCLI -Xswiftc -strict-concurrency=complete --show-bin-path)/Quill"
 Scripts/verify-quill --bin "$bin"
 ```
 

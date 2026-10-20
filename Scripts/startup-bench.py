@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Median cold-start and `quill <file>` measurements.
 
-Cold launch execs the release binary. The file case runs Scripts/quill, which
-hands the note to Launch Services. The app writes one JSON report per run.
+Cold launch execs the release binary. `file-open` is `open -a` (the previous
+`quill file.md` path). `file` is the direct-spawn CLI. The app writes one
+JSON report per run.
 A fifo wakes the timer so the wait is not a poll.
 
     python3 Scripts/startup-bench.py --self-test
@@ -23,6 +24,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+from urllib.parse import quote
 
 REQUEST = "/tmp/quill-startup-request"
 PREFIX = "Quill startup sample"
@@ -147,21 +149,36 @@ def run_once(
     thread.start()
     if not wait_for(ready, 5):
         raise RuntimeError("startup fifo listener did not arm")
-    expect = note if kind == "file" else None
+    expect = note if kind != "cold" else None
     write_request(fifo, str(dest.resolve()), expect)
     log_path = dest.with_suffix(".log")
     start = clock.nanos()
     proc: subprocess.Popen[bytes] | None = None
     try:
+        env = os.environ.copy()
+        env["QUILL_APP"] = app
         if kind == "cold":
             log = open(log_path, "w", encoding="utf-8")
             proc = subprocess.Popen([binary], stdout=log, stderr=subprocess.STDOUT)
-        else:
-            env = os.environ.copy()
-            env["QUILL_APP"] = app
+        elif kind == "file-open":
+            url = "quill://open?path=" + quote(note, safe="/-._~")
             with open(log_path, "w", encoding="utf-8") as log:
                 subprocess.run(
-                    ["/bin/bash", str(root / "Scripts" / "quill"), note],
+                    ["/usr/bin/open", "-a", app, url],
+                    cwd=root,
+                    env=env,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    check=False,
+                )
+        else:
+            cli = str(Path(app) / "Contents" / "MacOS" / "QuillCLI")
+            if not os.access(cli, os.X_OK):
+                raise RuntimeError(f"QuillCLI is missing: {cli}")
+            env["QUILL_LAUNCH_MARK"] = "1"
+            with open(log_path, "w", encoding="utf-8") as log:
+                subprocess.run(
+                    [cli, note],
                     cwd=root,
                     env=env,
                     stdout=log,
@@ -195,6 +212,11 @@ def run_once(
         report["log"] = str(log_path)
         if wall is not None and isinstance(report.get("launchToEditableMs"), (int, float)):
             report["beforeDelegateMs"] = float(wall) - float(report["launchToEditableMs"])
+        if kind == "file":
+            text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.is_file() else ""
+            if "quill launch direct" not in text:
+                report["ok"] = False
+                report["reason"] = "launcher did not spawn directly"
         dest.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         editable = report.get("launchToEditableMs")
         print(
@@ -264,6 +286,8 @@ def summarize(kind: str, runs: list[dict[str, object]]) -> str:
         else "  launchToEditableMs median=missing",
         f"  wallMs median={median(wall):.2f}  min={min(wall):.2f}  max={max(wall):.2f}" if wall else "  wallMs median=missing",
         f"  launchToKeyMs median={median(key):.2f}" if key else "  launchToKeyMs median=missing",
+        f"  focused={sum(1 for run in runs if run.get('focused') is True)}/{len(runs)}"
+        f" active={sum(1 for run in runs if run.get('active') is True)}/{len(runs)}",
     ]
     before = numbers("beforeDelegateMs")
     if before:
@@ -292,6 +316,38 @@ def summarize(kind: str, runs: list[dict[str, object]]) -> str:
     return "\n".join(lines)
 
 
+def comparison_table(before: list[dict[str, object]], after: list[dict[str, object]]) -> str:
+    def med(runs: list[dict[str, object]], key: str) -> float | None:
+        values = [
+            float(run[key])
+            for run in runs
+            if isinstance(run.get(key), (int, float)) and float(run[key]) >= 0
+        ]
+        return median(values) if values else None
+
+    lines = [
+        "| case | metric | open -a median | direct median | factor |",
+        "|---|---|---:|---:|---:|",
+    ]
+    for key in ("wallMs", "launchToEditableMs", "launchToKeyMs", "beforeDelegateMs"):
+        left = med(before, key)
+        right = med(after, key)
+        left_text = "missing" if left is None else f"{left:.2f}"
+        right_text = "missing" if right is None else f"{right:.2f}"
+        if left is None or right is None or right == 0:
+            factor = "n/a"
+        else:
+            factor = f"{left / right:.2f}x"
+        lines.append(f"| quill file.md | {key} | {left_text} | {right_text} | {factor} |")
+
+    def ready(runs: list[dict[str, object]]) -> str:
+        count = sum(1 for run in runs if run.get("focused") is True and run.get("active") is True)
+        return f"{count}/{len(runs)}"
+
+    lines.append(f"| quill file.md | focused+active | {ready(before)} | {ready(after)} | |")
+    return "\n".join(lines)
+
+
 def measure(args: argparse.Namespace) -> int:
     if platform.system() != "Darwin":
         print("startup-bench: Quill is an AppKit app. This host cannot launch it.", file=sys.stderr)
@@ -315,8 +371,9 @@ def measure(args: argparse.Namespace) -> int:
     clock = Clock()
     summaries = []
     failed = False
+    kept_by_kind: dict[str, list[dict[str, object]]] = {}
     try:
-        for kind in ("cold", "file"):
+        for kind in ("cold", "file-open", "file"):
             kept: list[dict[str, object]] = []
             total = args.warmup + args.runs
             for index in range(total):
@@ -326,6 +383,7 @@ def measure(args: argparse.Namespace) -> int:
                 report = run_once(clock, kind, binary, app, str(note), dest, root)
                 if index >= args.warmup:
                     kept.append(report)
+            kept_by_kind[kind] = kept
             text = summarize(kind, kept)
             print(text, flush=True)
             summaries.append(text)
@@ -333,6 +391,9 @@ def measure(args: argparse.Namespace) -> int:
                 failed = True
             if not any(isinstance(run.get("launchToEditableMs"), (int, float)) for run in kept):
                 failed = True
+        table = comparison_table(kept_by_kind.get("file-open", []), kept_by_kind.get("file", []))
+        print(table, flush=True)
+        summaries.append(table)
     finally:
         quiet_kill()
         shutil.rmtree(note_dir, ignore_errors=True)
@@ -375,6 +436,18 @@ def self_test() -> int:
     if "launchToEditableMs median=20.00" not in text or "FAIL" not in text:
         print(text, file=sys.stderr)
         print("self-test: summary", file=sys.stderr)
+        return 1
+    table = comparison_table(
+        [{"ok": True, "wallMs": 400, "launchToEditableMs": 300, "launchToKeyMs": 280, "beforeDelegateMs": 100, "focused": True, "active": True}],
+        [{"ok": True, "wallMs": 200, "launchToEditableMs": 180, "launchToKeyMs": 170, "beforeDelegateMs": 20, "focused": True, "active": True}],
+    )
+    if "| quill file.md | wallMs | 400.00 | 200.00 | 2.00x |" not in table:
+        print(table, file=sys.stderr)
+        print("self-test: comparison table", file=sys.stderr)
+        return 1
+    if "focused+active | 1/1 | 1/1 |" not in table:
+        print(table, file=sys.stderr)
+        print("self-test: focus row", file=sys.stderr)
         return 1
     print("startup-bench: self-test passed")
     return 0

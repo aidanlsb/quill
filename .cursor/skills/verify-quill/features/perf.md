@@ -15,7 +15,7 @@
 
 ## How to get to it (user POV)
 
-- Launch with `quill` or `open -a Quill`. The window should come forward. `QUILL_TRACE=1` prints the same intervals while you work.
+- Launch with `quill` or `open -a Quill`. `quill` spawns the app directly and brings the window forward. `QUILL_TRACE=1` prints the same intervals while you work.
 - Open a long markdown file, type, and scroll. The trace lines are the keystroke and motion cost.
 
 ## Driving it with verify-quill
