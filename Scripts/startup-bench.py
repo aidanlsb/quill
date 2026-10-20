@@ -148,7 +148,7 @@ def run_once(
     if not wait_for(ready, 5):
         raise RuntimeError("startup fifo listener did not arm")
     expect = note if kind == "file" else None
-    write_request(fifo, str(dest), expect)
+    write_request(fifo, str(dest.resolve()), expect)
     log_path = dest.with_suffix(".log")
     start = clock.nanos()
     proc: subprocess.Popen[bytes] | None = None
@@ -196,6 +196,19 @@ def run_once(
         if wall is not None and isinstance(report.get("launchToEditableMs"), (int, float)):
             report["beforeDelegateMs"] = float(wall) - float(report["launchToEditableMs"])
         dest.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        editable = report.get("launchToEditableMs")
+        print(
+            f"  ok={report.get('ok')} editable={editable} wall={wall} "
+            f"key={report.get('launchToKeyMs')} focused={report.get('focused')} "
+            f"active={report.get('active')} waiting={report.get('waiting')} source={source}",
+            flush=True,
+        )
+        printed = timeline(report)
+        if printed:
+            print(printed, flush=True)
+        elif log_path.is_file():
+            text = log_path.read_text(encoding="utf-8", errors="replace")
+            print(text[-2000:], flush=True)
         return report
     finally:
         try:
@@ -255,15 +268,20 @@ def summarize(kind: str, runs: list[dict[str, object]]) -> str:
     before = numbers("beforeDelegateMs")
     if before:
         lines.append(f"  beforeDelegateMs median={median(before):.2f}")
-    if editable:
-        target = median(editable)
-        closest = min(
-            runs,
-            key=lambda run: abs(float(run["launchToEditableMs"]) - target)
-            if isinstance(run.get("launchToEditableMs"), (int, float))
-            else 1e9,
-        )
-        lines.append("  timeline of the run closest to the median:")
+    with_marks = [run for run in runs if isinstance(run.get("marks"), list) and run.get("marks")]
+    if with_marks:
+        if editable:
+            target = median(editable)
+            closest = min(
+                with_marks,
+                key=lambda run: abs(float(run["launchToEditableMs"]) - target)
+                if isinstance(run.get("launchToEditableMs"), (int, float))
+                else 1e9,
+            )
+            lines.append("  timeline of the run closest to the median:")
+        else:
+            closest = with_marks[0]
+            lines.append("  timeline of the first run:")
         lines.append(timeline(closest))
     failed = [run for run in runs if run.get("ok") is not True]
     for run in failed:

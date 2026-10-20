@@ -85,6 +85,8 @@ private final class StartupLog: @unchecked Sendable {
     private var editableMs: Double?
     private var readyQueued = false
     private var waiting = ""
+    private var focused = false
+    private var appActive = false
     private let numer: UInt64
     private let denom: UInt64
 
@@ -197,6 +199,13 @@ private final class StartupLog: @unchecked Sendable {
         lock.unlock()
     }
 
+    func setFocus(key: Bool, active: Bool) {
+        lock.lock()
+        focused = key
+        appActive = active
+        lock.unlock()
+    }
+
     func setKeyAccepted(_ accepted: Bool) {
         lock.lock()
         keyAccepted = accepted
@@ -261,7 +270,9 @@ private final class StartupLog: @unchecked Sendable {
             firstDrawMs: firstDrawMs,
             unstyledDraw: unstyledDraw,
             keyAccepted: keyAccepted,
-            waiting: waiting
+            waiting: waiting,
+            focused: focused,
+            appActive: appActive
         )
     }
 
@@ -340,6 +351,8 @@ private struct Report {
     var unstyledDraw: Bool
     var keyAccepted: Bool
     var waiting: String
+    var focused: Bool
+    var appActive: Bool
 
     func json(signalNanos: UInt64) -> [String: Any] {
         var object: [String: Any] = [
@@ -350,6 +363,8 @@ private struct Report {
             "unstyledDraw": unstyledDraw,
             "keyAccepted": keyAccepted,
             "waiting": waiting,
+            "focused": focused,
+            "active": appActive,
             "signalNanos": String(signalNanos),
             "marks": marks.map { ["name": $0.0, "ms": $0.1] },
             "spans": spans.map { ["name": $0.0, "startMs": $0.1, "ms": $0.2] },
@@ -445,7 +460,11 @@ enum StartupUI {
             log.setWaiting("visible")
             return
         }
-        if log.exits {
+        // A direct binary launch from CI is not activated, so the window can be
+        // on screen and still not key. `quill <file>` goes through `open -a`,
+        // which does activate, and that case has to come forward.
+        let foreground = log.expectPath != nil
+        if foreground {
             if !window.isKeyWindow {
                 log.setWaiting("key")
                 return
@@ -458,11 +477,12 @@ enum StartupUI {
                 log.setWaiting("responder")
                 return
             }
-            if log.expectPath != nil, !NSApplication.shared.isActive {
+            if !NSApplication.shared.isActive {
                 log.setWaiting("active")
                 return
             }
         }
+        log.setFocus(key: window.isKeyWindow, active: NSApplication.shared.isActive)
 
         if !view.startupDidAcceptKey {
             let cursor = view.engine.cursor
