@@ -1,15 +1,21 @@
 import AppKit
 import QuillSearch
+import SwiftUI
 
-/// AppKit owns startup. A SwiftUI `WindowGroup` was the time between process start and the first editable frame.
+/// SwiftUI starts the process. It does not build the document window: that scene was the launch.
 @main
-enum QuillMain {
-    static func main() {
+struct QuillApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+
+    init() {
         StartupProbe.mark("appInit")
-        let app = NSApplication.shared
-        let delegate = AppDelegate()
-        app.delegate = delegate
-        app.run()
+    }
+
+    var body: some Scene {
+        WindowGroup {
+            Color.clear
+        }
+        .defaultLaunchBehavior(.suppressed)
     }
 }
 
@@ -49,6 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         // read its file before the window is shown.
         AppSmoke.prepareIfRequested()
         _ = model
+        StartupProbe.mark("activated")
     }
 
     /// Apple events arrive on the main thread. The file is installed before
@@ -97,7 +104,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         show(window)
         if let textView = shell?.textView {
             window.makeFirstResponder(textView)
+            textView.layoutSubtreeIfNeeded()
+            textView.display()
         }
+        window.display()
         launchWindowShown = true
         WindowChrome.apply(theme: model.theme)
         QuillTrace.event("keyWindow")
