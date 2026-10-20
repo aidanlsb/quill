@@ -163,7 +163,17 @@ final class VimTextView: NSTextView {
     var directoryGhostHeight: CGFloat = 0
     var focusMode = false
     var columnWidth: CGFloat = 640
-    var theme = QuillTheme.current()
+    /// Left unset until `host` or `applyTheme`. Building a theme here measured fonts on every view, including the launch view that already has the model theme.
+    private var themeStorage: QuillTheme?
+    var theme: QuillTheme {
+        get {
+            if let themeStorage { return themeStorage }
+            let built = QuillTheme.current()
+            themeStorage = built
+            return built
+        }
+        set { themeStorage = newValue }
+    }
     var diagnosticRanges: [(NSRange, Int)] = []
     var directoryStyleCache: DirectoryStyle?
     /// Tests watch reloads, row invalidation, and directory painting. Nil in the app.
@@ -223,7 +233,8 @@ final class VimTextView: NSTextView {
     /// `EditorView`, `AppPerf`, and tests use it.
     static func host(
         engine: Engine,
-        frame: NSRect = NSRect(x: 0, y: 0, width: 800, height: 600)
+        frame: NSRect = NSRect(x: 0, y: 0, width: 800, height: 600),
+        theme: QuillTheme? = nil
     ) -> (scroll: NSScrollView, view: VimTextView) {
         let hostBegan = StartupProbe.begin("hostMs")
         defer { StartupProbe.end("hostMs", hostBegan) }
@@ -234,6 +245,9 @@ final class VimTextView: NSTextView {
         scroll.drawsBackground = false
         scroll.autohidesScrollers = true
         let tv = VimTextView.make()
+        if let theme {
+            tv.theme = theme
+        }
         // setFrameSize measures the buffer. Bind the engine first, and give the
         // text container the clip width before any caller copies the text in.
         // A zero-width container traps TextKit on a long line.
