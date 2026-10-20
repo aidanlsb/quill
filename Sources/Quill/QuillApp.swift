@@ -328,12 +328,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
 /// A direct spawn is not Launch Services, so `activate()` alone leaves the
 /// window behind Terminal on macOS 14+. `SetFrontProcess` still moves the
-/// process forward. If that does not, and the CLI asked for the foreground,
-/// Launch Services activates this bundle once.
+/// process forward. Opening the bundle URL does not: it starts a second process.
 @MainActor
 enum AppActivation {
-    private static var askedLaunchServices = false
-
     static func prepare() {
         let app = NSApplication.shared
         if app.activationPolicy() != .regular {
@@ -366,30 +363,37 @@ enum AppActivation {
                 FrontProcess.makeCurrentFront()
             }
         }
-        guard !app.isActive, !askedLaunchServices else { return }
-        guard ProcessInfo.processInfo.environment["QUILL_FOREGROUND"] == "1" else { return }
-        askedLaunchServices = true
-        DispatchQueue.main.async {
-            guard !NSApplication.shared.isActive else { return }
-            askLaunchServices()
-        }
+        scheduleForegroundRetry()
     }
 
-    private static func askLaunchServices() {
-        let bundle = Bundle.main.bundleURL
-        guard bundle.pathExtension == "app" else { return }
-        StartupProbe.mark("launchServices")
-        let config = NSWorkspace.OpenConfiguration()
-        config.activates = true
-        config.createsNewApplicationInstance = false
-        config.promptsUserIfNeeded = false
-        NSWorkspace.shared.openApplication(at: bundle, configuration: config) { _, _ in
-            DispatchQueue.main.async {
-                // The main queue is the main thread. assumeIsolated hops onto the main actor.
-                MainActor.assumeIsolated {
-                    guard !NSApplication.shared.isActive else { return }
-                    AppActivation.bringForward()
+    /// `NSWorkspace.openApplication` on a posix_spawn'd bundle starts a second
+    /// process: Launch Services does not treat that pid as the running instance,
+    /// even with `createsNewApplicationInstance = false`. The duplicate hands
+    /// off over the socket and exits. Retry the foreground request instead.
+    private static var foregroundRetries = 0
+
+    private static func scheduleForegroundRetry() {
+        guard foregroundRetries == 0 else { return }
+        guard !NSApplication.shared.isActive else { return }
+        guard ProcessInfo.processInfo.environment["QUILL_FOREGROUND"] == "1" else { return }
+        foregroundRetries = 1
+        kickForeground(8)
+    }
+
+    private static func kickForeground(_ left: Int) {
+        DispatchQueue.main.async {
+            // The main queue is the main thread. assumeIsolated hops onto the main actor.
+            MainActor.assumeIsolated {
+                let app = NSApplication.shared
+                if app.isActive || left == 0 {
+                    foregroundRetries = 0
+                    return
                 }
+                app.activate(ignoringOtherApps: true)
+                _ = NSRunningApplication.current.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+                FrontProcess.makeCurrentFront()
+                (app.keyWindow ?? app.mainWindow)?.makeKeyAndOrderFront(nil)
+                kickForeground(left - 1)
             }
         }
     }

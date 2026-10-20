@@ -224,7 +224,7 @@ check_cli_windows() {
   helper="$parent/onscreen-window"
   work="$parent/work"
   bundle_pids() {
-    ps -ax -o pid=,command= | awk -v needle="$app_bin" 'index($0, needle) { print $1 }'
+    ps -axww -o pid=,command= | awk -v needle="$app_bin" 'index($0, needle) { print $1 }'
   }
   cleanup_cli() {
     local pid
@@ -265,6 +265,7 @@ check_cli_windows() {
   fi
   export QUILL_CLI="$cli_bin"
   export QUILL_SOCKET="$parent/q.sock"
+  export QUILL_LAUNCH_MARK=1
 
   note="$work/README.md"
   printf 'alpha\nbeta\n' > "$note"

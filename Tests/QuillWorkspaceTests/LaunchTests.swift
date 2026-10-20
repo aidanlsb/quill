@@ -95,7 +95,7 @@ final class InstanceHandoffTests: XCTestCase {
     func testRejectsABadMessageAndKeepsListening() throws {
         let (path, server, received) = try startServer()
         defer { server.stop() }
-        XCTAssertEqual(InstanceClient.exchange("{\"v\":2,\"targets\":[]}\n", socket: path), "no")
+        XCTAssertEqual(InstanceClient.exchange("{\"v\":2,\"targets\":[]}\n", socket: path), "no-decode")
         let target = LaunchTarget(path: "/tmp/note.md")
         XCTAssertEqual(InstanceClient.send([target], socket: path), .delivered)
         XCTAssertEqual(received(), [[target]])
@@ -307,8 +307,8 @@ final class QuillCommandTests: XCTestCase {
                 return 0
             }
         )
-        XCTAssertEqual(code, 0)
-        XCTAssertTrue(opened)
+        XCTAssertEqual(code, 1)
+        XCTAssertFalse(opened)
     }
 
     func testWaitSpawnsStandaloneAndDoesNotHandOff() throws {

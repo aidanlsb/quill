@@ -77,12 +77,22 @@ private struct HandoffMessage: Codable {
 public enum InstanceClient {
     public static func send(_ targets: [LaunchTarget], socket path: String) -> HandoffResult {
         guard let line = HandoffCodec.line(for: targets) else { return .failed }
-        switch exchange(line + "\n", socket: path) {
+        let payload = line + "\n"
+        var result = exchange(payload, socket: path)
+        // A socket file with no listener is the stale-socket case (connect fails).
+        // One more try covers a listener that was between bind and listen.
+        if result == nil, FileManager.default.fileExists(atPath: path) {
+            result = exchange(payload, socket: path)
+        }
+        switch result {
         case "ok"?:
             return .delivered
         case nil:
             return .notRunning
-        default:
+        case let reply?:
+            // Connected, but the running instance did not take the paths.
+            // Spawning here would be a second process.
+            FileHandle.standardError.write(Data("quill: handoff \(reply)\n".utf8))
             return .failed
         }
     }
@@ -105,8 +115,13 @@ public enum InstanceClient {
             connect(fd, pointer, length)
         }
         guard connected == 0 else { return nil }
-        guard writeAll(fd, line) else { return nil }
-        return readLine(fd)
+        // The peer may close without reading. A failed write is still a live socket:
+        // reporting nil would spawn a second process.
+        _ = writeAll(fd, line)
+        if let reply = readLine(fd) {
+            return reply
+        }
+        return "no-reply"
     }
 }
 
@@ -274,8 +289,18 @@ public final class InstanceServer: @unchecked Sendable {
         var one: Int32 = 1
         setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
         #endif
-        guard peerIsCurrentUser(client), let line = readLine(client), let targets = HandoffCodec.targets(from: line) else {
-            _ = writeAll(client, "no\n")
+        // Read before rejecting. Closing first makes the client's write fail
+        // with EPIPE, which looks like a dead socket and starts another process.
+        guard let line = readLine(client) else {
+            _ = writeAll(client, "no-read\n")
+            return
+        }
+        guard peerIsCurrentUser(client) else {
+            _ = writeAll(client, "no-peer\n")
+            return
+        }
+        guard let targets = HandoffCodec.targets(from: line) else {
+            _ = writeAll(client, "no-decode\n")
             return
         }
         onMessage(targets)
@@ -307,7 +332,8 @@ private func peerIsCurrentUser(_ fd: Int32) -> Bool {
     #if os(macOS)
     var uid: uid_t = 0
     var gid: gid_t = 0
-    guard getpeereid(fd, &uid, &gid) == 0 else { return false }
+    // The socket is mode 0600. A failed lookup must not turn into a second process.
+    guard getpeereid(fd, &uid, &gid) == 0 else { return true }
     return uid == getuid()
     #else
     var cred = PeerCred()

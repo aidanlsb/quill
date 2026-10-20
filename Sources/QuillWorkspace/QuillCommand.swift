@@ -66,6 +66,8 @@ public enum LaunchEnvironment {
 
 public enum LaunchAction: Equatable {
     case running
+    /// The socket accepted a connection and did not take the paths. Do not start another process.
+    case rejected
     case spawn(binary: String, arguments: [String], environment: [String: String], wait: Bool)
     case open(app: String, urls: [String], wait: Bool)
 }
@@ -106,6 +108,9 @@ public enum QuillCommand {
         case .running:
             mark(environment, "handoff")
             return 0
+        case .rejected:
+            mark(environment, "rejected")
+            return 1
         case .spawn(let path, let args, let env, let shouldWait):
             if let status = spawn(path, args, env, shouldWait) {
                 mark(environment, shouldWait ? "wait" : "direct")
@@ -133,8 +138,7 @@ public enum QuillCommand {
             return .running
         }
         if !wait, handoff == .failed {
-            let open = openArguments(targets: targets, bundle: bundle, wait: false)
-            return .open(app: open.app, urls: open.urls, wait: open.wait)
+            return .rejected
         }
         if canSpawn, let binary {
             var env = LaunchEnvironment.sanitize(environment)
