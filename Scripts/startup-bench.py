@@ -176,7 +176,8 @@ def run_once(
             if not os.access(cli, os.X_OK):
                 raise RuntimeError(f"QuillCLI is missing: {cli}")
             env["QUILL_LAUNCH_MARK"] = "1"
-            with open(log_path, "w", encoding="utf-8") as log:
+            # Unbuffered. A text-mode file object can drop what the child wrote to the fd.
+            with open(log_path, "wb", buffering=0) as log:
                 subprocess.run(
                     [cli, note],
                     cwd=root,
@@ -216,7 +217,8 @@ def run_once(
             text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.is_file() else ""
             if "quill launch direct" not in text:
                 report["ok"] = False
-                report["reason"] = "launcher did not spawn directly"
+                snippet = " ".join(text.split())
+                report["reason"] = "launcher did not spawn directly: " + snippet[:240]
         dest.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         editable = report.get("launchToEditableMs")
         print(

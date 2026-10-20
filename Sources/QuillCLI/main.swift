@@ -31,22 +31,68 @@ enum QuillCLI {
 /// process for the editor. Closing the terminal does not deliver SIGHUP.
 enum DetachedSpawn {
     static func launch(binary: String, arguments: [String], environment: [String: String], wait: Bool) -> Int32? {
+        // Disclaim can make posix_spawn return EINVAL. A failed attempt does not
+        // create a process, so the next attempt is the one that runs.
+        var last = Int32(EINVAL)
+        for disclaimResponsibility in [true, false] {
+            if let status = spawn(
+                binary: binary,
+                arguments: arguments,
+                environment: environment,
+                wait: wait,
+                disclaimResponsibility: disclaimResponsibility,
+                error: &last
+            ) {
+                return status
+            }
+        }
+        let line = "quill: spawn failed \(last)\n"
+        _ = line.withUTF8 { bytes in
+            write(STDERR_FILENO, bytes.baseAddress, bytes.count)
+        }
+        return nil
+    }
+
+    private static func spawn(
+        binary: String,
+        arguments: [String],
+        environment: [String: String],
+        wait: Bool,
+        disclaimResponsibility: Bool,
+        error: inout Int32
+    ) -> Int32? {
         var actions: posix_spawn_file_actions_t?
         var attrs: posix_spawnattr_t?
-        guard posix_spawn_file_actions_init(&actions) == 0 else { return nil }
+        let actionsReady = posix_spawn_file_actions_init(&actions)
+        if actionsReady != 0 {
+            error = actionsReady
+            return nil
+        }
         defer { posix_spawn_file_actions_destroy(&actions) }
-        guard posix_spawnattr_init(&attrs) == 0 else { return nil }
+        let attrsReady = posix_spawnattr_init(&attrs)
+        if attrsReady != 0 {
+            error = attrsReady
+            return nil
+        }
         defer { posix_spawnattr_destroy(&attrs) }
 
-        var flags: Int16 = 0
-        flags |= Int16(POSIX_SPAWN_SETSID)
-        flags |= Int16(POSIX_SPAWN_CLOEXEC_DEFAULT)
-        guard posix_spawnattr_setflags(&attrs, flags) == 0 else { return nil }
-        disclaim(&attrs)
+        let flags = Int16(POSIX_SPAWN_SETSID)
+        let flagged = posix_spawnattr_setflags(&attrs, flags)
+        if flagged != 0 {
+            error = flagged
+            return nil
+        }
+        if disclaimResponsibility {
+            disclaim(&attrs)
+        }
 
-        if posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0) != 0 { return nil }
-        if posix_spawn_file_actions_addopen(&actions, 1, "/dev/null", O_WRONLY, 0) != 0 { return nil }
-        if posix_spawn_file_actions_addopen(&actions, 2, "/dev/null", O_WRONLY, 0) != 0 { return nil }
+        if posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0) != 0
+            || posix_spawn_file_actions_addopen(&actions, 1, "/dev/null", O_WRONLY, 0) != 0
+            || posix_spawn_file_actions_addopen(&actions, 2, "/dev/null", O_WRONLY, 0) != 0
+        {
+            error = errno
+            return nil
+        }
 
         var argv = arguments.map { strdup($0) }
         argv.append(nil)
@@ -55,15 +101,21 @@ enum DetachedSpawn {
         var envp = pairs.map { strdup($0) }
         envp.append(nil)
         defer { envp.forEach { free($0) } }
-        if argv.contains(where: { $0 == nil }) || envp.contains(where: { $0 == nil }) { return nil }
+        if argv.contains(where: { $0 == nil }) || envp.contains(where: { $0 == nil }) {
+            error = Int32(ENOMEM)
+            return nil
+        }
 
         var pid: pid_t = 0
-        let spawned = argv.withUnsafeMutableBufferPointer { argvBuf in
-            envp.withUnsafeMutableBufferPointer { envBuf in
+        let spawned = argv.withUnsafeBufferPointer { argvBuf in
+            envp.withUnsafeBufferPointer { envBuf in
                 posix_spawn(&pid, binary, &actions, &attrs, argvBuf.baseAddress, envBuf.baseAddress)
             }
         }
-        guard spawned == 0, pid > 0 else { return nil }
+        if spawned != 0 || pid <= 0 {
+            error = spawned == 0 ? Int32(ECHILD) : spawned
+            return nil
+        }
         guard wait else { return 0 }
         while true {
             var status: Int32 = 0
