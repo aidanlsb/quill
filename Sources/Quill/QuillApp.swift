@@ -111,7 +111,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             }
             return
         }
-        model.open(url: url)
+        // The bytes are in the buffer before the warm probe reads the path.
+        // An async read races that check and leaves it waiting on the previous file.
+        model.open(url: url, immediate: true)
         if let hostedWindow {
             show(hostedWindow)
         }

@@ -27,6 +27,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 REQUEST = "/tmp/quill-startup-request"
+STATUS = "/tmp/quill-startup-status"
 PREFIX = "Quill startup sample"
 
 
@@ -40,18 +41,18 @@ def median(values: list[float]) -> float:
     return (ordered[mid - 1] + ordered[mid]) / 2
 
 
-def sample_note() -> str:
+def sample_note(marker: str) -> str:
     lines = [
         PREFIX,
         "",
         "# Heading",
         "",
-        "A paragraph with **bold** and `code`.",
+        f"A paragraph for {marker} with **bold** and `code`.",
         "",
     ]
     for index in range(80):
         lines.append(
-            f"Line {index} continues the note with a [link](https://example.com) and `code`."
+            f"{marker} line {index} continues the note with a [link](https://example.com) and `code`."
         )
     return "\n".join(lines) + "\n"
 
@@ -171,6 +172,10 @@ def run_once(
         os.remove(REQUEST)
     except FileNotFoundError:
         pass
+    try:
+        os.remove(STATUS)
+    except FileNotFoundError:
+        pass
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists():
         dest.unlink()
@@ -273,11 +278,16 @@ def run_once(
                 report["ok"] = False
                 snippet = " ".join(text.split())
                 report["reason"] = "launcher did not hand off: " + snippet[:240]
+        status = ""
+        if os.path.exists(STATUS):
+            status = open(STATUS, encoding="utf-8").read().strip()
+        if report.get("ok") is not True and status:
+            report["reason"] = f"{report.get('reason') or 'not ready'}; status={status}"
         dest.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         print(
             f"  ok={report.get('ok')} wall={wall} focused={report.get('focused')} "
             f"active={report.get('active')} waiting={report.get('waiting')} "
-            f"pids={after} source={source}",
+            f"status={status!r} pids={after} source={source}",
             flush=True,
         )
         printed = timeline(report)
@@ -441,7 +451,7 @@ def measure(args: argparse.Namespace) -> int:
     notes = []
     for name in ("a.md", "b.md"):
         path = note_dir / name
-        path.write_text(sample_note(), encoding="utf-8")
+        path.write_text(sample_note(name), encoding="utf-8")
         notes.append(str(path))
     clock = Clock()
     summaries = []
@@ -502,7 +512,7 @@ def self_test() -> int:
     else:
         print("self-test: empty median was accepted", file=sys.stderr)
         return 1
-    note = sample_note()
+    note = sample_note("a.md")
     if not note.startswith(PREFIX) or "\n# Heading\n" not in note:
         print("self-test: sample note lost its heading", file=sys.stderr)
         return 1

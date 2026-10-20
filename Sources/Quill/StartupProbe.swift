@@ -206,6 +206,7 @@ private final class StartupLog: @unchecked Sendable {
         lock.lock()
         waiting = reason
         lock.unlock()
+        try? Data("\(reason)\n".utf8).write(to: URL(fileURLWithPath: "/tmp/quill-startup-status"))
     }
 
     func setFocus(key: Bool, active: Bool) {
@@ -460,7 +461,10 @@ enum StartupUI {
 
     /// The running app opened a path. Arm the probe if a warm request is waiting.
     static func noteFileArrival(_ model: AppModel) {
-        guard StartupLog.shared.rearmFromRequest() else { return }
+        guard StartupLog.shared.rearmFromRequest() else {
+            try? Data("no-request\n".utf8).write(to: URL(fileURLWithPath: "/tmp/quill-startup-status"))
+            return
+        }
         self.model = model
         model.editor?.startupDidAcceptKey = false
         considerReady()
