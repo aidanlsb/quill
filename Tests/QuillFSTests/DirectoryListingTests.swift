@@ -139,6 +139,31 @@ final class DirectoryListingTests: XCTestCase {
         ])
     }
 
+    func testSlashAndDotDotDoNotEscape() {
+        let snap = original([("note.md", false)], ids: [1])
+        let lines = [
+            ListingLine(name: "../.ssh/authorized_keys", isDirectory: false, entryID: 1),
+        ]
+        XCTAssertEqual(DirectoryListing.invalidName(in: lines), "../.ssh/authorized_keys")
+        let ops = DirectoryListing.plan(original: snap, lines: lines)
+        XCTAssertTrue(ops.isEmpty)
+        XCTAssertNil(DirectoryListing.confinementError(ops, directory: parent))
+        let planted = DirectoryListing.plan(original: snap, editedText: "note.md\nsub/evil.md\n")
+        XCTAssertTrue(planted.isEmpty)
+        let escape: [FSOperation] = [
+            .rename(from: parent.appendingPathComponent("note.md"), to: URL(fileURLWithPath: "/etc/cron.d/evil")),
+        ]
+        XCTAssertEqual(
+            DirectoryListing.confinementError(escape, directory: parent),
+            "Refusing to write evil"
+        )
+        let outsideDelete: [FSOperation] = [.delete(URL(fileURLWithPath: "/etc/passwd"))]
+        XCTAssertEqual(
+            DirectoryListing.confinementError(outsideDelete, directory: parent),
+            "Refusing to delete passwd"
+        )
+    }
+
     func testSnapshotReadsFilesystem() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("quill-fs-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
