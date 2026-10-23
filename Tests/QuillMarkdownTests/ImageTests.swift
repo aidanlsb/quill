@@ -96,6 +96,19 @@ final class ImageTests: XCTestCase {
         )
     }
 
+    func testRemoteImagesAreNotFetched() {
+        let remote = ImagePaths.resolve("http://127.0.0.1:9/pixel.png", filePath: nil, home: "/Users/ada")
+        XCTAssertEqual(remote, .remote(url: "http://127.0.0.1:9/pixel.png"))
+        XCTAssertEqual(remote.map(ImageLoads.mayFetch), false)
+        let local = ImagePaths.resolve("pic.png", filePath: "/notes/a.md", home: "/Users/ada")
+        XCTAssertEqual(local.map(ImageLoads.mayFetch), true)
+        XCTAssertFalse(ImageLoads.allowsFileSize(ImageLoads.maxFileBytes + 1))
+        XCTAssertTrue(ImageLoads.allowsFileSize(1024))
+        XCTAssertFalse(ImageLoads.allowsPixels(width: 20_000, height: 20_000))
+        XCTAssertFalse(ImageLoads.allowsPixels(width: 100_000, height: 100_000))
+        XCTAssertTrue(ImageLoads.allowsPixels(width: 800, height: 600))
+    }
+
     func testCacheHitsMtimeAndEvicts() {
         var cache = ImageCache<String>(limit: 2)
         let path = "file:/notes/a.png"
