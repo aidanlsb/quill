@@ -4,16 +4,28 @@ on:
   push:
   pull_request:
 
+# Least privilege. The jobs only read the repo and do not publish artifacts.
+permissions:
+  contents: read
+
 jobs:
   linux:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install Swift
         run: |
           sudo apt-get update
           sudo apt-get install -y binutils git unzip gnupg2 libc6-dev libcurl4-openssl-dev libedit2 libgcc-13-dev libpython3-dev libsqlite3-0 libstdc++-13-dev libxml2-dev libncurses-dev libz3-dev pkg-config tzdata zlib1g-dev shellcheck
-          curl -fsSL https://download.swift.org/swift-6.0.3-release/ubuntu2404/swift-6.0.3-RELEASE/swift-6.0.3-RELEASE-ubuntu24.04.tar.gz -o /tmp/swift.tar.gz
+          base="https://download.swift.org/swift-6.0.3-release/ubuntu2404/swift-6.0.3-RELEASE"
+          archive="swift-6.0.3-RELEASE-ubuntu24.04.tar.gz"
+          curl -fsSL --proto '=https' --tlsv1.2 "$base/$archive" -o /tmp/swift.tar.gz
+          curl -fsSL --proto '=https' --tlsv1.2 "$base/$archive.sig" -o /tmp/swift.tar.gz.sig
+          export GNUPGHOME="$(mktemp -d)"
+          gpg --batch --import Scripts/swift-6.x-release.asc
+          fingerprint="$(gpg --batch --show-keys --with-colons Scripts/swift-6.x-release.asc | awk -F: '/^fpr:/ { print $10; exit }')"
+          test "$fingerprint" = "52BB7E3DE28A71BE22EC05FFEF80A866B47A981F"
+          gpg --batch --verify /tmp/swift.tar.gz.sig /tmp/swift.tar.gz
           sudo tar -xzf /tmp/swift.tar.gz -C /opt
           echo "/opt/swift-6.0.3-RELEASE-ubuntu24.04/usr/bin" >> "$GITHUB_PATH"
       - name: Test
@@ -35,7 +47,7 @@ jobs:
   macos:
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Check launcher under bash 3.2
         run: |
           /bin/bash --version
