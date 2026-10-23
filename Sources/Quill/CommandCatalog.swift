@@ -1,6 +1,7 @@
 import AppKit
 import QuillSearch
 import QuillVim
+import QuillWorkspace
 
 extension AppModel {
     func installCommands() {
@@ -340,7 +341,7 @@ extension AppModel {
                 withIntermediateDirectories: true
             )
             if !FileManager.default.fileExists(atPath: url.path) {
-                try config.tomlSource().write(to: url, atomically: true, encoding: .utf8)
+                try AtomicFile.write(Data(config.tomlSource().utf8), to: url)
             }
         } catch {
             message = error.localizedDescription

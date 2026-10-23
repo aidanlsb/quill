@@ -46,7 +46,7 @@ final class Document {
     @ObservationIgnored var onReplaced: (@MainActor () -> Void)?
     @ObservationIgnored var diskWrite: @Sendable (Data, URL) async throws -> Void = { bytes, url in
         try await Task.detached {
-            try bytes.write(to: url, options: .atomic)
+            try AtomicFile.write(bytes, to: url)
         }.value
     }
     @ObservationIgnored var readFile: @Sendable (URL) async throws -> Data = { url in
@@ -372,7 +372,7 @@ struct TrashFileSystem: FileSystem {
     }
 
     func writeFile(_ path: String, data: Data) throws {
-        try data.write(to: URL(fileURLWithPath: path), options: .atomic)
+        try AtomicFile.write(data, to: URL(fileURLWithPath: path))
     }
 
     func remove(_ path: String) throws {
