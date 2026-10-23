@@ -455,4 +455,103 @@ final class LSPClientTests: XCTestCase {
             "a character past the line clamps to its end instead of spilling into the next line"
         )
     }
+
+    func testNonFileURIDoesNotMatchTheOpenBuffer() {
+        let text = "aaa\n"
+        let edit = WorkspaceEdit.parse(.object([
+            "changes": .object([
+                "http://127.0.0.1/tmp/note.md": .array([
+                    .object([
+                        "range": .object([
+                            "start": .object(["line": .number(0), "character": .number(0)]),
+                            "end": .object(["line": .number(0), "character": .number(1)]),
+                        ]),
+                        "newText": .string("Z"),
+                    ]),
+                ]),
+            ]),
+        ]))
+        let file = URL(fileURLWithPath: "/tmp/note.md")
+        XCTAssertTrue(edit.bufferEdits(in: text, file: file).isEmpty)
+        XCTAssertTrue(edit.containsEdits(outside: file))
+        XCTAssertNil(Location(uri: "https://example.com/tmp/note.md", range: LSPRange(
+            start: LSPPosition(line: 0, character: 0),
+            end: LSPPosition(line: 0, character: 0)
+        )).fileURL)
+        XCTAssertEqual(
+            FileURI.localPath(from: "file://localhost/tmp/../etc/passwd"),
+            "/etc/passwd"
+        )
+    }
+}
+
+final class JSONRPCLimitTests: XCTestCase {
+    func testOversizedContentLengthIsRejected() {
+        let framer = JSONRPCFramer()
+        let header = Data("Content-Length: 999999999\r\n\r\n".utf8)
+        XCTAssertTrue(framer.append(header).isEmpty)
+        XCTAssertTrue(framer.failed)
+        XCTAssertTrue(framer.append(Data(#"{"jsonrpc":"2.0"}"#.utf8)).isEmpty)
+    }
+
+    func testNegativeContentLengthIsRejected() {
+        let framer = JSONRPCFramer()
+        XCTAssertTrue(framer.append(Data("Content-Length: -1\r\n\r\n{}".utf8)).isEmpty)
+        XCTAssertTrue(framer.failed)
+    }
+
+    func testHeaderWithoutLengthDoesNotGrowForever() {
+        let framer = JSONRPCFramer()
+        XCTAssertTrue(framer.append(Data("Content-Type: application/json\r\n\r\n{}".utf8)).isEmpty)
+        XCTAssertTrue(framer.failed)
+    }
+}
+
+final class FileURITests: XCTestCase {
+    func testDefinitionStaysInsideTheWorkspace() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("quill-uri-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let note = root.appendingPathComponent("note.md")
+        try Data("hi".utf8).write(to: note)
+        let outside = FileManager.default.temporaryDirectory.appendingPathComponent("quill-secret-\(UUID().uuidString)")
+        try Data("secret".utf8).write(to: outside)
+        defer { try? FileManager.default.removeItem(at: outside) }
+        try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("leak"), withDestinationURL: outside)
+
+        XCTAssertEqual(LSPNavigation.file(toOpen: note.absoluteString, workspace: root)?.path, note.standardizedFileURL.path)
+        XCTAssertNil(LSPNavigation.file(toOpen: outside.absoluteString, workspace: root))
+        XCTAssertNil(LSPNavigation.file(toOpen: root.appendingPathComponent("leak").absoluteString, workspace: root))
+        XCTAssertNil(LSPNavigation.file(toOpen: "http://127.0.0.1/", workspace: root))
+        XCTAssertNil(FileURI.localPath(from: "file:///tmp/note.md%00/../../etc/passwd"))
+        XCTAssertNil(LSPNavigation.file(toOpen: note.absoluteString + "%00", workspace: root))
+    }
+}
+
+final class ProcessEnvironmentTests: XCTestCase {
+    func testChildEnvironmentDropsSecrets() {
+        let child = ProcessEnvironment.forChild(
+            parent: [
+                "PATH": "/usr/bin",
+                "HOME": "/Users/ada",
+                "AWS_SECRET_ACCESS_KEY": "sekret",
+                "GITHUB_TOKEN": "ghp_x",
+            ],
+            overrides: ["MARKSMAN": "1"]
+        )
+        XCTAssertEqual(child["PATH"], "/usr/bin")
+        XCTAssertEqual(child["HOME"], "/Users/ada")
+        XCTAssertEqual(child["MARKSMAN"], "1")
+        XCTAssertNil(child["AWS_SECRET_ACCESS_KEY"])
+        XCTAssertNil(child["GITHUB_TOKEN"])
+    }
+
+    func testRelativeCommandIsNotJoinedOntoPATH() {
+        let client = LSPClient(config: LSPServerConfig(name: "nope", command: "../../tmp/evil"))
+        XCTAssertThrowsError(try client.start(root: URL(fileURLWithPath: "/tmp"))) { error in
+            guard let rpc = error as? JSONRPCError, case .serverUnavailable = rpc else {
+                return XCTFail("expected unavailable, got \(error)")
+            }
+        }
+    }
 }

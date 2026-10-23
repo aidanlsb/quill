@@ -11,7 +11,12 @@ public enum JSONRPCError: Error, Equatable {
 /// LSP / JSON-RPC 2.0 header framing (`Content-Length: N\r\n\r\n{json}`).
 // quill-concurrency: The decode buffer is only used on the session read thread.
 public final class JSONRPCFramer: @unchecked Sendable {
+    public static let maxBody = 8 * 1024 * 1024
+    public static let maxHeader = 64 * 1024
+
     private var buffer = Data()
+    /// A hostile or broken frame. Further bytes are discarded.
+    public private(set) var failed = false
 
     public init() {}
 
@@ -23,31 +28,43 @@ public final class JSONRPCFramer: @unchecked Sendable {
     }
 
     public func append(_ data: Data) -> [Data] {
+        if failed { return [] }
         buffer.append(data)
         var messages: [Data] = []
-        while let message = popMessage() {
+        while !failed, let message = popMessage() {
             messages.append(message)
         }
         return messages
     }
 
+    private func reject() -> Data? {
+        failed = true
+        buffer.removeAll()
+        return nil
+    }
+
     private func popMessage() -> Data? {
         let sep = Data("\r\n\r\n".utf8)
-        guard let sepRange = buffer.range(of: sep) else { return nil }
+        guard let sepRange = buffer.range(of: sep) else {
+            if buffer.count > Self.maxHeader { return reject() }
+            return nil
+        }
+        if sepRange.lowerBound > Self.maxHeader { return reject() }
         let headerData = buffer.subdata(in: 0..<sepRange.lowerBound)
         guard let header = String(data: headerData, encoding: .utf8) else {
-            buffer.removeAll()
-            return nil
+            return reject()
         }
         var length: Int?
         for line in header.split(whereSeparator: { $0 == "\r" || $0 == "\n" }) {
             let parts = line.split(separator: ":", maxSplits: 1)
-            if parts.count == 2, parts[0].lowercased() == "content-length" {
-                length = Int(parts[1].trimmingCharacters(in: .whitespaces))
-            }
+            guard parts.count == 2, parts[0].lowercased() == "content-length" else { continue }
+            let raw = parts[1].trimmingCharacters(in: .whitespaces)
+            guard let value = Int(raw), value >= 0, value <= Self.maxBody else { return reject() }
+            length = value
         }
-        guard let length else { return nil }
+        guard let length else { return reject() }
         let bodyStart = sepRange.upperBound
+        if bodyStart > Int.max - length { return reject() }
         let bodyEnd = bodyStart + length
         guard buffer.count >= bodyEnd else { return nil }
         let body = buffer.subdata(in: bodyStart..<bodyEnd)
@@ -255,6 +272,10 @@ public final class JSONRPCSession: @unchecked Sendable {
             do {
                 guard let chunk = try transport.readSome() else { return }
                 let payloads = framer.append(chunk)
+                if framer.failed {
+                    transport.close()
+                    return
+                }
                 for payload in payloads {
                     handle(payload)
                 }
