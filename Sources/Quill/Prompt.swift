@@ -185,17 +185,22 @@ extension AppModel {
                     self.message = "No references"
                     return
                 }
-                let items = locations.map { location -> PickerItem in
+                let root = self.lspWorkspaceRoot()
+                let items = locations.compactMap { location -> PickerItem? in
+                    guard let file = LSPNavigation.file(toOpen: location.uri, workspace: root) else { return nil }
                     let line = location.range.start.line + 1
                     let column = location.range.start.character + 1
-                    let path = location.fileURL?.path ?? location.uri
-                    let name = location.fileURL?.lastPathComponent ?? location.uri
+                    let path = file.path
                     return PickerItem(
-                        title: "\(name):\(line)",
+                        title: "\(file.lastPathComponent):\(line)",
                         subtitle: path,
                         payload: "\(path):\(line):\(column)",
                         preview: self.referencePreview(location, currentURI: uri, text: text)
                     )
+                }
+                if items.isEmpty {
+                    self.message = "Reference is outside the workspace"
+                    return
                 }
                 guard self.promptIsCurrent(token, generation: generation) else { return }
                 let picker = PickerEngine(source: items)
