@@ -1,5 +1,6 @@
 import Foundation
 import QuillTOML
+import QuillWorkspace
 
 /// Last runtime appearance, kept beside the config so a toggle survives the next launch
 /// without rewriting `config.toml`.
@@ -21,6 +22,6 @@ enum ThemeMemory {
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        try "theme = \"\(choice.rawValue)\"\n".write(to: url, atomically: true, encoding: .utf8)
+        try AtomicFile.write(Data("theme = \"\(choice.rawValue)\"\n".utf8), to: url)
     }
 }
