@@ -64,6 +64,29 @@ public enum LineTransfer: Equatable, Sendable {
     case copy
 }
 
+/// One directory-listing name. A line is a single file name, never a path.
+public enum DirectoryName {
+    /// `nil` when `name` is empty, `.`, `..`, longer than NAME_MAX, or contains `/` or NUL.
+    public static func component(_ name: String) -> String? {
+        if name.isEmpty || name == "." || name == ".." { return nil }
+        if name.utf8.count > 255 { return nil }
+        if name.contains("/") || name.utf8.contains(0) { return nil }
+        return name
+    }
+
+    /// `directory/name` when `name` is one component. Does not follow symlinks.
+    public static func child(_ directory: URL, _ name: String) -> URL? {
+        guard let name = component(name) else { return nil }
+        let root = directory.standardizedFileURL.path
+        let path = root == "/" ? "/" + name : root + "/" + name
+        let url = URL(fileURLWithPath: path).standardizedFileURL
+        guard url.lastPathComponent == name else { return nil }
+        let parent = url.deletingLastPathComponent().standardizedFileURL.path
+        guard parent == root else { return nil }
+        return url
+    }
+}
+
 /// One edited listing line plus the anchor identity that traveled with it.
 public struct ListingLine: Equatable, Sendable {
     public var name: String
@@ -134,9 +157,44 @@ public enum DirectoryListing {
         return deletes && creates
     }
 
+    /// The first listing name that is not a single path component, if any.
+    public static func invalidName(in lines: [ListingLine]) -> String? {
+        for line in lines {
+            if line.name.isEmpty { continue }
+            if DirectoryName.component(line.name) == nil { return line.name }
+        }
+        return nil
+    }
+
+    /// `nil` when every create, rename, copy, and delete stays a direct child of `directory`.
+    /// A rename or copy may come from outside. Its destination may not.
+    public static func confinementError(_ ops: [FSOperation], directory: URL) -> String? {
+        let root = directory.standardizedFileURL.path
+        for op in ops {
+            switch op {
+            case .create(let parent, let name, _):
+                guard parent.standardizedFileURL.path == root, DirectoryName.child(parent, name) != nil else {
+                    return "Invalid name: \(name)"
+                }
+            case .delete(let url):
+                guard let child = DirectoryName.child(directory, url.lastPathComponent),
+                      child.path == url.standardizedFileURL.path else {
+                    return "Refusing to delete \(url.lastPathComponent)"
+                }
+            case .rename(_, let to), .copy(_, let to):
+                guard let child = DirectoryName.child(directory, to.lastPathComponent),
+                      child.path == to.standardizedFileURL.path else {
+                    return "Refusing to write \(to.lastPathComponent)"
+                }
+            }
+        }
+        return nil
+    }
+
     /// Diff edited lines against the snapshot using anchor identity.
     /// A line keeps its id across a rename. `dd`+`p` arrives as `.move`. `yy`+`p` arrives as `.copy`.
     /// A line with no id is a create. Unmentioned originals are deletes. Nothing is paired by position.
+    /// A name that is not a single component is not turned into a path outside `directory`.
     public static func plan(original: DirectorySnapshot, lines: [ListingLine]) -> [FSOperation] {
         var used = Set<Int>()
         var ops: [FSOperation] = []
@@ -151,14 +209,20 @@ public enum DirectoryListing {
 
         for line in lines {
             if line.name.isEmpty { continue }
+            guard let dest = DirectoryName.child(original.directory, line.name) else {
+                // Keep the anchored file. A bad rename must not become a delete.
+                if let id = line.entryID {
+                    _ = take { $0.entryID == id }
+                }
+                continue
+            }
             if line.transfer == .copy, let source = line.sourcePath {
                 let from = URL(fileURLWithPath: source)
-                ops.append(.copy(from: from, to: original.directory.appendingPathComponent(line.name)))
+                ops.append(.copy(from: from, to: dest))
                 continue
             }
             if line.transfer == .move, let source = line.sourcePath {
                 let from = URL(fileURLWithPath: source)
-                let dest = original.directory.appendingPathComponent(line.name)
                 if let id = line.entryID {
                     _ = take { $0.entryID == id }
                 }
@@ -175,7 +239,7 @@ public enum DirectoryListing {
                let (_, entry) = take({ $0.name == line.name && $0.isDirectory == line.isDirectory }) {
                 continue
             }
-            ops.append(.create(parent: original.directory, name: line.name, isDirectory: line.isDirectory))
+            ops.append(.create(parent: original.directory, name: dest.lastPathComponent, isDirectory: line.isDirectory))
         }
 
         for (index, entry) in original.entries.enumerated() where !used.contains(index) {
@@ -245,8 +309,8 @@ public enum DirectoryListing {
             ops.append(.create(parent: directory, name: line.name, isDirectory: line.isDirectory))
             return
         }
-        if entry.name != line.name, let from = entry.originalURL {
-            ops.append(.rename(from: from, to: directory.appendingPathComponent(line.name)))
+        if entry.name != line.name, let from = entry.originalURL, let dest = DirectoryName.child(directory, line.name) {
+            ops.append(.rename(from: from, to: dest))
         }
     }
 }
