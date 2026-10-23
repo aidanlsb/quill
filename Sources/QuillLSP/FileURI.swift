@@ -10,7 +10,8 @@ public enum FileURI {
             return nil
         }
         let raw = components.percentEncodedPath.removingPercentEncoding ?? components.path
-        guard raw.hasPrefix("/"), raw != "/" else { return nil }
+        // A NUL would truncate the path in POSIX open, so the bytes after it never count.
+        guard raw.hasPrefix("/"), raw != "/", !raw.utf8.contains(0) else { return nil }
         let path = URL(fileURLWithPath: raw).standardizedFileURL.path
         guard path.hasPrefix("/"), path != "/" else { return nil }
         return path

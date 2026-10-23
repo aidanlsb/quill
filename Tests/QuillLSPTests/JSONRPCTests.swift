@@ -523,6 +523,8 @@ final class FileURITests: XCTestCase {
         XCTAssertNil(LSPNavigation.file(toOpen: outside.absoluteString, workspace: root))
         XCTAssertNil(LSPNavigation.file(toOpen: root.appendingPathComponent("leak").absoluteString, workspace: root))
         XCTAssertNil(LSPNavigation.file(toOpen: "http://127.0.0.1/", workspace: root))
+        XCTAssertNil(FileURI.localPath(from: "file:///tmp/note.md%00/../../etc/passwd"))
+        XCTAssertNil(LSPNavigation.file(toOpen: note.absoluteString + "%00", workspace: root))
     }
 }
 
