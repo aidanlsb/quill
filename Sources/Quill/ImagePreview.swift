@@ -81,6 +81,7 @@ final class ImageBlockView: NSView {
 enum ImageDecoder {
     static func file(path: String, maxPixel: Int) -> (image: ImageBitmapBox, modified: Int64)? {
         guard let modified = mtime(path) else { return nil }
+        guard let bytes = fileSize(path), ImageLoads.allowsFileSize(bytes) else { return nil }
         let image: CGImage?
         if path.lowercased().hasSuffix(".pdf") {
             image = pdf(path: path, maxPixel: maxPixel)
@@ -91,26 +92,16 @@ enum ImageDecoder {
         return (ImageBitmapBox(image), modified)
     }
 
-    static func remote(url: URL, maxPixel: Int) async -> ImageBitmapBox? {
-        var request = URLRequest(url: url, timeoutInterval: 15)
-        request.cachePolicy = .returnCacheDataElseLoad
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-                return nil
-            }
-            if data.count > 20 * 1024 * 1024 { return nil }
-            guard let image = thumbnail(data: data as CFData, maxPixel: maxPixel) else { return nil }
-            return ImageBitmapBox(image)
-        } catch {
-            return nil
-        }
-    }
-
     static func mtime(_ path: String) -> Int64? {
         guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
               let date = attrs[.modificationDate] as? Date else { return nil }
         return Int64((date.timeIntervalSince1970 * 1000).rounded())
+    }
+
+    private static func fileSize(_ path: String) -> Int? {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+              let number = attrs[.size] as? NSNumber else { return nil }
+        return number.intValue
     }
 
     private static func thumbnail(url: CFURL, maxPixel: Int) -> CGImage? {
@@ -118,12 +109,8 @@ enum ImageDecoder {
         return thumbnail(source: source, maxPixel: maxPixel)
     }
 
-    private static func thumbnail(data: CFData, maxPixel: Int) -> CGImage? {
-        guard let source = CGImageSourceCreateWithData(data, nil) else { return nil }
-        return thumbnail(source: source, maxPixel: maxPixel)
-    }
-
     private static func thumbnail(source: CGImageSource, maxPixel: Int) -> CGImage? {
+        guard pixelsAllowed(source) else { return nil }
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
@@ -133,12 +120,23 @@ enum ImageDecoder {
         return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
     }
 
+    /// Refuse a decompression bomb before ImageIO allocates the bitmap.
+    private static func pixelsAllowed(_ source: CGImageSource) -> Bool {
+        guard let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] else {
+            return true
+        }
+        let width = (props[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue ?? 0
+        let height = (props[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue ?? 0
+        if width == 0 || height == 0 { return true }
+        return ImageLoads.allowsPixels(width: width, height: height)
+    }
+
     /// First page, scaled down to `maxPixel` on the long edge.
     private static func pdf(path: String, maxPixel: Int) -> CGImage? {
         let url = URL(fileURLWithPath: path) as CFURL
         guard let document = CGPDFDocument(url), let page = document.page(at: 1) else { return nil }
         let box = page.getBoxRect(.mediaBox)
-        guard box.width > 1, box.height > 1 else { return nil }
+        guard box.width > 1, box.height > 1, box.width < 100_000, box.height < 100_000 else { return nil }
         let scale = min(1, CGFloat(maxPixel) / max(box.width, box.height))
         let width = max(1, Int((box.width * scale).rounded(.up)))
         let height = max(1, Int((box.height * scale).rounded(.up)))
@@ -572,6 +570,7 @@ final class ImagePreviewController {
             }
             let identity = resolved.identity
             if !seen.insert(identity).inserted { continue }
+            if case .remote = resolved { continue }
             if failed.contains(identity) { continue }
             if inflight.contains(identity) { continue }
             if let stored = cache.stored(identity: identity) {
@@ -625,12 +624,7 @@ final class ImagePreviewController {
                 return (file.image, file.modified)
             }
             return (nil, modified)
-        case .remote(let url):
-            if let known, knownModified == nil { return (known, nil) }
-            guard let url = URL(string: url) else { return (nil, nil) }
-            if let image = await ImageDecoder.remote(url: url, maxPixel: maxPixel) {
-                return (image, nil)
-            }
+        case .remote:
             return (nil, nil)
         }
     }
