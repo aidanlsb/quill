@@ -22,6 +22,10 @@ enum QuillMetrics {
     static let sideGutter: CGFloat = 128
     static let verticalInset: CGFloat = 128
     static let focusVerticalInset: CGFloat = 192
+    /// Extra first-line inset for list items, in ems of the body size.
+    static let listIndentEm: CGFloat = 1.25
+    /// Space after each list item, in ems of the body size.
+    static let listItemSpacingEm: CGFloat = 0.28
 
     /// Width of the text column and the inset that keeps it off both edges.
     static func columnSpan(width: CGFloat, column: CGFloat) -> (inset: CGFloat, column: CGFloat) {
@@ -90,6 +94,11 @@ struct QuillTheme {
     var tableBackground: NSColor
     var tableHeaderRule: NSColor
     var tableRowRule: NSColor
+    var listMarkerColor: NSColor
+    var listMarkerFont: NSFont
+
+    var listIndent: CGFloat { bodyFont.pointSize * QuillMetrics.listIndentEm }
+    var listItemSpacing: CGFloat { bodyFont.pointSize * QuillMetrics.listItemSpacingEm }
 
     @MainActor
     static func current(
@@ -165,8 +174,29 @@ struct QuillTheme {
                 : NSColor(calibratedWhite: 0, alpha: 0.28),
             tableRowRule: dark
                 ? NSColor(calibratedWhite: 1, alpha: 0.12)
-                : NSColor(calibratedWhite: 0, alpha: 0.10)
+                : NSColor(calibratedWhite: 0, alpha: 0.10),
+            listMarkerColor: dark
+                ? NSColor(calibratedRed: 0.68, green: 0.80, blue: 0.94, alpha: 1)
+                : NSColor(calibratedRed: 0.22, green: 0.38, blue: 0.58, alpha: 1),
+            listMarkerFont: Self.makeListMarkerFont(from: body)
         )
+    }
+
+    /// Medium of the body family so `-`, `*`, `+`, numbers, and `[ ]` read as
+    /// structure. The system face uses `weight: .medium`; other families ask
+    /// the font manager, then fall back to the system medium face.
+    @MainActor
+    private static func makeListMarkerFont(from body: NSFont) -> NSFont {
+        let size = body.pointSize
+        let systemMedium = NSFont.systemFont(ofSize: size, weight: .medium)
+        let family = body.familyName ?? ""
+        if family.isEmpty || family == NSFont.systemFont(ofSize: size).familyName {
+            return systemMedium
+        }
+        if let match = NSFontManager.shared.font(withFamily: family, traits: [], weight: 7, size: size) {
+            return match
+        }
+        return systemMedium
     }
 
     /// Semibold mono so the header reads as emphasis and columns stay aligned.
@@ -333,6 +363,12 @@ enum MarkdownStyler {
     }
 
     private static func apply(_ token: MarkdownToken, range: NSRange, theme: QuillTheme, storage: NSTextStorage, dimmed: Bool) {
+        let style = MarkdownThemeMap.style(for: token)
+        if style == .list {
+            storage.addAttribute(.font, value: theme.listMarkerFont, range: range)
+            storage.addAttribute(.foregroundColor, value: dimmed ? theme.dimColor : theme.listMarkerColor, range: range)
+            return
+        }
         if dimmed {
             storage.addAttribute(.foregroundColor, value: theme.dimColor, range: range)
             return
@@ -342,7 +378,7 @@ enum MarkdownStyler {
             storage.addAttribute(.foregroundColor, value: theme.syntaxColor, range: range)
             return
         }
-        switch MarkdownThemeMap.style(for: token) {
+        switch style {
         case .heading(let level):
             let font = theme.headingFonts[min(max(0, level - 1), theme.headingFonts.count - 1)]
             storage.addAttribute(.font, value: font, range: range)
@@ -358,7 +394,7 @@ enum MarkdownStyler {
             storage.addAttribute(.foregroundColor, value: theme.linkColor, range: range)
         case .syntax, .dim:
             storage.addAttribute(.foregroundColor, value: theme.syntaxColor, range: range)
-        case .body:
+        case .list, .body:
             break
         }
     }
