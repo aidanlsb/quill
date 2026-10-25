@@ -53,11 +53,10 @@ public final class LSPClient: @unchecked Sendable {
         proc.executableURL = URL(fileURLWithPath: exe)
         proc.arguments = config.arguments
         proc.currentDirectoryURL = root
-        if !config.env.isEmpty {
-            var env = ProcessInfo.processInfo.environment
-            for (k, v) in config.env { env[k] = v }
-            proc.environment = env
-        }
+        proc.environment = ProcessEnvironment.forChild(
+            parent: ProcessInfo.processInfo.environment,
+            overrides: config.env
+        )
         let stdin = Pipe()
         let stdout = Pipe()
         let stderr = Pipe()
@@ -318,9 +317,12 @@ public final class LSPClient: @unchecked Sendable {
     }
 
     private func resolveExecutable(_ command: String) -> String? {
+        if command.isEmpty || command.contains("\0") { return nil }
         if command.hasPrefix("/") {
             return FileManager.default.isExecutableFile(atPath: command) ? command : nil
         }
+        // A relative path would be joined onto every PATH entry (`/usr/bin/../../tmp/evil`).
+        if command.contains("/") { return nil }
         let path = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/usr/local/bin"
         for dir in path.split(separator: ":") {
             let candidate = String(dir) + "/" + command

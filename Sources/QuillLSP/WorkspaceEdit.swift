@@ -112,10 +112,8 @@ public struct WorkspaceEdit: Equatable, Sendable {
     }
 
     public static func matches(uri: String, file: URL) -> Bool {
-        if uri == file.absoluteString || uri == file.path { return true }
-        guard let parsed = URL(string: uri) else { return false }
-        if parsed.path == file.path { return true }
-        return parsed.standardizedFileURL.path == file.standardizedFileURL.path
+        guard let path = FileURI.localPath(from: uri) else { return false }
+        return path == file.standardizedFileURL.path
     }
 }
 

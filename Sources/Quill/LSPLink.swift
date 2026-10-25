@@ -203,20 +203,30 @@ extension AppModel {
         let uri = url.absoluteString
         Task {
             let clients = link.requestClients()
+            let root = self.lspWorkspaceRoot()
+            var sawOutside = false
             for client in clients where client.capabilities.definitionProvider || client.isRunning {
-                if let locs = try? await client.definition(uri: uri, position: position),
-                   let first = locs.first, let dest = first.fileURL {
+                guard let locs = try? await client.definition(uri: uri, position: position) else { continue }
+                for loc in locs {
                     guard self.document.generation == generation, self.document.engine.cursor == cursor else { return }
+                    guard let dest = LSPNavigation.file(toOpen: loc.uri, workspace: root) else {
+                        sawOutside = true
+                        continue
+                    }
                     self.openTarget(LaunchTarget(
                         path: dest.path,
-                        line: first.range.start.line + 1,
-                        column: first.range.start.character + 1,
+                        line: loc.range.start.line + 1,
+                        column: loc.range.start.character + 1,
                         columnUnit: .utf16
                     ))
                     return
                 }
             }
             guard self.document.generation == generation, self.document.engine.cursor == cursor else { return }
+            if sawOutside {
+                self.message = "Definition is outside the workspace"
+                return
+            }
             self.followWikilink()
         }
     }
@@ -272,6 +282,13 @@ extension AppModel {
         guard changed else { return }
         editor.diagnosticRanges = diagnosticRanges
         editor.queueRestyle()
+    }
+
+    /// Marker root for the open file (`.git` when the server did not name one).
+    func lspWorkspaceRoot() -> URL {
+        guard let url = document.url else { return document.rootURL }
+        let markers = config.lsp.servers(for: url).flatMap(\.rootMarkers)
+        return WorkspaceRoot.find(from: url, markers: markers.isEmpty ? [".git"] : markers)
     }
 
     func diagnosticMessage(at cursor: Int) -> String? {

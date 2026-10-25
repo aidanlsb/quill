@@ -119,6 +119,17 @@ final class TOMLTests: XCTestCase {
         }
     }
 
+    func testRejectsDeepNestingAndHugeDocuments() {
+        let deep = "a = " + String(repeating: "[", count: 40) + "1" + String(repeating: "]", count: 40)
+        XCTAssertThrowsError(try TOML.parse(deep)) { error in
+            XCTAssertEqual((error as? TOMLParseError)?.message, "nesting is too deep")
+        }
+        let huge = "a = \"" + String(repeating: "x", count: TOML.maxBytes) + "\""
+        XCTAssertThrowsError(try TOML.parse(huge)) { error in
+            XCTAssertEqual((error as? TOMLParseError)?.message, "config is too large")
+        }
+    }
+
     func testTomlWinsOverJSON() {
         XCTAssertEqual(ConfigFileChoice.choose(tomlExists: true, jsonExists: true), .toml)
         XCTAssertEqual(ConfigFileChoice.choose(tomlExists: false, jsonExists: true), .migrateJSON)

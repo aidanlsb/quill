@@ -33,7 +33,13 @@ public enum ConfigFileChoice: Equatable, Sendable {
 }
 
 public enum TOML {
+    public static let maxBytes = 1_048_576
+    public static let maxDepth = 32
+
     public static func parse(_ text: String) throws -> TOMLValue {
+        if text.utf8.count > maxBytes {
+            throw TOMLParseError(line: 1, message: "config is too large")
+        }
         var parser = Parser(text: text)
         return try parser.parseDocument()
     }
@@ -255,7 +261,7 @@ private struct Parser {
         skipTrivia()
         guard bump() == "=" else { throw fail("expected '='") }
         skipTrivia()
-        let value = try parseValue()
+        let value = try parseValue(depth: 0)
         try finishLine()
         if path.isEmpty { throw fail("empty key") }
         switch context {
@@ -287,6 +293,7 @@ private struct Parser {
             skipSpaces()
             path.append(try parseKey())
         }
+        if path.count > TOML.maxDepth { throw fail("key path is too deep") }
         return path
     }
 
@@ -307,13 +314,14 @@ private struct Parser {
         return character == "_" || character == "-"
     }
 
-    mutating func parseValue() throws -> TOMLValue {
+    mutating func parseValue(depth: Int) throws -> TOMLValue {
+        if depth > TOML.maxDepth { throw fail("nesting is too deep") }
         guard let character = peek() else { throw fail("expected a value") }
         switch character {
         case "\"": return .string(try parseBasicString())
         case "'": return .string(try parseLiteralString())
-        case "[": return try parseArray()
-        case "{": return try parseInlineTable()
+        case "[": return try parseArray(depth: depth + 1)
+        case "{": return try parseInlineTable(depth: depth + 1)
         case "t", "f": return .bool(try parseBool())
         default: return try parseNumber()
         }
@@ -438,7 +446,7 @@ private struct Parser {
         return out
     }
 
-    mutating func parseArray() throws -> TOMLValue {
+    mutating func parseArray(depth: Int) throws -> TOMLValue {
         guard bump() == "[" else { throw fail("expected '['") }
         var items: [TOMLValue] = []
         while true {
@@ -447,7 +455,7 @@ private struct Parser {
                 _ = bump()
                 return .array(items)
             }
-            items.append(try parseValue())
+            items.append(try parseValue(depth: depth))
             skipTrivia()
             if peek() == "," {
                 _ = bump()
@@ -461,7 +469,7 @@ private struct Parser {
         }
     }
 
-    mutating func parseInlineTable() throws -> TOMLValue {
+    mutating func parseInlineTable(depth: Int) throws -> TOMLValue {
         guard bump() == "{" else { throw fail("expected '{'") }
         var table: [String: TOMLValue] = [:]
         while true {
@@ -474,7 +482,7 @@ private struct Parser {
             skipTrivia()
             guard bump() == "=" else { throw fail("expected '='") }
             skipTrivia()
-            let value = try parseValue()
+            let value = try parseValue(depth: depth)
             table = try write(table, path: path, value: value)
             skipTrivia()
             if peek() == "," {

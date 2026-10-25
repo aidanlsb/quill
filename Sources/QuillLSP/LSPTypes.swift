@@ -70,13 +70,18 @@ public struct CompletionItem: Equatable, Sendable {
 
     public static func from(_ value: JSONValue) -> CompletionItem? {
         guard let o = value.object, let label = o["label"]?.string else { return nil }
+        let clipped = String(label.prefix(Self.maxText))
+        let insert = o["insertText"]?.string ?? label
         return CompletionItem(
-            label: label,
-            detail: o["detail"]?.string,
-            insertText: o["insertText"]?.string ?? label,
+            label: clipped,
+            detail: o["detail"]?.string.map { String($0.prefix(Self.maxText)) },
+            insertText: String(insert.prefix(Self.maxText)),
             kind: o["kind"]?.int
         )
     }
+
+    /// Completion text is inserted into the buffer. Keep a hostile item small.
+    static let maxText = 8_000
 }
 
 public struct Location: Equatable, Sendable {
@@ -98,7 +103,8 @@ public struct Location: Equatable, Sendable {
     }
 
     public var fileURL: URL? {
-        URL(string: uri)
+        guard let path = FileURI.localPath(from: uri) else { return nil }
+        return URL(fileURLWithPath: path)
     }
 }
 
@@ -112,22 +118,29 @@ public struct Hover: Equatable, Sendable {
     public static func from(_ value: JSONValue) -> Hover? {
         guard let o = value.object else { return nil }
         if let s = o["contents"]?.string {
-            return Hover(contents: s)
+            return Hover(contents: clip(s))
         }
         if let contents = o["contents"] {
-            if let s = contents.string { return Hover(contents: s) }
+            if let s = contents.string { return Hover(contents: clip(s)) }
             if let obj = contents.object, let s = obj["value"]?.string {
-                return Hover(contents: s)
+                return Hover(contents: clip(s))
             }
             if let arr = contents.array {
                 let text = arr.compactMap { item -> String? in
                     if let s = item.string { return s }
                     return item.object?["value"]?.string
                 }.joined(separator: "\n")
-                if !text.isEmpty { return Hover(contents: text) }
+                if !text.isEmpty { return Hover(contents: clip(text)) }
             }
         }
         return nil
+    }
+
+    /// Status-line text. A server can otherwise send a multi-megabyte line.
+    static func clip(_ text: String) -> String {
+        let limit = 4_000
+        if text.count <= limit { return text }
+        return String(text.prefix(limit))
     }
 }
 
@@ -151,7 +164,8 @@ public struct Diagnostic: Equatable, Sendable {
         var code: String?
         if let s = o["code"]?.string { code = s }
         else if let n = o["code"]?.int { code = String(n) }
-        return Diagnostic(range: range, severity: o["severity"]?.int ?? 1, message: message, code: code)
+        let clipped = message.count > 4_000 ? String(message.prefix(4_000)) : message
+        return Diagnostic(range: range, severity: o["severity"]?.int ?? 1, message: clipped, code: code)
     }
 }
 
