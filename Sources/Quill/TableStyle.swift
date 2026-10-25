@@ -54,7 +54,17 @@ extension MarkdownStyler {
         storage.addAttribute(.font, value: theme.monoFont, range: content)
         storage.addAttribute(.foregroundColor, value: theme.textColor, range: content)
         storage.addAttribute(.backgroundColor, value: theme.tableBackground, range: content)
-        storage.addAttribute(.paragraphStyle, value: theme.tableParagraphStyle(), range: paragraphRange(content, length: length, storage: storage))
+        let para = theme.tableParagraphStyle().mutableCopy() as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
+        if aligned, let first = row.cells.first, first.precedingPipe == nil, first.leadingPad > 0 {
+            let indent = advance * CGFloat(first.leadingPad)
+            para.headIndent = indent
+            para.firstLineHeadIndent = indent
+        }
+        storage.addAttribute(
+            .paragraphStyle,
+            value: para,
+            range: paragraphRange(content, length: length, storage: storage)
+        )
         if row.role == .header || row.role == .body {
             let rule = row.role == .header ? theme.tableHeaderRule : theme.tableRowRule
             storage.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: content)
@@ -108,8 +118,9 @@ extension MarkdownStyler {
             case .strong:
                 storage.addAttribute(.font, value: headerFont, range: hit)
             case .emphasis:
-                let italic = NSFontManager.shared.convert(theme.monoFont, toHaveTrait: .italicFontMask)
-                storage.addAttribute(.font, value: italic.isFixedPitch ? italic : theme.monoFont, range: hit)
+                storage.addAttribute(.font, value: tableItalicFont(theme.monoFont), range: hit)
+            case .wikilink:
+                storage.addAttribute(.foregroundColor, value: theme.linkColor, range: hit)
             default:
                 break
             }
@@ -131,6 +142,18 @@ extension MarkdownStyler {
     static func monoAdvance(_ font: NSFont) -> CGFloat {
         let width = ("0" as NSString).size(withAttributes: [.font: font]).width
         return max(width, 1)
+    }
+
+    /// Italic mono when the converter keeps a fixed pitch, otherwise the table face.
+    private static func tableItalicFont(_ mono: NSFont) -> NSFont {
+        let converted = NSFontManager.shared.convert(mono, toHaveTrait: .italicFontMask)
+        if converted.isFixedPitch { return converted }
+        let traits = mono.fontDescriptor.symbolicTraits.union(.italic)
+        if let italic = NSFont(descriptor: mono.fontDescriptor.withSymbolicTraits(traits), size: mono.pointSize),
+           italic.isFixedPitch {
+            return italic
+        }
+        return mono
     }
 
     private static func nsRange(_ range: Range<Int>, length: Int) -> NSRange {

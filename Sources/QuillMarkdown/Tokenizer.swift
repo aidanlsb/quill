@@ -516,12 +516,29 @@ public struct MarkdownTokenizer: Equatable, Sendable {
     /// Tables overlapping `utf16`. Rows outside the range are included so column
     /// widths stay correct. Lines with no pipe nearby are not parsed.
     public mutating func tableBlocks(overlapping utf16: Range<Int>) -> [TableBlock] {
-        guard ready, !lines.isEmpty, !utf16.isEmpty, utf16Count > 0 else { return [] }
+        guard let span = tableLineSpan(overlapping: utf16) else { return [] }
+        return MarkdownTables.blocks(
+            lines: lines,
+            from: span.lowerBound,
+            through: span.upperBound - 1,
+            isBlocked: lineBlocked
+        )
+    }
+
+    /// UTF-16 span of the contiguous pipe-run around `utf16`, including lines
+    /// that are no longer table rows. A restyle uses this to clear stale paint.
+    public mutating func tableNeighborhood(overlapping utf16: Range<Int>) -> Range<Int> {
+        guard let span = tableLineSpan(overlapping: utf16) else { return 0..<0 }
+        return lineSpan(span)
+    }
+
+    private mutating func tableLineSpan(overlapping utf16: Range<Int>) -> Range<Int>? {
+        guard ready, !lines.isEmpty, !utf16.isEmpty, utf16Count > 0 else { return nil }
         let lower = min(max(0, utf16.lowerBound), utf16Count - 1)
         let upper = min(max(lower, utf16.upperBound - 1), utf16Count - 1)
         let first = LineSplit.lineIndex(containing: lower, starts: lineStarts)
         let last = LineSplit.lineIndex(containing: upper, starts: lineStarts)
-        if !pipeNear(first, last) { return [] }
+        if !pipeNear(first, last) { return nil }
         ensureScanned(throughLine: last)
         var start = first
         while start > 0, MarkdownTables.tableLine(lines, start - 1, isBlocked: lineBlocked) {
@@ -533,7 +550,7 @@ public struct MarkdownTokenizer: Equatable, Sendable {
             if !MarkdownTables.tableLine(lines, end + 1, isBlocked: lineBlocked) { break }
             end += 1
         }
-        return MarkdownTables.blocks(lines: lines, from: start, through: end, isBlocked: lineBlocked)
+        return start..<(end + 1)
     }
 
     private func pipeNear(_ first: Int, _ last: Int) -> Bool {

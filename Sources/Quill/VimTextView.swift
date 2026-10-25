@@ -853,6 +853,11 @@ final class VimTextView: NSTextView {
                 } else {
                     styleLimit = span
                 }
+                if tableEdit, let expanded = tableNeighborhoodIfStale(span) {
+                    // Header/body rows that just left the table are outside `span`.
+                    // Paint the whole pipe-run so their mono/kern/background clear.
+                    styleLimit = expanded
+                }
             }
         } else if viewport == nil, tokenizer.acceptsEdits, storage.length == tokenizer.utf16Count {
             if let dirty {
@@ -1019,6 +1024,34 @@ final class VimTextView: NSTextView {
     private func tablesOverlapping(_ limit: Range<Int>) -> [TableBlock] {
         guard tokenizer.acceptsEdits, !limit.isEmpty else { return [] }
         return tokenizer.tableBlocks(overlapping: limit)
+    }
+
+    /// When an edit breaks or splits a table, the pipe-run still has rows that
+    /// are no longer in `tableBlocks`. Expand the restyle so those rows reset.
+    private func tableNeighborhoodIfStale(_ span: Range<Int>) -> Range<Int>? {
+        let neighborhood = tokenizer.tableNeighborhood(overlapping: span)
+        guard !neighborhood.isEmpty else { return nil }
+        let found = tokenizer.tableBlocks(overlapping: neighborhood)
+        let cover = unionRanges(found.map(\.range))
+        if !cover.isEmpty,
+           cover.lowerBound <= neighborhood.lowerBound,
+           cover.upperBound >= neighborhood.upperBound {
+            return nil
+        }
+        let lower = min(span.lowerBound, neighborhood.lowerBound)
+        let upper = max(span.upperBound, neighborhood.upperBound)
+        return lower..<max(lower, upper)
+    }
+
+    private func unionRanges(_ ranges: [Range<Int>]) -> Range<Int> {
+        guard let first = ranges.first else { return 0..<0 }
+        var lower = first.lowerBound
+        var upper = first.upperBound
+        for range in ranges.dropFirst() {
+            lower = min(lower, range.lowerBound)
+            upper = max(upper, range.upperBound)
+        }
+        return lower..<upper
     }
 
     /// Rows on screen, rows already painted, and the edited line. A cell edit

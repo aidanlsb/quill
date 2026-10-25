@@ -30,7 +30,8 @@ public struct TableCell: Equatable, Sendable {
     public var align: ColumnAlign
     /// UTF-16 offset of the pipe before this cell, when the row has one.
     public var precedingPipe: Int?
-    /// Extra mono cells before the trimmed text. The styler kerns `precedingPipe`.
+    /// Extra mono cells before the trimmed text. The styler kerns `precedingPipe`,
+    /// or indents the row when this is the first cell and there is no pipe.
     public var leadingPad: Int
     /// Extra mono cells after `raw`. The styler kerns the last character of `raw`.
     public var trailingPad: Int
@@ -153,13 +154,24 @@ public enum MarkdownTables {
         let lines = LineSplit.lines(in: text)
         guard !lines.isEmpty, !utf16.isEmpty, let lastLine = lines.last, lastLine.end > 0 else { return [] }
         let blocked = blockMask(lines: lines, text: text)
+        let span = neighborhoodLines(in: lines, overlapping: utf16, isBlocked: { blocked[$0] })
+        guard !span.isEmpty else { return [] }
+        return blocks(lines: lines, from: span.lowerBound, through: span.upperBound - 1) { blocked[$0] }
+    }
+
+    /// Inclusive line indexes of the pipe-run around `utf16`. Rows that just
+    /// dropped out of a table stay in this window so a restyle can clear them.
+    static func neighborhoodLines(
+        in lines: [LineSplit.Line],
+        overlapping utf16: Range<Int>,
+        isBlocked: (Int) -> Bool
+    ) -> Range<Int> {
+        guard !lines.isEmpty, !utf16.isEmpty, let lastLine = lines.last, lastLine.end > 0 else { return 0..<0 }
         let lower = min(max(0, utf16.lowerBound), lastLine.end - 1)
         let upper = min(max(lower, utf16.upperBound - 1), lastLine.end - 1)
         let first = LineSplit.lineIndex(containing: lower, lines: lines)
         let last = LineSplit.lineIndex(containing: upper, lines: lines)
-        let span = expandedLines(lines: lines, first: first, last: last) { blocked[$0] }
-        guard !span.isEmpty else { return [] }
-        return blocks(lines: lines, from: span.lowerBound, through: span.upperBound - 1) { blocked[$0] }
+        return expandedLines(lines: lines, first: first, last: last, isBlocked: isBlocked)
     }
 
     /// `from` and `through` are inclusive line indexes. The caller expands them
@@ -216,7 +228,7 @@ public enum MarkdownTables {
     static func tableLine(_ lines: [LineSplit.Line], _ index: Int, isBlocked: (Int) -> Bool) -> Bool {
         guard lines.indices.contains(index) else { return false }
         if lines[index].isBlank || isBlocked(index) { return false }
-        return lines[index].text.contains("|")
+        return parseRow(lines[index]) != nil
     }
 
     public static func plan(in text: String, scope: TableScope, cursor: Int) -> TablePlan {
@@ -250,6 +262,8 @@ private struct RawCell {
     var trimmed: String
     var precedingPipe: Int?
     var columns: Int
+    var leadingColumns: Int
+    var trailingColumns: Int
 }
 
 private struct RawRow {
@@ -313,32 +327,52 @@ private func makeBlock(
     while columns.count < maxCells {
         columns.append(TableColumn(align: .left, leftColon: false, rightColon: false))
     }
+    // Trimmed display width, so `|a|` and `| a |` share a content column and
+    // the live kern can add the same gutters `:TableFormat` writes as spaces.
     var widths = [Int](repeating: 0, count: max(columns.count, 1))
     for (raw, _) in rows {
         for (index, cell) in raw.cells.enumerated() where index < widths.count {
-            widths[index] = max(widths[index], cell.columns)
+            widths[index] = max(widths[index], DisplayWidth.columns(of: cell.trimmed))
         }
+    }
+    var pads: [[(Int, Int)]] = []
+    pads.reserveCapacity(rows.count)
+    var visual = [Int](repeating: 0, count: max(columns.count, 1))
+    for (raw, _) in rows {
+        var rowPads: [(Int, Int)] = []
+        rowPads.reserveCapacity(raw.cells.count)
+        for (index, cell) in raw.cells.enumerated() {
+            let align = index < columns.count ? columns[index].align : ColumnAlign.left
+            let pad = visualPads(cell, width: index < widths.count ? widths[index] : 0, align: align)
+            rowPads.append(pad)
+            if index < visual.count {
+                visual[index] = max(visual[index], cell.columns + pad.0 + pad.1)
+            }
+        }
+        pads.append(rowPads)
     }
     var tableRows: [TableRow] = []
     tableRows.reserveCapacity(rows.count)
     var alignedColumns = 0
-    for (raw, role) in rows {
+    for (rowIndex, (raw, role)) in rows.enumerated() {
         var padded = raw.columns
         var cells: [TableCell] = []
         cells.reserveCapacity(raw.cells.count)
         for (index, cell) in raw.cells.enumerated() {
             let align = index < columns.count ? columns[index].align : ColumnAlign.left
-            let deficit = index < widths.count ? max(0, widths[index] - cell.columns) : 0
-            var leading = 0
-            var trailing = 0
+            var leading = pads[rowIndex][index].0
+            var trailing = pads[rowIndex][index].1
+            let extra = index < visual.count
+                ? max(0, visual[index] - cell.columns - leading - trailing)
+                : 0
             switch align {
             case .left:
-                trailing = deficit
+                trailing += extra
             case .right:
-                leading = deficit
+                leading += extra
             case .center:
-                leading = deficit / 2
-                trailing = deficit - leading
+                leading += extra / 2
+                trailing += extra - extra / 2
             }
             if cell.columns == 0 {
                 leading += trailing
@@ -367,12 +401,36 @@ private func makeBlock(
     )
 }
 
+private func visualPads(_ cell: RawCell, width: Int, align: ColumnAlign) -> (Int, Int) {
+    let trimmed = DisplayWidth.columns(of: cell.trimmed)
+    let deficit = max(0, width - trimmed)
+    var wantLead = 1
+    var wantTrail = 1
+    switch align {
+    case .left:
+        wantTrail += deficit
+    case .right:
+        wantLead += deficit
+    case .center:
+        let left = deficit / 2
+        wantLead += left
+        wantTrail += deficit - left
+    }
+    if trimmed == 0 {
+        let extra = max(0, wantLead + wantTrail - cell.columns)
+        return cell.columns == 0 ? (extra, 0) : (0, extra)
+    }
+    let leading = max(0, wantLead - cell.leadingColumns)
+    let trailing = max(0, wantTrail - cell.trailingColumns)
+    return (leading, trailing)
+}
+
 private func formatWidths(_ block: TableBlock) -> [Int] {
     let count = max(block.columns.count, block.rows.map(\.cells.count).max() ?? 0)
     var widths = [Int](repeating: 3, count: max(count, 1))
     for row in block.rows where row.role != .separator {
         for (index, cell) in row.cells.enumerated() where index < widths.count {
-            widths[index] = max(widths[index], cell.trimmed.count)
+            widths[index] = max(widths[index], DisplayWidth.columns(of: cell.trimmed))
         }
     }
     for index in widths.indices {
@@ -405,7 +463,7 @@ private func formattedLine(_ row: TableRow, indent: String, columns: [TableColum
 }
 
 private func pad(_ text: String, align: ColumnAlign, width: Int) -> String {
-    let gap = max(0, width - text.count)
+    let gap = max(0, width - DisplayWidth.columns(of: text))
     switch align {
     case .left:
         return text + String(repeating: " ", count: gap)
@@ -599,12 +657,21 @@ private func makeCell(source: String, rawLocal: Range<Int>, pipe: Int?, lineStar
     } else {
         textLocal = (rawLocal.lowerBound + leading)..<(rawLocal.upperBound - trailing)
     }
+    let leadingText = String(rawString.prefix(while: { $0 == " " || $0 == "\t" }))
+    let trailingText: String
+    if trimmed.isEmpty {
+        trailingText = ""
+    } else {
+        trailingText = String(rawString.reversed().prefix(while: { $0 == " " || $0 == "\t" }).reversed())
+    }
     return RawCell(
         raw: shift(rawLocal, by: lineStart),
         text: shift(textLocal, by: lineStart),
         trimmed: trimmed,
         precedingPipe: pipe.map { lineStart + $0 },
-        columns: DisplayWidth.columns(of: rawString)
+        columns: DisplayWidth.columns(of: rawString),
+        leadingColumns: DisplayWidth.columns(of: leadingText),
+        trailingColumns: DisplayWidth.columns(of: trailingText)
     )
 }
 
