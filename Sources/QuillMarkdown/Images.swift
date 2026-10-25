@@ -373,6 +373,31 @@ public enum ImagePaths {
     }
 }
 
+/// What an open markdown file is allowed to load as a preview.
+public enum ImageLoads {
+    /// Remote URLs are not fetched. Opening a note must not contact the network.
+    public static func mayFetch(_ image: ResolvedImage) -> Bool {
+        if case .local = image { return true }
+        return false
+    }
+
+    public static let maxFileBytes = 32 * 1024 * 1024
+    public static let maxPixelSide = 8_192
+    public static let maxPixelCount = 32_000_000
+
+    public static func allowsFileSize(_ bytes: Int) -> Bool {
+        bytes >= 0 && bytes <= maxFileBytes
+    }
+
+    public static func allowsPixels(width: Int, height: Int) -> Bool {
+        if width <= 0 || height <= 0 { return false }
+        if width > maxPixelSide || height > maxPixelSide { return false }
+        let count = width.multipliedReportingOverflow(by: height)
+        if count.overflow { return false }
+        return count.partialValue <= maxPixelCount
+    }
+}
+
 /// Display size of a preview. The width fits the writing column, the aspect
 /// ratio is kept, and the height stops at `maxHeight`.
 public enum ImageFit {

@@ -35,5 +35,5 @@ Preconditions:
 ## Gotchas
 
 - The preview is screen space under the source line. It is not an `NSTextAttachment`, and the storage string does not grow.
-- Decode and network fetches run off the key path. A keystroke on another line does not wait for them.
+- Local decode runs off the key path. A keystroke on another line does not wait for it. `http` and `https` images are not fetched.
 - Linux `swift test` covers path resolution, the cache, and the screen-row gap. It does not draw the preview. This host cannot run the smoke if it is not macOS.
