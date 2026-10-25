@@ -283,13 +283,21 @@ check_cli_windows() {
   }
 
   wait_for_window() {
-    local i=0 pid pids
+    local i=0 pid pids count
     while [[ "$i" -lt 30 ]]; do
       pids="$(bundle_pids)"
       for pid in $pids; do
         if "$helper" "$pid"; then
-          echo "$pid"
-          return 0
+          # A spare untitled window can appear just after the file window.
+          sleep 0.4
+          count="$("$helper" --count "$pid")"
+          if [[ "$count" -eq 1 ]]; then
+            echo "$pid"
+            return 0
+          fi
+          echo "verify-quill: pid $pid has $count document windows" >&2
+          "$helper" --list >&2 || true
+          return 1
         fi
       done
       sleep 0.5
@@ -351,7 +359,7 @@ check_cli_windows() {
   run_wait() {
     local label="$1"
     local need="$2"
-    local launcher pid pids count ready i
+    local launcher pid pids count ready i sized extra
     echo "verify-quill: cli $label"
     QUILL_APP="$dest" "$root/Scripts/quill" --wait "$note" &
     launcher=$!
@@ -360,13 +368,26 @@ check_cli_windows() {
       pids="$(bundle_pids)"
       count=0
       ready=0
+      extra=0
       for pid in $pids; do
         count=$((count + 1))
         if "$helper" "$pid"; then
           ready=$((ready + 1))
+          sized="$("$helper" --count "$pid")"
+          if [[ "$sized" -ne 1 ]]; then
+            extra=1
+          fi
         fi
       done
       if [[ "$count" -ge "$need" && "$ready" -ge "$need" ]]; then
+        if [[ "$extra" -ne 0 ]]; then
+          echo "verify-quill: $label has a process with extra document windows" >&2
+          "$helper" --list >&2 || true
+          kill "$launcher" 2>/dev/null || true
+          quit_bundle
+          wait "$launcher" 2>/dev/null || true
+          return 1
+        fi
         echo "verify-quill: cli $label windows $ready"
         quit_bundle
         wait "$launcher" 2>/dev/null || true
