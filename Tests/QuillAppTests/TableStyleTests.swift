@@ -367,6 +367,95 @@ extension Probe {
         caretOnScreen("narrowed, live resize ended")
     }
 
+    /// Compact cells pick up the same gutters `:TableFormat` writes. Inline
+    /// markers keep their token color on the mono face. Breaking the delimiter
+    /// clears table paint on the header, not only the edited line.
+    static func checkTableConsistency(failures: Failures) {
+        let theme = QuillTheme.current(scheme: .light)
+        let compact = "|a|bb|\n|-|-|\n|c|d|"
+        let compactStorage = NSTextStorage(string: compact)
+        MarkdownStyler.restyle(compactStorage, theme: theme, spans: [])
+        let compactBlock = MarkdownTables.blocks(in: compact)[0]
+        if let pipe = compactBlock.rows[0].cells[0].precedingPipe {
+            let kern = (compactStorage.attribute(.kern, at: pipe, effectiveRange: nil) as? NSNumber)?.doubleValue ?? 0
+            check(kern > 0.5, "table gutter kern \(kern)", failures: failures)
+        } else {
+            failures.append("table gutter pipe")
+        }
+        let headerText = compactBlock.rows[0].cells[0].text.lowerBound
+        let headerFont = compactStorage.attribute(.font, at: headerText, effectiveRange: nil) as? NSFont
+        check(headerFont?.isFixedPitch == true, "table gutter header pitch", failures: failures)
+
+        let inline = "| **A** | `B` | [[C]] |\n| --- | --- | --- |\n| a | b | c |"
+        let inlineStorage = NSTextStorage(string: inline)
+        let spans = MarkdownTokenizer(text: inline).spans
+        MarkdownStyler.restyle(inlineStorage, theme: theme, spans: spans)
+        func color(at needle: String) -> NSColor? {
+            guard let range = inline.range(of: needle) else { return nil }
+            let utf = inline.utf16.distance(from: inline.startIndex, to: range.lowerBound)
+            return inlineStorage.attribute(.foregroundColor, at: utf, effectiveRange: nil) as? NSColor
+        }
+        func font(at needle: String) -> NSFont? {
+            guard let range = inline.range(of: needle) else { return nil }
+            let utf = inline.utf16.distance(from: inline.startIndex, to: range.lowerBound)
+            return inlineStorage.attribute(.font, at: utf, effectiveRange: nil) as? NSFont
+        }
+        check(font(at: "A")?.isFixedPitch == true, "table inline bold pitch", failures: failures)
+        check(fontWeight(font(at: "A") ?? theme.bodyFont) >= 0.28, "table inline bold", failures: failures)
+        check(sameColor(color(at: "B"), theme.codeColor), "table inline code", failures: failures)
+        check(font(at: "B")?.isFixedPitch == true, "table inline code pitch", failures: failures)
+        check(sameColor(color(at: "C"), theme.linkColor), "table inline wikilink", failures: failures)
+        check(font(at: "C")?.isFixedPitch == true, "table inline wikilink pitch", failures: failures)
+        let inlinePipe = MarkdownTables.blocks(in: inline)[0].rows[0].pipes[0].lowerBound
+        check(
+            sameColor(inlineStorage.attribute(.foregroundColor, at: inlinePipe, effectiveRange: nil) as? NSColor, theme.syntaxColor),
+            "table inline pipe",
+            failures: failures
+        )
+
+        let text = "| Name | Qty |\n| :--- | --: |\n| Ada | 1 |\n| Linus | 12 |\n"
+        let engine = Engine(text: text)
+        let frame = NSRect(x: 0, y: 0, width: 640, height: 280)
+        let hosted = VimTextView.host(engine: engine, frame: frame)
+        let tv = hosted.view
+        let window = NSWindow(
+            contentRect: frame,
+            styleMask: [.titled, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = hosted.scroll
+        window.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil) }
+        tv.reload()
+        tv.layoutSubtreeIfNeeded()
+        guard let storage = tv.textStorage, let headerRange = text.range(of: "Name") else {
+            failures.append("table break missing")
+            return
+        }
+        let header = text.utf16.distance(from: text.startIndex, to: headerRange.lowerBound)
+        let viewTheme = tv.theme
+        let styledFont = storage.attribute(.font, at: header, effectiveRange: nil) as? NSFont
+        check(styledFont?.isFixedPitch == true, "table break header before", failures: failures)
+        check(
+            sameColor(storage.attribute(.backgroundColor, at: header, effectiveRange: nil) as? NSColor, viewTheme.tableBackground),
+            "table break background before",
+            failures: failures
+        )
+        _ = tv.press("jdd")
+        tv.layoutSubtreeIfNeeded()
+        let afterFont = storage.attribute(.font, at: header, effectiveRange: nil) as? NSFont
+        check(afterFont?.isFixedPitch != true, "table break header still mono", failures: failures)
+        let afterBackground = storage.attribute(.backgroundColor, at: header, effectiveRange: nil) as? NSColor
+        check(
+            afterBackground == nil || !sameColor(afterBackground, viewTheme.tableBackground),
+            "table break background still painted",
+            failures: failures
+        )
+        check(!engine.text.contains("| :---"), "table break delimiter remains", failures: failures)
+    }
+
 }
 
 final class TableStyleTests: QuillAppTestCase {
@@ -386,5 +475,11 @@ final class TableStyleTests: QuillAppTestCase {
     func testNoHorizontalOverflow() {
         let failures = Failures()
         Probe.checkNoHorizontalOverflow(failures: failures)
+    }
+
+    @MainActor
+    func testTableConsistency() {
+        let failures = Failures()
+        Probe.checkTableConsistency(failures: failures)
     }
 }
