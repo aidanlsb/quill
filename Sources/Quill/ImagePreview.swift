@@ -446,7 +446,13 @@ final class ImagePreviewController {
         }
         let style = (current?.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
         style.lineHeightMultiple = tv.theme.lineHeight
-        style.paragraphSpacing = extra
+        if extra > 0.5 {
+            style.paragraphSpacing = extra
+        } else if let current, current.firstLineHeadIndent > 0.5 {
+            style.paragraphSpacing = tv.theme.listItemSpacing
+        } else {
+            style.paragraphSpacing = extra
+        }
         storage.addAttribute(.paragraphStyle, value: style, range: range)
     }
 

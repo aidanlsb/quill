@@ -45,6 +45,7 @@ public enum TokenStyle: Equatable, Sendable {
     case heading(Int)
     case strong
     case emphasis
+    case list
 }
 
 public enum MarkdownThemeMap {
@@ -54,7 +55,8 @@ public enum MarkdownThemeMap {
         case .emphasis: return .emphasis
         case .strong: return .strong
         case .codeSpan, .fence: return .code
-        case .frontmatter, .syntaxMarker, .listMarker, .taskBox: return .syntax
+        case .frontmatter, .syntaxMarker: return .syntax
+        case .listMarker, .taskBox: return .list
         case .wikilink: return .link
         }
     }

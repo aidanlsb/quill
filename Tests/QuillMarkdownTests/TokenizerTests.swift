@@ -27,6 +27,9 @@ final class TokenizerTests: XCTestCase {
         XCTAssertTrue(kinds.contains(.fence))
         XCTAssertEqual(MarkdownThemeMap.style(for: .wikilink), .link)
         XCTAssertEqual(MarkdownThemeMap.style(for: .heading(2)), .heading(2))
+        XCTAssertEqual(MarkdownThemeMap.style(for: .listMarker), .list)
+        XCTAssertEqual(MarkdownThemeMap.style(for: .taskBox), .list)
+        XCTAssertEqual(MarkdownThemeMap.style(for: .syntaxMarker), .syntax)
     }
 
     func testEditShiftsLaterSpans() {

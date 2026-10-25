@@ -98,17 +98,32 @@ final class ListStyleTests: QuillAppTestCase {
             let isList = label != "prose"
             let prefix = MarkdownTokenizer.listHangPrefixUTF16(line)
             let style = storage.attribute(.paragraphStyle, at: start, effectiveRange: nil) as? NSParagraphStyle
-            XCTAssertEqual(style?.firstLineHeadIndent ?? -1, 0, accuracy: 0.01, "list hang \(label) first line")
             if isList {
                 guard let prefix else {
                     XCTFail("list hang \(label) prefix")
                     continue
                 }
-                XCTAssertGreaterThan(style?.headIndent ?? 0, 1, "list hang \(label) indent")
-                guard let textX = minX(start + prefix), let wrapX = minX(wrapped[1].lowerBound) else {
+                XCTAssertEqual(
+                    style?.firstLineHeadIndent ?? -1,
+                    theme.listIndent,
+                    accuracy: 0.01,
+                    "list hang \(label) first line"
+                )
+                XCTAssertGreaterThan(style?.headIndent ?? 0, theme.listIndent + 1, "list hang \(label) indent")
+                XCTAssertGreaterThan(
+                    (style?.headIndent ?? 0) - (style?.firstLineHeadIndent ?? 0),
+                    1,
+                    "list hang \(label) hang"
+                )
+                XCTAssertGreaterThan(style?.paragraphSpacing ?? 0, 2, "list hang \(label) spacing")
+                guard let markerX = minX(start),
+                      let textX = minX(start + prefix),
+                      let wrapX = minX(wrapped[1].lowerBound)
+                else {
                     XCTFail("list hang \(label) position")
                     continue
                 }
+                XCTAssertEqual(markerX, theme.listIndent, accuracy: 1.5, "list hang \(label) gutter \(markerX)")
                 let second = (storage.string as NSString).substring(
                     with: NSRange(location: wrapped[1].lowerBound, length: 1)
                 )
@@ -121,12 +136,15 @@ final class ListStyleTests: QuillAppTestCase {
                 XCTAssertGreaterThanOrEqual(wrapped[1].lowerBound, start + prefix, "list hang \(label) marker wrapped")
                 textColumns[label] = textX
             } else {
+                XCTAssertEqual(style?.firstLineHeadIndent ?? -1, 0, accuracy: 0.01, "list hang prose first line")
                 XCTAssertEqual(style?.headIndent ?? -1, 0, accuracy: 0.01, "list hang prose indent")
+                XCTAssertEqual(style?.paragraphSpacing ?? -1, 0, accuracy: 0.01, "list hang prose spacing")
                 guard let firstX = minX(start), let wrapX = minX(wrapped[1].lowerBound) else {
                     XCTFail("list hang prose position")
                     continue
                 }
                 XCTAssertEqual(wrapX, firstX, accuracy: 1.5, "list hang prose wrap \(wrapX) first \(firstX)")
+                XCTAssertEqual(firstX, 0, accuracy: 1.5, "list hang prose gutter \(firstX)")
             }
         }
 
@@ -157,7 +175,9 @@ final class ListStyleTests: QuillAppTestCase {
         let fenceLine = lines[fenceIndex]
         let fencePrefix = MarkdownTokenizer.listHangPrefixUTF16(fenceLine) ?? 0
         let fenceStyle = storage.attribute(.paragraphStyle, at: fenceStart, effectiveRange: nil) as? NSParagraphStyle
+        XCTAssertEqual(fenceStyle?.firstLineHeadIndent ?? -1, 0, accuracy: 0.01, "list hang fence first line")
         XCTAssertEqual(fenceStyle?.headIndent ?? -1, 0, accuracy: 0.01, "list hang fence indent")
+        XCTAssertEqual(fenceStyle?.paragraphSpacing ?? -1, 0, accuracy: 0.01, "list hang fence spacing")
         guard let bulletX = minX(fenceStart),
               let textX = minX(fenceStart + fencePrefix),
               let wrapX = minX(fenceRows[1].lowerBound) else {
@@ -201,8 +221,9 @@ final class ListStyleTests: QuillAppTestCase {
             XCTFail("list motion position")
             return
         }
-        XCTAssertGreaterThan(style.headIndent, 1, "list motion indent")
-        XCTAssertEqual(style.firstLineHeadIndent, 0, accuracy: 0.01, "list motion first line")
+        XCTAssertGreaterThan(style.headIndent, tv.theme.listIndent + 1, "list motion indent")
+        XCTAssertEqual(style.firstLineHeadIndent, tv.theme.listIndent, accuracy: 0.01, "list motion first line")
+        XCTAssertGreaterThan(style.paragraphSpacing, 2, "list motion spacing")
         XCTAssertEqual(wrapX, textX, accuracy: 1.5, "list motion wrap \(wrapX) text \(textX)")
 
         _ = tv.press("j")
@@ -213,6 +234,10 @@ final class ListStyleTests: QuillAppTestCase {
         XCTAssertEqual(harness.engine.cursor, continuation, "list motion 0")
         _ = tv.press("g0")
         XCTAssertEqual(harness.engine.cursor, 0, "list motion g0")
+        _ = tv.press("l")
+        XCTAssertEqual(harness.engine.cursor, 1, "list motion l marker")
+        _ = tv.press("h")
+        XCTAssertEqual(harness.engine.cursor, 0, "list motion h marker")
         _ = tv.press("k")
         XCTAssertEqual(harness.engine.cursor, 0, "list motion k")
         XCTAssertEqual(harness.engine.text, source, "list motion rewrote the buffer")
@@ -234,5 +259,167 @@ final class ListStyleTests: QuillAppTestCase {
         }
         XCTAssertEqual(replacedWrapX, replacedTextX, accuracy: 1.5, "list motion replace wrap \(replacedWrapX) text \(replacedTextX)")
         XCTAssertEqual(harness.engine.text.dropFirst(2), source.dropFirst(2), "list motion replace rewrote the item")
+    }
+
+    func testListItemsAreVisuallyDistinctFromProse() {
+        let source = [
+            "plain paragraph sits flush",
+            "- dash item",
+            "* star item",
+            "+ plus item",
+            "1. numbered",
+            "12. two-digit",
+            "- [ ] open task",
+            "- [x] done task",
+            "  - nested",
+            "    * deeper",
+            "```",
+            "- fenced bullet",
+            "```",
+        ].joined(separator: "\n")
+        let light = QuillTheme.current(scheme: .light)
+        let dark = QuillTheme.current(scheme: .dark)
+        XCTAssertGreaterThan(Probe.colorDistance(light.listMarkerColor, light.textColor), 0.15, "list marker light")
+        XCTAssertGreaterThan(Probe.colorDistance(dark.listMarkerColor, dark.textColor), 0.15, "list marker dark")
+        XCTAssertGreaterThan(Probe.colorDistance(light.listMarkerColor, dark.listMarkerColor), 0.2, "list marker theme")
+        XCTAssertGreaterThan(Probe.fontWeight(light.listMarkerFont), Probe.fontWeight(light.bodyFont) + 0.04, "list marker weight")
+        XCTAssertGreaterThan(light.listIndent, 12, "list indent \(light.listIndent)")
+        XCTAssertGreaterThan(light.listItemSpacing, 3, "list spacing \(light.listItemSpacing)")
+        XCTAssertEqual(light.listIndent, CGFloat(QuillMetrics.defaultFontSize) * QuillMetrics.listIndentEm, accuracy: 0.01, "list indent em")
+
+        let width: CGFloat = 280
+        let tv = NSTextView(usingTextLayoutManager: true)
+        tv.isHorizontallyResizable = false
+        tv.isVerticallyResizable = true
+        tv.textContainerInset = .zero
+        tv.textContainer?.lineFragmentPadding = 0
+        tv.textContainer?.widthTracksTextView = false
+        tv.textContainer?.heightTracksTextView = false
+        tv.textContainer?.size = NSSize(width: width, height: 8_000)
+        tv.frame = NSRect(x: 0, y: 0, width: width, height: 2_000)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: width, height: 2_000),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
+        window.contentView = tv
+        tv.frame = window.contentView?.bounds ?? tv.frame
+        tv.textContainer?.size = NSSize(width: width, height: 8_000)
+        window.orderFrontRegardless()
+        defer { window.orderOut(nil) }
+
+        tv.string = source
+        let doc = MarkdownTokenizer(text: source)
+        guard let storage = tv.textStorage else {
+            XCTFail("list style storage")
+            return
+        }
+        MarkdownStyler.restyle(storage, theme: light, spans: doc.spans, tableColumnWidth: width)
+        XCTAssertEqual(storage.string, source, "list style rewrote the buffer")
+        tv.layoutSubtreeIfNeeded()
+        guard let lm = tv.textLayoutManager else {
+            XCTFail("list style layout")
+            return
+        }
+        lm.ensureLayout(for: lm.documentRange)
+
+        func minX(_ utf16: Int) -> CGFloat? {
+            Probe.segmentUnion(lm, range: NSRange(location: utf16, length: 1))?.minX
+        }
+
+        func markerIndex(_ line: String, at start: Int) -> Int {
+            var offset = 0
+            for ch in line {
+                if ch == " " || ch == "\t" {
+                    offset += String(ch).utf16.count
+                    continue
+                }
+                return start + offset
+            }
+            return start
+        }
+
+        let ns = source as NSString
+        var cursor = 0
+        var proseX: CGFloat?
+        var dashX: CGFloat?
+        var nestedX: CGFloat?
+        var deeperX: CGFloat?
+        while cursor < ns.length {
+            let line = ns.lineRange(for: NSRange(location: cursor, length: 0))
+            let content = NSRange(
+                location: line.location,
+                length: max(0, line.length - (ns.substring(with: line).hasSuffix("\n") ? 1 : 0))
+            )
+            let text = ns.substring(with: content)
+            let start = content.location
+            let style = storage.attribute(.paragraphStyle, at: start, effectiveRange: nil) as? NSParagraphStyle
+            let isFence = text.hasPrefix("```") || text.hasPrefix("- fenced")
+            let isList = MarkdownTokenizer.listHangPrefixUTF16(text) != nil && !isFence
+            if text.hasPrefix("plain") {
+                XCTAssertEqual(style?.firstLineHeadIndent ?? -1, 0, accuracy: 0.01, "list style prose first line")
+                XCTAssertEqual(style?.headIndent ?? -1, 0, accuracy: 0.01, "list style prose indent")
+                XCTAssertEqual(style?.paragraphSpacing ?? -1, 0, accuracy: 0.01, "list style prose spacing")
+                proseX = minX(start)
+                let color = storage.attribute(.foregroundColor, at: start, effectiveRange: nil) as? NSColor
+                XCTAssertTrue(Probe.sameColor(color, light.textColor), "list style prose color")
+            } else if isList {
+                XCTAssertEqual(style?.firstLineHeadIndent ?? -1, light.listIndent, accuracy: 0.01, "list style \(text) first line")
+                XCTAssertGreaterThan(style?.headIndent ?? 0, light.listIndent + 1, "list style \(text) hang")
+                XCTAssertEqual(style?.paragraphSpacing ?? 0, light.listItemSpacing, accuracy: 0.2, "list style \(text) spacing")
+                let glyph = markerIndex(text, at: start)
+                let color = storage.attribute(.foregroundColor, at: glyph, effectiveRange: nil) as? NSColor
+                let font = storage.attribute(.font, at: glyph, effectiveRange: nil) as? NSFont
+                XCTAssertTrue(Probe.sameColor(color, light.listMarkerColor), "list style \(text) marker color")
+                XCTAssertGreaterThan(
+                    Probe.fontWeight(font ?? light.bodyFont),
+                    Probe.fontWeight(light.bodyFont) + 0.04,
+                    "list style \(text) marker weight"
+                )
+                let bodyAt = start + (MarkdownTokenizer.listHangPrefixUTF16(text) ?? 0)
+                if bodyAt < NSMaxRange(content) {
+                    let bodyColor = storage.attribute(.foregroundColor, at: bodyAt, effectiveRange: nil) as? NSColor
+                    let bodyFont = storage.attribute(.font, at: bodyAt, effectiveRange: nil) as? NSFont
+                    XCTAssertTrue(Probe.sameColor(bodyColor, light.textColor), "list style \(text) body color")
+                    XCTAssertEqual(bodyFont?.pointSize ?? -1, light.bodyFont.pointSize, accuracy: 0.2, "list style \(text) body size")
+                }
+                guard let x = minX(start) else {
+                    XCTFail("list style \(text) position")
+                    cursor = NSMaxRange(line)
+                    continue
+                }
+                XCTAssertEqual(x, light.listIndent, accuracy: 1.5, "list style \(text) gutter \(x)")
+                if text.hasPrefix("- dash") { dashX = minX(glyph) }
+                if text.hasPrefix("  - ") { nestedX = minX(glyph) }
+                if text.hasPrefix("    * ") { deeperX = minX(glyph) }
+            } else if text.hasPrefix("- fenced") {
+                XCTAssertEqual(style?.firstLineHeadIndent ?? -1, 0, accuracy: 0.01, "list style fence first line")
+                XCTAssertEqual(style?.headIndent ?? -1, 0, accuracy: 0.01, "list style fence indent")
+                let color = storage.attribute(.foregroundColor, at: start, effectiveRange: nil) as? NSColor
+                XCTAssertFalse(Probe.sameColor(color, light.listMarkerColor), "list style fence marker")
+            }
+            cursor = NSMaxRange(line)
+        }
+
+        guard let proseX, let dashX, let nestedX, let deeperX else {
+            XCTFail("list style columns prose \(String(describing: proseX)) dash \(String(describing: dashX)) nested \(String(describing: nestedX)) deeper \(String(describing: deeperX))")
+            return
+        }
+        XCTAssertEqual(proseX, 0, accuracy: 1.5, "list style prose gutter \(proseX)")
+        XCTAssertGreaterThan(dashX, proseX + 8, "list style dash \(dashX) prose \(proseX)")
+        XCTAssertGreaterThan(nestedX, dashX + 2, "list style nested \(nestedX) dash \(dashX)")
+        XCTAssertGreaterThan(deeperX, nestedX + 2, "list style deeper \(deeperX) nested \(nestedX)")
+
+        MarkdownStyler.restyle(storage, theme: dark, spans: doc.spans, tableColumnWidth: width)
+        XCTAssertEqual(storage.string, source, "list style dark rewrote the buffer")
+        let dash = (source as NSString).range(of: "- dash")
+        XCTAssertNotEqual(dash.location, NSNotFound)
+        let darkColor = storage.attribute(.foregroundColor, at: dash.location, effectiveRange: nil) as? NSColor
+        XCTAssertTrue(Probe.sameColor(darkColor, dark.listMarkerColor), "list style dark marker")
+        let darkStyle = storage.attribute(.paragraphStyle, at: dash.location, effectiveRange: nil) as? NSParagraphStyle
+        XCTAssertEqual(darkStyle?.firstLineHeadIndent ?? -1, dark.listIndent, accuracy: 0.01, "list style dark first line")
+        XCTAssertGreaterThan(darkStyle?.paragraphSpacing ?? 0, 2, "list style dark spacing")
     }
 }
