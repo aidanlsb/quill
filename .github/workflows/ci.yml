@@ -64,6 +64,8 @@ jobs:
           chmod +x "$stub/open"
           export STUB_OPEN_LOG="$log"
           export PATH="$stub:$PATH"
+          # The Swift launcher is absent here. This is the open -a fallback.
+          export QUILL_LAUNCH=open
           /bin/bash Scripts/quill
           /bin/bash Scripts/quill +12
           /bin/bash Scripts/quill --wait
@@ -74,6 +76,19 @@ jobs:
           grep -F -q -- 'quill://open' "$log"
           grep -F -q -- 'line=3' "$log"
           grep -F -q -- 'column=2' "$log"
+          test "$(wc -l < "$log" | tr -d ' ')" -eq 4
+          unset QUILL_LAUNCH
+          stub_cli="$(mktemp)"
+          stub_log="$(mktemp)"
+          cat > "$stub_cli" << 'EOF'
+          #!/bin/bash
+          printf '%s\n' "$*" >> "$STUB_CLI_LOG"
+          EOF
+          chmod +x "$stub_cli"
+          export QUILL_CLI="$stub_cli"
+          export STUB_CLI_LOG="$stub_log"
+          /bin/bash Scripts/quill "$work/note.md:3:2"
+          grep -F -q -- 'note.md:3:2' "$stub_log"
           test "$(wc -l < "$log" | tr -d ' ')" -eq 4
       - name: Select Swift 6.2
         run: |

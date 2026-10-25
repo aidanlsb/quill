@@ -7,6 +7,9 @@
 #   quill +12 path/to/note.md
 #   quill .
 #   quill --wait new-note.md
+#
+# The Swift CLI (QuillCLI) hands the path to the running instance, or uses
+# `open -a` when nothing is listening. QUILL_LAUNCH=open skips the CLI.
 set -euo pipefail
 
 resolve_app() {
@@ -67,6 +70,29 @@ materialize() {
     printf '%s/%s' "$dir" "$base"
   fi
 }
+
+resolve_cli() {
+  if [[ -n "${QUILL_CLI:-}" && -x "${QUILL_CLI}" ]]; then
+    printf '%s' "$QUILL_CLI"
+    return
+  fi
+  local app
+  app="$(resolve_app)"
+  if [[ -x "$app/Contents/MacOS/QuillCLI" ]]; then
+    printf '%s' "$app/Contents/MacOS/QuillCLI"
+  fi
+}
+
+if [[ "${QUILL_LAUNCH:-}" != "open" ]]; then
+  cli="$(resolve_cli)"
+  if [[ -n "$cli" ]]; then
+    app="$(resolve_app)"
+    if [[ "$app" != "Quill" ]]; then
+      export QUILL_APP="$app"
+    fi
+    exec "$cli" "$@"
+  fi
+fi
 
 APP="$(resolve_app)"
 wait_flag=()

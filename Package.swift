@@ -112,6 +112,16 @@ package.targets.append(
         swiftSettings: [.swiftLanguageMode(.v6)]
     )
 )
+package.products.append(
+    .executable(name: "QuillCLI", targets: ["QuillCLI"])
+)
+package.targets.append(
+    .executableTarget(
+        name: "QuillCLI",
+        dependencies: ["QuillWorkspace"],
+        swiftSettings: [.swiftLanguageMode(.v6)]
+    )
+)
 package.targets.append(
     .testTarget(
         name: "QuillAppTests",

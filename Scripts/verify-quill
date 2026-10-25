@@ -223,8 +223,13 @@ check_cli_windows() {
   app_bin="$dest/Contents/MacOS/Quill"
   helper="$parent/onscreen-window"
   work="$parent/work"
+  # The needle stays in the environment. awk's own argv must not contain the
+  # binary path, or ps counts the search and a warm launch looks like two Quills.
   bundle_pids() {
-    ps -ax -o pid=,command= | awk -v needle="$app_bin" 'index($0, needle) { print $1 }'
+    ps -axww -o pid=,command= | QUILL_PID_NEEDLE="$app_bin" awk 'index($0, ENVIRON["QUILL_PID_NEEDLE"]) { print $1 }'
+  }
+  print_bundle() {
+    ps -axww -o pid=,command= | QUILL_PID_NEEDLE="$app_bin" awk 'index($0, ENVIRON["QUILL_PID_NEEDLE"]) { print }' >&2 || true
   }
   cleanup_cli() {
     local pid
@@ -256,6 +261,17 @@ check_cli_windows() {
   fi
   swiftc -O -o "$helper" "$root/Scripts/onscreen-window.swift"
 
+  local cli_bin
+  cli_bin="$(dirname "$bin")/QuillCLI"
+  if [[ ! -x "$cli_bin" ]]; then
+    echo "verify-quill: QuillCLI is not next to $bin" >&2
+    echo "verify-quill: swift build -c release --product QuillCLI -Xswiftc -strict-concurrency=complete" >&2
+    return 1
+  fi
+  export QUILL_CLI="$cli_bin"
+  export QUILL_SOCKET="$parent/q.sock"
+  export QUILL_LAUNCH_MARK=1
+
   note="$work/README.md"
   printf 'alpha\nbeta\n' > "$note"
   mkdir -p "$work/notes"
@@ -268,7 +284,7 @@ check_cli_windows() {
       kill "$pid" 2>/dev/null || true
     done
     local i=0
-    while [[ "$i" -lt 20 ]]; do
+    while [[ "$i" -lt 8 ]]; do
       pids="$(bundle_pids)"
       if [[ -z "$pids" ]]; then
         return 0
@@ -302,7 +318,7 @@ check_cli_windows() {
     local label="$1"
     echo "verify-quill: no onscreen window for $label" >&2
     "$helper" --list >&2 || true
-    ps -ax -o pid=,command= | awk 'index($0, "Quill") { print }' >&2 || true
+    print_bundle
     return 1
   }
 
@@ -344,6 +360,13 @@ check_cli_windows() {
         "$helper" --list >&2 || true
         return 1
       fi
+    fi
+    local count
+    count="$(bundle_pids | wc -l | tr -d ' ')"
+    if [[ "$count" != "1" ]]; then
+      echo "verify-quill: warm $label started another process ($count)" >&2
+      print_bundle
+      return 1
     fi
     echo "verify-quill: cli warm $label window pid $pid"
   }

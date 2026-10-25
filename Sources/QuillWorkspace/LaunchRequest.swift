@@ -1,10 +1,10 @@
 import Foundation
 
 /// A file the launcher asked Quill to open, with an optional 1-based cursor.
-public struct LaunchTarget: Equatable, Sendable {
+public struct LaunchTarget: Equatable, Sendable, Codable {
     /// What `column` counts. People and `file:line:col` tools count characters;
     /// language servers count UTF-16 units.
-    public enum ColumnUnit: Equatable, Sendable {
+    public enum ColumnUnit: Equatable, Sendable, Codable {
         case character
         case utf16
     }
@@ -28,8 +28,17 @@ public enum LaunchRequest {
     public static func parse(_ arguments: [String]) -> [LaunchTarget] {
         var targets: [LaunchTarget] = []
         var pendingLine: Int?
+        var skipNext = false
         for arg in arguments {
-            if arg == "--wait" || arg == "--" { continue }
+            if skipNext {
+                skipNext = false
+                continue
+            }
+            if arg == "--wait" || arg == "--" || arg == "--quill-standalone" { continue }
+            if arg == "--quill-socket" {
+                skipNext = true
+                continue
+            }
             if let url = URL(string: arg), url.scheme == "quill", let target = target(from: url) {
                 pendingLine = nil
                 targets.append(target)
@@ -92,6 +101,51 @@ public enum LaunchRequest {
         return components.url ?? URL(string: "quill://open")!
     }
 
+    public static func urls(for targets: [LaunchTarget]) -> [String] {
+        targets.map { url(for: $0).absoluteString }
+    }
+
+    /// Absolute path, creating a missing file the way `quill note.md` always has.
+    /// `cwd` joins a relative path. `.` stays a directory. An existing file is not truncated.
+    public static func prepare(_ arguments: [String], cwd: String) throws -> [LaunchTarget] {
+        try parse(arguments).map { try materialize($0, cwd: cwd) }
+    }
+
+    public static func materialize(_ target: LaunchTarget, cwd: String) throws -> LaunchTarget {
+        let joined = target.path.hasPrefix("/") ? target.path : join(cwd, target.path)
+        let url = URL(fileURLWithPath: joined).standardizedFileURL
+        let base = url.lastPathComponent
+        let directory = url.deletingLastPathComponent()
+        let fm = FileManager.default
+        if base != ".", base != "..", !fm.fileExists(atPath: url.path) {
+            try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+            guard fm.createFile(atPath: url.path, contents: Data()) else {
+                throw LaunchMaterializeError.createFailed(url.path)
+            }
+        }
+        let resolvedDirectory: String
+        if fm.fileExists(atPath: directory.path) {
+            resolvedDirectory = directory.resolvingSymlinksInPath().standardizedFileURL.path
+        } else {
+            resolvedDirectory = directory.standardizedFileURL.path
+        }
+        var copy = target
+        if base == "." {
+            copy.path = resolvedDirectory
+        } else if resolvedDirectory == "/" {
+            copy.path = "/" + base
+        } else {
+            copy.path = resolvedDirectory + "/" + base
+        }
+        return copy
+    }
+
+    private static func join(_ cwd: String, _ relative: String) -> String {
+        if cwd == "/" { return "/" + relative }
+        if cwd.hasSuffix("/") { return cwd + relative }
+        return cwd + "/" + relative
+    }
+
     public static func target(from url: URL) -> LaunchTarget? {
         guard url.scheme == "quill" else { return nil }
         guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
@@ -125,4 +179,8 @@ public enum LaunchRequest {
     private static func trimmingSlash(_ path: String) -> String {
         path.hasSuffix("/") && path.count > 1 ? String(path.dropLast()) : path
     }
+}
+
+public enum LaunchMaterializeError: Error, Equatable {
+    case createFailed(String)
 }
