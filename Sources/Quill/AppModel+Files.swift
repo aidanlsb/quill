@@ -196,6 +196,11 @@ extension AppModel {
 
     func save(then completion: (@MainActor () -> Void)? = nil) {
         if document.isDirectory {
+            if let bad = DirectoryListing.invalidName(in: document.listingLines()) {
+                message = "Invalid name: \(bad)"
+                NSSound.beep()
+                return
+            }
             let ops = document.planDirectorySave()
             if ops.isEmpty {
                 document.markClean()
@@ -244,6 +249,14 @@ extension AppModel {
 
     func applyPendingOps() {
         guard case .confirmFilesystem(let ops, _) = prompt else { return }
+        if let bad = DirectoryListing.invalidName(in: document.listingLines()) {
+            message = "Invalid name: \(bad)"
+            return
+        }
+        if let snapshot = document.snapshot, let problem = DirectoryListing.confinementError(ops, directory: snapshot.directory) {
+            message = problem
+            return
+        }
         do {
             if let error = try document.applyDirectoryOps(ops) {
                 message = error
@@ -300,8 +313,12 @@ extension AppModel {
         guard document.isDirectory, let snap = document.snapshot else { return }
         let line = document.engine.lineTextUnderCursor()
         let parsed = ParsedDirLine(line)
-        guard !parsed.name.isEmpty else { return }
-        open(url: snap.directory.appendingPathComponent(parsed.name))
+        guard let dest = DirectoryName.child(snap.directory, parsed.name) else {
+            message = "Invalid name"
+            NSSound.beep()
+            return
+        }
+        open(url: dest)
     }
 
     func beginOpen(_ url: URL, immediate: Bool = false) {
