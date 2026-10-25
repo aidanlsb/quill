@@ -383,7 +383,7 @@ final class ListStyleTests: QuillAppTestCase {
                     let bodyColor = storage.attribute(.foregroundColor, at: bodyAt, effectiveRange: nil) as? NSColor
                     let bodyFont = storage.attribute(.font, at: bodyAt, effectiveRange: nil) as? NSFont
                     XCTAssertTrue(Probe.sameColor(bodyColor, light.textColor), "list style \(text) body color")
-                    XCTAssertEqual(bodyFont?.pointSize, light.bodyFont.pointSize, accuracy: 0.2, "list style \(text) body size")
+                    XCTAssertEqual(bodyFont?.pointSize ?? -1, light.bodyFont.pointSize, accuracy: 0.2, "list style \(text) body size")
                 }
                 guard let x = minX(start) else {
                     XCTFail("list style \(text) position")
