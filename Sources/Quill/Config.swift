@@ -3,6 +3,7 @@ import Foundation
 import QuillLSP
 import QuillTOML
 import QuillVim
+import QuillWorkspace
 
 struct QuillConfig: Equatable {
     var leader: String
@@ -105,7 +106,7 @@ struct QuillConfig: Equatable {
                 at: toml.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
-            try config.tomlSource().write(to: toml, atomically: true, encoding: .utf8)
+            try AtomicFile.write(Data(config.tomlSource().utf8), to: toml)
             return (config, "Migrated \(json.path) to \(toml.path). The JSON file was left in place.")
         } catch {
             return (config, "config: could not write \(toml.path) (\(error.localizedDescription))")
