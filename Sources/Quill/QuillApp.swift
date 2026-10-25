@@ -96,7 +96,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     func applicationDidFinishLaunching(_ notification: Notification) {
         StartupProbe.mark("didFinish")
         installURLHandler()
-        model.consumeLaunchArguments(Array(CommandLine.arguments.dropFirst()), immediate: true)
+        openAtLaunch(arguments: Array(CommandLine.arguments.dropFirst()))
+        AppSmoke.noteAttachedModel()
+        AppSmoke.noteWindowAppeared()
+        AppSmoke.launchDidFinish(model: model)
+        AppPerf.launchDidFinish()
+    }
+
+    /// AppKit asks this before creating its own untitled window. Quill always
+    /// hosts the editor in `ensureShell()`, including a no-arg launch, so the
+    /// answer is no. A `quill://` URL or `--args` file is not a document-open
+    /// event; the default YES would spawn a spare empty scene beside the file.
+    func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool {
+        false
+    }
+
+    func applicationOpenUntitledFile(_ sender: NSApplication) -> Bool {
+        false
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if flag { return true }
+        let window = ensureShell()
+        shell?.displayDocument()
+        show(window)
+        launchWindowShown = true
+        return false
+    }
+
+    func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
+        true
+    }
+
+    func application(_ app: NSApplication, shouldRestoreApplicationState coder: NSCoder) -> Bool {
+        false
+    }
+
+    func application(_ app: NSApplication, shouldSaveApplicationState coder: NSCoder) -> Bool {
+        false
+    }
+
+    /// Reads CLI args and queued file-open URLs, then shows the one editor window.
+    func openAtLaunch(arguments: [String]) {
+        model.consumeLaunchArguments(arguments, immediate: true)
         drainPending()
         let window = ensureShell()
         StartupProbe.mark("windowMade")
@@ -114,10 +156,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         QuillTrace.event("keyWindow")
         AppPerf.noteKeyWindow()
         StartupUI.noteKeyWindow()
-        AppSmoke.noteAttachedModel()
-        AppSmoke.noteWindowAppeared()
-        AppSmoke.launchDidFinish(model: model)
-        AppPerf.launchDidFinish()
+    }
+
+    var editorWindow: NSWindow? { hostedWindow }
+
+    func closeLaunchWindow() {
+        hostedWindow?.delegate = nil
+        hostedWindow?.orderOut(nil)
+        hostedWindow?.close()
+        hostedWindow = nil
+        shell = nil
+        launchWindowShown = false
+        pending.removeAll()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -166,6 +216,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         )
         window.title = "Quill"
         window.isReleasedWhenClosed = false
+        window.isRestorable = false
         window.collectionBehavior.insert(.moveToActiveSpace)
         window.contentMinSize = NSSize(width: 720, height: 480)
         window.contentViewController = shell

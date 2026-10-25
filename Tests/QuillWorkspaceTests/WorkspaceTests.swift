@@ -36,6 +36,8 @@ final class WorkspaceTests: XCTestCase {
 
 final class LaunchRequestTests: XCTestCase {
     func testPathLineColumnAndPlus() {
+        XCTAssertEqual(LaunchRequest.parse([]), [])
+        XCTAssertEqual(LaunchRequest.parse(["--wait", "--"]), [])
         XCTAssertEqual(
             LaunchRequest.parse(["note.md:12"]),
             [LaunchTarget(path: "note.md", line: 12, column: nil)]

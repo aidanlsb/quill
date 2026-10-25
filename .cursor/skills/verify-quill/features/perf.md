@@ -36,3 +36,4 @@ Preconditions:
 - `textSyncMs` is the visible-range style of a buffer that was just assigned. It is not a full-document restyle. `keystrokeMs` is one insert at the start of that same view.
 - `ignoreWalkAllMs` visits every file, which is what ignore loading used to do. `pickerOpenMs` is the load that skips ignored directories.
 - A five-second launch without `QUILL_PERF` does not produce this log.
+- Opening a file must not leave a spare empty window. `LaunchTests` covers file-open vs no-arg startup; `Scripts/verify-quill`'s CLI check requires exactly one document-sized window per process.
