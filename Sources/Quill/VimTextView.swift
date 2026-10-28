@@ -376,6 +376,18 @@ final class VimTextView: NSTextView {
         textContainer?.size = NSSize(width: max(1, target.column), height: CGFloat.greatestFiniteMagnitude)
         updatingInsets = false
         guard hadInsets else { return }
+        // Live-resize frames keep the leftover fragment y and pin from it.
+        // A settled width change rebuilds through the caret so the delta is
+        // the real wrap, not the previous column's frame.
+        if columnChanged, !inLiveResize, let lm = textLayoutManager, engine != nil {
+            lm.invalidateLayout(for: lm.documentRange)
+            let doc = lm.documentRange.location
+            let index = caretUTF16()
+            lm.enumerateTextLayoutFragments(from: doc, options: [.ensuresLayout]) { fragment in
+                let end = lm.offset(from: doc, to: fragment.rangeInElement.endLocation)
+                return end != NSNotFound && end <= index
+            }
+        }
         let origin: CGFloat
         if let caretBefore, let caretAfter = caretDocumentMidY() {
             origin = baseline + (caretAfter - caretBefore)
@@ -691,6 +703,10 @@ final class VimTextView: NSTextView {
         if let anchor {
             pinVerticalOrigin(anchor)
             resizeAnchorY = nil
+        }
+        if revealAfterRewrap, !inLiveResize {
+            revealAfterRewrap = false
+            revealCaretIfHidden()
         }
     }
 
@@ -1399,17 +1415,21 @@ final class VimTextView: NSTextView {
     /// This runs once per resize, not per live-resize frame.
     private func revealCaretIfHidden() {
         guard enclosingScrollView?.contentView != nil, engine != nil, let lm = textLayoutManager else { return }
+        // Width change invalidates wrapping, but TextKit 2 keeps the old
+        // fragment frames until the viewport is laid out again. The caret
+        // often sits outside that viewport after a narrow, so those leftover
+        // frames still look on screen. Drop them and rebuild through the
+        // cursor before measuring. Once per resize, not per keystroke.
+        lm.invalidateLayout(for: lm.documentRange)
         let doc = lm.documentRange.location
+        let index = caretUTF16()
+        lm.enumerateTextLayoutFragments(from: doc, options: [.ensuresLayout]) { fragment in
+            let end = lm.offset(from: doc, to: fragment.rangeInElement.endLocation)
+            return end != NSNotFound && end <= index
+        }
+        noteContentSizeChanged()
         for _ in 0..<3 {
-            let index = caretUTF16()
-            lm.enumerateTextLayoutFragments(from: doc, options: [.ensuresLayout]) { fragment in
-                let end = lm.offset(from: doc, to: fragment.rangeInElement.endLocation)
-                return end != NSNotFound && end <= index
-            }
-            // A leftover fragment at the old column's y still looks on screen.
-            // Scroll from the estimate first; then keep going if the real
-            // caret is still outside the clip.
-            revealCaret(trustCaretAboveEstimate: false)
+            revealCaret()
             guard let clip = enclosingScrollView?.contentView,
                   let caret = caretRect(forcingLayout: true),
                   !clip.bounds.insetBy(dx: -0.5, dy: -0.5).contains(caret) else { return }
