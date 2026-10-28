@@ -1310,9 +1310,14 @@ final class VimTextView: NSTextView {
         // Measure first: that lays out the caret's paragraph, and the frame
         // height below must already include it. Sizing the frame first left a
         // caret on a wrapped line past the bottom with nowhere to scroll.
-        // A fragment above the buffer row is the last piece TextKit has built,
-        // not the caret: `G` and search on a long note land in the middle.
-        // A fragment at or below that row is the real line, including wrap.
+        // `caretRect` is nil when `textLayoutFragment(for:)` hands back a
+        // fragment that does not contain the cursor. That is the `G` / search
+        // case on a long note: only the estimate can scroll, because the last
+        // built fragment sits in the middle. A real caret is trusted even when
+        // it sits above that estimate. Wrap, heading gaps, and 1.58 leading
+        // make the frame taller than `lineCount * rowHeight`; spreading that
+        // extra linearly puts the estimate below an early wrapped line, and
+        // treating that caret as stale left it above the clip.
         let row = rowHeight()
         let line = engine.buffer.lineIndex(containing: clampUTF16(engine.cursor))
         let lineCount = max(1, engine.buffer.lineCount)
@@ -1336,14 +1341,14 @@ final class VimTextView: NSTextView {
         // includes `textContainerOrigin`). The last row also owns the paragraph
         // gap under it, which is where an image preview sits.
         // Scrolling restyles the lines that come on screen, and that moves the
-        // caret a few points, so measure again. A later pass that cannot see the
-        // caret keeps the scroll already made: `G` on a long note lays the end
-        // out once, and the estimate sits short of that real line.
+        // caret a few points, so measure again. A later pass that still cannot
+        // see a real caret keeps the scroll already made: `G` on a long note
+        // lays the end out once, and the estimate sits short of that real line.
         for pass in 0..<3 {
             let caret = caretRect(forcingLayout: false)
             let rect: NSRect
-            if let caret, let measured = scrollRect(around: caret), measured.midY + row * 4 >= estimated.midY {
-                rect = measured
+            if let caret {
+                rect = scrollRect(around: caret) ?? caret
             } else if pass > 0 {
                 return
             } else {
@@ -1367,7 +1372,9 @@ final class VimTextView: NSTextView {
             }
             origin.x = min(max(0, origin.x), max(0, bounds.width - visible.width))
             let nudgeY = abs(origin.y - visible.origin.y)
-            if pass > 0, nudgeY > row * 4 { return }
+            // A large jump toward a measured caret is the correction; a large
+            // jump with no caret would chase a wild estimate.
+            if pass > 0, nudgeY > row * 4, caret == nil { return }
             guard nudgeY > 0.5 || abs(origin.x - visible.origin.x) > 0.5 else { return }
             clip.setBoundsOrigin(origin)
             scroll.reflectScrolledClipView(clip)
@@ -1863,6 +1870,31 @@ func syncWindowChrome(
     return true
 }
 
+extension VimTextView {
+    /// Directory listing, empty-canvas title, images, and column. `reload` and
+    /// `updateEmptyCanvas` stay with the caller so a SwiftUI tick can restyle
+    /// without replacing the buffer.
+    @discardableResult
+    func applyDocumentChrome(from model: AppModel) -> Bool {
+        let directory = model.document.isDirectory
+        let url = directory ? model.document.url : nil
+        let entries = directory ? (model.document.snapshot?.entries ?? []) : []
+        let directoryChanged = isDirectoryBuffer != directory
+            || directoryURL != url
+            || directoryEntries != entries
+        columnWidth = model.theme.columnWidth
+        setImageContext(enabled: model.showImages, filePath: directory ? nil : model.document.url?.path)
+        isDirectoryBuffer = directory
+        directoryURL = url
+        directoryEntries = entries
+        if directoryChanged { invalidateDirectoryStyle() }
+        emptyCanvasTitle = model.document.title
+        emptyCanvasUntitled = model.document.isUntitled
+        emptyCanvasLeader = model.config.leader
+        return directoryChanged
+    }
+}
+
 struct EditorView: NSViewRepresentable {
     var model: AppModel
     var diagnostics: [(NSRange, Int)]
@@ -1878,17 +1910,7 @@ struct EditorView: NSViewRepresentable {
         tv.vimDelegate = context.coordinator
         context.coordinator.textView = tv
         context.coordinator.model = model
-        tv.columnWidth = model.theme.columnWidth
-        tv.setImageContext(enabled: model.showImages, filePath: model.document.isDirectory ? nil : model.document.url?.path)
-        tv.isDirectoryBuffer = model.document.isDirectory
-        tv.directoryURL = model.document.isDirectory ? model.document.url : nil
-        tv.directoryEntries = model.document.isDirectory ? (model.document.snapshot?.entries ?? []) : []
-        tv.emptyCanvasTitle = model.document.title
-        tv.emptyCanvasUntitled = {
-            if case .untitled = model.document.kind { return true }
-            return false
-        }()
-        tv.emptyCanvasLeader = model.config.leader
+        _ = tv.applyDocumentChrome(from: model)
         let themeBegan = StartupProbe.begin("applyThemeMs")
         tv.applyTheme(model.theme, focus: model.focusMode)
         StartupProbe.end("applyThemeMs", themeBegan)
@@ -1903,23 +1925,7 @@ struct EditorView: NSViewRepresentable {
         if model.editor == nil || tv.window?.isKeyWindow == true {
             model.editor = tv
         }
-        tv.columnWidth = model.theme.columnWidth
-        tv.setImageContext(enabled: model.showImages, filePath: model.document.isDirectory ? nil : model.document.url?.path)
-        let entries = model.document.isDirectory ? (model.document.snapshot?.entries ?? []) : []
-        let url = model.document.isDirectory ? model.document.url : nil
-        let directoryChanged = tv.isDirectoryBuffer != model.document.isDirectory
-            || tv.directoryURL != url
-            || tv.directoryEntries != entries
-        tv.isDirectoryBuffer = model.document.isDirectory
-        tv.directoryURL = url
-        tv.directoryEntries = entries
-        if directoryChanged { tv.invalidateDirectoryStyle() }
-        tv.emptyCanvasTitle = model.document.title
-        tv.emptyCanvasUntitled = {
-            if case .untitled = model.document.kind { return true }
-            return false
-        }()
-        tv.emptyCanvasLeader = model.config.leader
+        let directoryChanged = tv.applyDocumentChrome(from: model)
         tv.updateEmptyCanvas()
         let diagnosticsChanged = tv.diagnosticRanges.count != diagnostics.count
             || tv.diagnosticRanges.map(\.0) != diagnostics.map(\.0)

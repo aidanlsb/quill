@@ -84,6 +84,11 @@ final class Document {
         return false
     }
 
+    var isUntitled: Bool {
+        if case .untitled = kind { return true }
+        return false
+    }
+
     var snapshot: DirectorySnapshot? {
         if case .directory(_, let snapshot) = kind { return snapshot }
         return nil

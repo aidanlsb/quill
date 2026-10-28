@@ -168,7 +168,10 @@ final class AppModel {
         if !completions.isEmpty { completions = [] }
         if !diagnostics.isEmpty { diagnostics = [] }
         rebuildKeymap()
-        editor?.reload()
+        if let editor {
+            _ = editor.applyDocumentChrome(from: self)
+            editor.reload()
+        }
         refreshStatus()
         noteInterface()
         if let url = document.url, let target = document.takeJump(for: url) {

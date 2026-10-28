@@ -91,26 +91,7 @@ final class EditorShell: NSViewController, VimTextViewDelegate {
         if model.editor == nil || tv.window?.isKeyWindow == true {
             model.editor = tv
         }
-        tv.columnWidth = model.theme.columnWidth
-        tv.setImageContext(
-            enabled: model.showImages,
-            filePath: model.document.isDirectory ? nil : model.document.url?.path
-        )
-        let entries = model.document.isDirectory ? (model.document.snapshot?.entries ?? []) : []
-        let url = model.document.isDirectory ? model.document.url : nil
-        let directoryChanged = tv.isDirectoryBuffer != model.document.isDirectory
-            || tv.directoryURL != url
-            || tv.directoryEntries != entries
-        tv.isDirectoryBuffer = model.document.isDirectory
-        tv.directoryURL = url
-        tv.directoryEntries = entries
-        if directoryChanged { tv.invalidateDirectoryStyle() }
-        tv.emptyCanvasTitle = model.document.title
-        tv.emptyCanvasUntitled = {
-            if case .untitled = model.document.kind { return true }
-            return false
-        }()
-        tv.emptyCanvasLeader = model.config.leader
+        let directoryChanged = tv.applyDocumentChrome(from: model)
         tv.updateEmptyCanvas()
         let diagnostics = model.diagnosticRanges
         let diagnosticsChanged = tv.diagnosticRanges.count != diagnostics.count
