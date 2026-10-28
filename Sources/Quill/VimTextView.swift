@@ -720,7 +720,10 @@ final class VimTextView: NSTextView {
             pinVerticalOrigin(anchor)
             resizeAnchorY = nil
         }
-        if revealAfterRewrap { needsLayout = true }
+        if revealAfterRewrap {
+            revealAfterRewrap = false
+            revealCaretIfHidden()
+        }
     }
 
     override func viewDidMoveToSuperview() {
@@ -1302,7 +1305,7 @@ final class VimTextView: NSTextView {
         sizing = false
     }
 
-    func revealCaret() {
+    func revealCaret(trustCaretAboveEstimate: Bool = true) {
         guard let scroll = enclosingScrollView, !revealingCaret else { return }
         revealingCaret = true
         defer { revealingCaret = false }
@@ -1313,11 +1316,14 @@ final class VimTextView: NSTextView {
         // `caretRect` is nil when `textLayoutFragment(for:)` hands back a
         // fragment that does not contain the cursor. That is the `G` / search
         // case on a long note: only the estimate can scroll, because the last
-        // built fragment sits in the middle. A real caret is trusted even when
-        // it sits above that estimate. Wrap, heading gaps, and 1.58 leading
-        // make the frame taller than `lineCount * rowHeight`; spreading that
-        // extra linearly puts the estimate below an early wrapped line, and
-        // treating that caret as stale left it above the clip.
+        // built fragment sits in the middle.
+        // A real caret on a wrapped line can sit above that estimate: wrap,
+        // heading gaps, and 1.58 leading make the frame taller than
+        // `lineCount * rowHeight`, and spreading that extra linearly puts the
+        // estimate below an early wrapped line. Keystrokes trust that caret.
+        // After a rewrap the leftover fragment still has the old y, which is
+        // also above the estimate, and that one is stale: `trustCaretAboveEstimate`
+        // is false then so the estimate can catch up.
         let row = rowHeight()
         let line = engine.buffer.lineIndex(containing: clampUTF16(engine.cursor))
         let lineCount = max(1, engine.buffer.lineCount)
@@ -1347,8 +1353,11 @@ final class VimTextView: NSTextView {
         for pass in 0..<3 {
             let caret = caretRect(forcingLayout: false)
             let rect: NSRect
-            if let caret {
-                rect = scrollRect(around: caret) ?? caret
+            if let caret, let measured = scrollRect(around: caret),
+               trustCaretAboveEstimate || measured.midY + row * 4 >= estimated.midY {
+                rect = measured
+            } else if let caret, trustCaretAboveEstimate {
+                rect = caret
             } else if pass > 0 {
                 return
             } else {
@@ -1389,7 +1398,7 @@ final class VimTextView: NSTextView {
     /// and dropping a table's padding there rewraps it, so measure again after.
     /// This runs once per resize, not per live-resize frame.
     private func revealCaretIfHidden() {
-        guard let clip = enclosingScrollView?.contentView, engine != nil, let lm = textLayoutManager else { return }
+        guard enclosingScrollView?.contentView != nil, engine != nil, let lm = textLayoutManager else { return }
         let doc = lm.documentRange.location
         for _ in 0..<3 {
             let index = caretUTF16()
@@ -1397,9 +1406,13 @@ final class VimTextView: NSTextView {
                 let end = lm.offset(from: doc, to: fragment.rangeInElement.endLocation)
                 return end != NSNotFound && end <= index
             }
-            guard let caret = caretRect(forcingLayout: true),
+            // A leftover fragment at the old column's y still looks on screen.
+            // Scroll from the estimate first; then keep going if the real
+            // caret is still outside the clip.
+            revealCaret(trustCaretAboveEstimate: false)
+            guard let clip = enclosingScrollView?.contentView,
+                  let caret = caretRect(forcingLayout: true),
                   !clip.bounds.insetBy(dx: -0.5, dy: -0.5).contains(caret) else { return }
-            revealCaret()
         }
     }
 
