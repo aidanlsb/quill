@@ -544,8 +544,11 @@ enum StartupUI {
         guard let storage = view.textStorage, storage.length > 1 else { return false }
         let ns = storage.string as NSString
         let hash = ns.range(of: "# ")
-        guard hash.location != NSNotFound, hash.location < storage.length else { return false }
-        guard let heading = storage.attribute(.font, at: hash.location, effectiveRange: nil) as? NSFont,
+        guard hash.location != NSNotFound else { return false }
+        let title = NSMaxRange(hash)
+        guard title < storage.length else { return false }
+        // `#` markers stay body-sized. The title after them is the display face.
+        guard let heading = storage.attribute(.font, at: title, effectiveRange: nil) as? NSFont,
               let body = storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont else { return false }
         return heading.pointSize > body.pointSize + 0.5
     }
