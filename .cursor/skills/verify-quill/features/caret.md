@@ -11,7 +11,7 @@ The normal-mode cursor is one character cell: the width of the glyph under it, o
 - `caret-empty` draws the body em box on a blank line, inside that line's glyph bounds.
 - `caret-end` draws the em box at the end of the document, on the baseline, inside that line's glyph bounds.
 - `caret-beam` draws a 2-pixel rounded beam in insert mode, the same height as the block on that glyph, and blinks only in insert mode.
-- `type-scale` uses a 16pt system body, semibold system headings at 1.5 / 1.3 / 1.15 / 1.05 / 1.0 / 1.0 times that body, SF Mono for code, and a 1.5 line height. Config `font` names a family and falls back to the system font when it is blank or missing. The default config column is 70. Side and vertical insets stay at least 120pt, and a narrow window still keeps the column inside those gutters.
+- `type-scale` uses a 16pt system body, system headings at 1.68 / 1.38 / 1.18 / 1.08 / 1.0 / 1.0 times that body (medium on H1 and H4–H6, semibold on H2/H3), SF Mono for code, and a 1.58 line height. Config `font` names a family and falls back to the system font when it is blank or missing. The default config column is 70. Side and vertical insets stay at least 120pt, and a narrow window still keeps the column inside those gutters.
 
 ## How to get to it (user POV)
 

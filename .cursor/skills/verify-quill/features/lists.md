@@ -9,7 +9,7 @@ A bulleted, numbered, or task list stays plain markdown. List items sit in a gut
 - `list-nested` hangs a `  - ` item and a `    * ` item under their own text, to the right of a top-level item.
 - `list-plain` leaves a wrapped prose line, and a list-shaped line inside a code fence, on the left edge of the column.
 - `list-motion` keeps `j` on the next screen row, `0` on that screen row, and `g0` on the marker. `h` and `l` still step across the typed `-` and the space after it. The source characters do not change.
-- `list-style` insets every list item (`firstLineHeadIndent` plus a matching hanging `headIndent`), paints the marker and checkbox in the list accent at medium weight, and adds a little paragraph spacing. Light and dark both keep that contrast. Single-line items get the same gutter and marker as wrapped ones.
+- `list-style` insets every list item (`firstLineHeadIndent` plus a matching hanging `headIndent`), paints the marker and checkbox in the list accent at medium weight, and adds a little paragraph spacing. Light and dark both keep that contrast. Single-line items get the same gutter and marker as wrapped ones. A completed task (`- [x]` / `- [X]`) dims and strikes the item text; the checkbox characters stay in the file.
 
 ## How to get to it (user POV)
 

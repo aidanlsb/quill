@@ -122,10 +122,10 @@ final class CaretTests: XCTestCase {
     }
 
     func testDefaultThemesStayLegibleWithoutRedrawingTheGlyph() {
-        let lightText = CaretRGB(r: 0.22, g: 0.22, b: 0.22)
-        let lightBackground = CaretRGB(r: 0.965, g: 0.965, b: 0.965)
-        let darkText = CaretRGB(r: 0.86, g: 0.86, b: 0.86)
-        let darkBackground = CaretRGB(r: 0.11, g: 0.11, b: 0.11)
+        let lightText = CaretRGB(r: 0.196, g: 0.157, b: 0.122)
+        let lightBackground = CaretRGB(r: 0.988, g: 0.972, b: 0.942)
+        let darkText = CaretRGB(r: 0.905, g: 0.872, b: 0.822)
+        let darkBackground = CaretRGB(r: 0.102, g: 0.090, b: 0.078)
         let alpha = CaretGeometry.blockFillAlpha
         XCTAssertFalse(CaretContrast.needsRedraw(
             text: lightText,

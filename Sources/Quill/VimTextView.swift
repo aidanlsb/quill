@@ -195,7 +195,7 @@ final class VimTextView: NSTextView {
     /// Vertical clip origin to restore after the inset change in progress.
     private var resizeAnchorY: CGFloat?
     private weak var observedClip: NSClipView?
-    private var tokenizer = MarkdownTokenizer(text: "")
+    var tokenizer = MarkdownTokenizer(text: "")
     /// UTF-16 ranges already given span attributes. A gap between two styled
     /// screens is not covered; scrolling into it styles that screen only.
     private var styledCoverage = 0..<0
@@ -216,6 +216,10 @@ final class VimTextView: NSTextView {
     fileprivate var appliedFocus = false
     private var mouseAnchor: Int?
     private let caretChrome = CaretChrome(frame: .zero)
+    let emptyCanvas = EmptyCanvasView(frame: .zero)
+    var emptyCanvasTitle = "Quill"
+    var emptyCanvasUntitled = true
+    var emptyCanvasLeader = " "
     private var placingCaret = false
     private var orderingCaret = false
     /// `revealCaret` scrolls, and that scroll restyles the new lines. Restyle
@@ -305,7 +309,7 @@ final class VimTextView: NSTextView {
         insertionPointColor = .clear
         let accent = CaretInk.accent(for: painted)
         selectedTextAttributes = [
-            .backgroundColor: accent.withAlphaComponent(0.22),
+            .backgroundColor: theme.selectionColor,
             .foregroundColor: theme.textColor,
         ]
         defaultParagraphStyle = {
@@ -332,6 +336,7 @@ final class VimTextView: NSTextView {
         queueRestyle()
         imagePreviews.applyTheme()
         placeCaret()
+        updateEmptyCanvas()
     }
 
     func updateInsets(preservingOriginY: CGFloat? = nil) {
@@ -430,6 +435,7 @@ final class VimTextView: NSTextView {
         let revealBegan = DispatchTime.now().uptimeNanoseconds
         revealCaret()
         QuillPerfSplit.add("syncRevealMs", since: revealBegan)
+        updateEmptyCanvas()
     }
 
     func applyResult(_ result: EngineResult) {
@@ -493,6 +499,7 @@ final class VimTextView: NSTextView {
         }
         vimDelegate?.vimTextView(self, didHandle: result)
         assertViewMatchesEngine()
+        updateEmptyCanvas()
     }
 
     func useThisLayout() {
@@ -599,6 +606,7 @@ final class VimTextView: NSTextView {
         }
         placeCaret(forcingLayout: false)
         imagePreviews.reposition()
+        updateEmptyCanvas()
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -614,11 +622,12 @@ final class VimTextView: NSTextView {
     }
 
     override func drawBackground(in rect: NSRect) {
-        guard isDirectoryBuffer else {
-            super.drawBackground(in: rect)
+        if isDirectoryBuffer {
+            drawDirectoryBackground(in: rect)
             return
         }
-        drawDirectoryBackground(in: rect)
+        super.drawBackground(in: rect)
+        drawBlockDecorations(in: rect)
     }
 
     override func setNeedsDisplay(_ invalidRect: NSRect) {
@@ -1874,6 +1883,12 @@ struct EditorView: NSViewRepresentable {
         tv.isDirectoryBuffer = model.document.isDirectory
         tv.directoryURL = model.document.isDirectory ? model.document.url : nil
         tv.directoryEntries = model.document.isDirectory ? (model.document.snapshot?.entries ?? []) : []
+        tv.emptyCanvasTitle = model.document.title
+        tv.emptyCanvasUntitled = {
+            if case .untitled = model.document.kind { return true }
+            return false
+        }()
+        tv.emptyCanvasLeader = model.config.leader
         let themeBegan = StartupProbe.begin("applyThemeMs")
         tv.applyTheme(model.theme, focus: model.focusMode)
         StartupProbe.end("applyThemeMs", themeBegan)
@@ -1899,6 +1914,13 @@ struct EditorView: NSViewRepresentable {
         tv.directoryURL = url
         tv.directoryEntries = entries
         if directoryChanged { tv.invalidateDirectoryStyle() }
+        tv.emptyCanvasTitle = model.document.title
+        tv.emptyCanvasUntitled = {
+            if case .untitled = model.document.kind { return true }
+            return false
+        }()
+        tv.emptyCanvasLeader = model.config.leader
+        tv.updateEmptyCanvas()
         let diagnosticsChanged = tv.diagnosticRanges.count != diagnostics.count
             || tv.diagnosticRanges.map(\.0) != diagnostics.map(\.0)
         if diagnosticsChanged {

@@ -382,7 +382,14 @@ final class ListStyleTests: QuillAppTestCase {
                 if bodyAt < NSMaxRange(content) {
                     let bodyColor = storage.attribute(.foregroundColor, at: bodyAt, effectiveRange: nil) as? NSColor
                     let bodyFont = storage.attribute(.font, at: bodyAt, effectiveRange: nil) as? NSFont
-                    XCTAssertTrue(Probe.sameColor(bodyColor, light.textColor), "list style \(text) body color")
+                    let done = text.contains("[x]") || text.contains("[X]")
+                    if done {
+                        XCTAssertTrue(Probe.sameColor(bodyColor, light.taskDoneColor), "list style \(text) done color")
+                        let strike = storage.attribute(.strikethroughStyle, at: bodyAt, effectiveRange: nil) as? NSNumber
+                        XCTAssertEqual(strike?.intValue, NSUnderlineStyle.single.rawValue, "list style \(text) done strike")
+                    } else {
+                        XCTAssertTrue(Probe.sameColor(bodyColor, light.textColor), "list style \(text) body color")
+                    }
                     XCTAssertEqual(bodyFont?.pointSize ?? -1, light.bodyFont.pointSize, accuracy: 0.2, "list style \(text) body size")
                 }
                 guard let x = minX(start) else {

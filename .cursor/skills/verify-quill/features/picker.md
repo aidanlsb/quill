@@ -11,6 +11,7 @@
 - `picker-highlight` paints the matched characters in the text color and the rest dimmer.
 - `picker-mode` reads INSERT, then NORMAL after Escape.
 - `picker-grep` shows the query `alpha` and a `notes.md` hit, not `ideas.md`.
+- `picker-empty` draws "No matches" when a query has no rows, and "Type to filter" when the list is still empty.
 
 ## How to get to it (user POV)
 

@@ -38,13 +38,21 @@ enum Probe {
     }
 
     static func brightness(_ color: NSColor) -> CGFloat {
+        channel(color, 0)
+    }
+
+    static func channel(_ color: NSColor, _ index: Int) -> CGFloat {
         let rgb = color.usingColorSpace(.sRGB) ?? color
         var red: CGFloat = 0
         var green: CGFloat = 0
         var blue: CGFloat = 0
         var alpha: CGFloat = 0
         rgb.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
-        return red
+        switch index {
+        case 1: return green
+        case 2: return blue
+        default: return red
+        }
     }
 
     static func colorDistance(_ lhs: NSColor, _ rhs: NSColor) -> CGFloat {

@@ -115,12 +115,16 @@ extension MarkdownStyler {
             case .codeSpan:
                 storage.addAttribute(.font, value: theme.monoFont, range: hit)
                 storage.addAttribute(.foregroundColor, value: theme.codeColor, range: hit)
+                storage.addAttribute(.backgroundColor, value: theme.codeBackground, range: hit)
             case .strong:
                 storage.addAttribute(.font, value: headerFont, range: hit)
             case .emphasis:
                 storage.addAttribute(.font, value: tableItalicFont(theme.monoFont), range: hit)
-            case .wikilink:
+            case .wikilink, .link:
                 storage.addAttribute(.foregroundColor, value: theme.linkColor, range: hit)
+            case .strikethrough:
+                storage.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: hit)
+                storage.addAttribute(.strikethroughColor, value: theme.textColor, range: hit)
             default:
                 break
             }

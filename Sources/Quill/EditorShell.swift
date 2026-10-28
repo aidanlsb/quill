@@ -9,8 +9,7 @@ final class EditorShell: NSViewController, VimTextViewDelegate {
     let model: AppModel
     let textView: VimTextView
     private let scroll: NSScrollView
-    private let statusBar = NSView()
-    private let statusLabel = NSTextField(labelWithString: "")
+    private let statusBar = StatusChrome()
     private var pickerHost: NSHostingController<PickerPanel>?
     private var completionHost: NSHostingController<CompletionList>?
     private var sheetController: NSViewController?
@@ -46,12 +45,7 @@ final class EditorShell: NSViewController, VimTextViewDelegate {
         scroll.frame = root.bounds
         scroll.autoresizingMask = [.width, .height]
         root.addSubview(scroll)
-        statusBar.wantsLayer = true
-        statusBar.frame = NSRect(x: 0, y: 0, width: 960, height: 28)
-        statusLabel.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
-        statusLabel.lineBreakMode = .byTruncatingTail
-        statusLabel.frame = NSRect(x: 16, y: 5, width: 900, height: 18)
-        statusBar.addSubview(statusLabel)
+        statusBar.frame = NSRect(x: 0, y: 0, width: 960, height: QuillMetrics.statusBarHeight)
         root.addSubview(statusBar)
     }
 
@@ -111,6 +105,13 @@ final class EditorShell: NSViewController, VimTextViewDelegate {
         tv.directoryURL = url
         tv.directoryEntries = entries
         if directoryChanged { tv.invalidateDirectoryStyle() }
+        tv.emptyCanvasTitle = model.document.title
+        tv.emptyCanvasUntitled = {
+            if case .untitled = model.document.kind { return true }
+            return false
+        }()
+        tv.emptyCanvasLeader = model.config.leader
+        tv.updateEmptyCanvas()
         let diagnostics = model.diagnosticRanges
         let diagnosticsChanged = tv.diagnosticRanges.count != diagnostics.count
             || tv.diagnosticRanges.map(\.0) != diagnostics.map(\.0)
@@ -152,14 +153,17 @@ final class EditorShell: NSViewController, VimTextViewDelegate {
 
     private func updateStatus() {
         let directory = model.document.isDirectory
-        let background = directory ? model.theme.directoryBackgroundColor : model.theme.backgroundColor
-        statusBar.layer?.backgroundColor = background.cgColor
-        var parts = [model.status, model.document.title]
-        if model.document.modified { parts.append("•") }
-        if !model.message.isEmpty { parts.append(model.message) }
-        let line = parts.joined(separator: "  ")
-        if statusLabel.stringValue != line { statusLabel.stringValue = line }
-        statusLabel.textColor = model.theme.dimColor
+        let leading = directory ? QuillMetrics.directoryIconLeading : QuillMetrics.sideGutter
+        statusBar.apply(
+            theme: model.theme,
+            directory: directory,
+            mode: model.status,
+            title: model.document.title,
+            modified: model.document.modified,
+            message: model.message,
+            position: model.cursorLabel,
+            leading: leading
+        )
         view.window?.title = model.document.title
     }
 
@@ -192,7 +196,8 @@ final class EditorShell: NSViewController, VimTextViewDelegate {
             names: names,
             selection: model.completionIndex,
             text: Color(model.theme.textColor),
-            background: Color(model.theme.backgroundColor)
+            background: Color(model.theme.backgroundColor),
+            accent: Color(model.theme.accentColor)
         ) { [weak model] name in
             model?.applyCompletion(name)
         }
@@ -258,8 +263,8 @@ final class EditorShell: NSViewController, VimTextViewDelegate {
         guard bounds.width > 1, bounds.height > 1 else { return }
         let hideStatus = model.focusMode
         statusBar.isHidden = hideStatus
-        let statusHeight: CGFloat = hideStatus ? 0 : 28
-        let statusFrame = NSRect(x: 0, y: 0, width: bounds.width, height: 28)
+        let statusHeight: CGFloat = hideStatus ? 0 : QuillMetrics.statusBarHeight
+        let statusFrame = NSRect(x: 0, y: 0, width: bounds.width, height: QuillMetrics.statusBarHeight)
         let scrollFrame = NSRect(
             x: 0,
             y: statusHeight,
@@ -268,14 +273,11 @@ final class EditorShell: NSViewController, VimTextViewDelegate {
         )
         if statusBar.frame != statusFrame { statusBar.frame = statusFrame }
         if scroll.frame != scrollFrame { scroll.frame = scrollFrame }
-        let leading = model.document.isDirectory ? QuillMetrics.directoryIconLeading : QuillMetrics.sideGutter
-        let labelWidth = max(1, bounds.width - leading - 12)
-        let labelFrame = NSRect(x: leading, y: 5, width: labelWidth, height: 18)
-        if statusLabel.frame != labelFrame { statusLabel.frame = labelFrame }
         if let picker = pickerHost?.view, picker.frame != scrollFrame {
             picker.frame = scrollFrame
         }
         if let completion = completionHost?.view {
+            let leading = model.document.isDirectory ? QuillMetrics.directoryIconLeading : QuillMetrics.sideGutter
             let width = min(420, max(180, scrollFrame.width - leading - 24))
             let rows = CGFloat(max(model.completions.count, 1))
             let height = min(max(1, scrollFrame.height * 0.45), rows * 22 + 8)

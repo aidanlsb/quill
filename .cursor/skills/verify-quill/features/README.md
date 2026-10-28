@@ -43,3 +43,4 @@ Each feature file has an H1, one paragraph, then four H2 sections: `Sub-features
 - [Performance](perf.md) records launch, editing, and picker timings. It does not assert a speed limit.
 - [Picker](picker.md) covers the `<leader>sf` and `<leader>sg` prompt, caret, placeholder, and live filtering.
 - [Command palette](palette.md) covers ⌘K, the visible query, right-aligned shortcuts, running a command, and Escape restoring the previous mode.
+- [Empty canvas](empty.md) covers the overlay on an empty untitled buffer, an empty named file, and that it is gone in insert mode, after typing, and in a directory.

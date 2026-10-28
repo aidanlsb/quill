@@ -30,6 +30,10 @@ final class TokenizerTests: XCTestCase {
         XCTAssertEqual(MarkdownThemeMap.style(for: .listMarker), .list)
         XCTAssertEqual(MarkdownThemeMap.style(for: .taskBox), .list)
         XCTAssertEqual(MarkdownThemeMap.style(for: .syntaxMarker), .syntax)
+        XCTAssertEqual(MarkdownThemeMap.style(for: .blockquote), .quote)
+        XCTAssertEqual(MarkdownThemeMap.style(for: .thematicBreak), .rule)
+        XCTAssertEqual(MarkdownThemeMap.style(for: .strikethrough), .strikethrough)
+        XCTAssertEqual(MarkdownThemeMap.style(for: .link), .link)
     }
 
     func testEditShiftsLaterSpans() {
@@ -210,6 +214,34 @@ final class TokenizerTests: XCTestCase {
             TokenSpan(range: 1..<3, token: .emphasis),
             TokenSpan(range: 3..<4, token: .syntaxMarker),
         ])
+        XCTAssertEqual(MarkdownTokenizer(text: "~~gone~~").spans, [
+            TokenSpan(range: 0..<2, token: .syntaxMarker),
+            TokenSpan(range: 2..<6, token: .strikethrough),
+            TokenSpan(range: 6..<8, token: .syntaxMarker),
+        ])
+        XCTAssertEqual(MarkdownTokenizer(text: "[text](url)").spans, [
+            TokenSpan(range: 0..<1, token: .syntaxMarker),
+            TokenSpan(range: 1..<5, token: .link),
+            TokenSpan(range: 5..<11, token: .syntaxMarker),
+        ])
+    }
+
+    func testEditorialBlocks() {
+        let quote = MarkdownTokenizer(text: "> a line")
+        XCTAssertTrue(quote.spans.contains { $0.token == .blockquote })
+        XCTAssertTrue(quote.spans.contains { $0.token == .syntaxMarker && $0.range == 0..<2 })
+        let rule = MarkdownTokenizer(text: "---")
+        XCTAssertEqual(rule.spans.map(\.token), [.frontmatter])
+        let later = MarkdownTokenizer(text: "para\n\n***\n")
+        XCTAssertTrue(later.spans.contains { $0.token == .thematicBreak })
+        let quotedHeading = MarkdownTokenizer(text: "> # Title")
+        XCTAssertTrue(quotedHeading.spans.contains { $0.token == .blockquote })
+        XCTAssertTrue(quotedHeading.spans.contains { $0.token == .heading(1) })
+        XCTAssertEqual(Scanner.blockquotePrefixUTF16("> a"), 2)
+        XCTAssertEqual(Scanner.blockquotePrefixUTF16("  >a"), 3)
+        XCTAssertTrue(Scanner.isThematicBreak("---"))
+        XCTAssertTrue(Scanner.isThematicBreak("  * * *"))
+        XCTAssertFalse(Scanner.isThematicBreak("- item"))
     }
 
     func testTruncatedInlineMarkersStayOpen() {
@@ -221,6 +253,8 @@ final class TokenizerTests: XCTestCase {
         XCTAssertEqual(MarkdownTokenizer(text: "[[a]").spans, [])
         XCTAssertEqual(MarkdownTokenizer(text: "`").spans, [])
         XCTAssertEqual(MarkdownTokenizer(text: "*em").spans, [])
+        XCTAssertEqual(MarkdownTokenizer(text: "~~").spans, [])
+        XCTAssertEqual(MarkdownTokenizer(text: "[text](").spans, [])
         XCTAssertEqual(MarkdownTokenizer(text: "- [ ").spans, [
             TokenSpan(range: 0..<2, token: .listMarker),
         ])

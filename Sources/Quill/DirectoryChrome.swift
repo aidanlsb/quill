@@ -291,6 +291,10 @@ extension VimTextView {
         if header.intersects(rect) {
             drawDirectoryHeader(style.header)
         }
+        let hasNames = style.lines.contains { !$0.name.isEmpty }
+        if !hasNames, style.deleted.isEmpty {
+            drawDirectoryEmptyHint(below: header)
+        }
         let scan = visibleDirectoryLines(in: rect)
         for index in scan.lineIndexes where index < style.lines.count && index < engine.buffer.lineCount {
             let line = style.lines[index]
@@ -376,6 +380,20 @@ extension VimTextView {
             return true
         }
         return scan
+    }
+
+    private func drawDirectoryEmptyHint(below header: NSRect) {
+        let rect = NSRect(
+            x: QuillMetrics.directoryIconLeading,
+            y: header.maxY + 6,
+            width: max(1, bounds.width - QuillMetrics.directoryIconLeading - 16),
+            height: 18
+        )
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: theme.directoryHeaderFont,
+            .foregroundColor: theme.dimColor,
+        ]
+        ("empty folder" as NSString).draw(with: rect, options: [.usesLineFragmentOrigin], attributes: attrs)
     }
 
     private func drawDirectoryHeader(_ header: String) {

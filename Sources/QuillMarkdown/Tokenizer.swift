@@ -6,13 +6,17 @@ public enum MarkdownToken: Equatable, Sendable {
     case heading(Int)
     case emphasis
     case strong
+    case strikethrough
     case codeSpan
     case fence
     case frontmatter
     case wikilink
+    case link
     case listMarker
     case taskBox
     case syntaxMarker
+    case blockquote
+    case thematicBreak
 }
 
 public struct TokenSpan: Equatable, Sendable {
@@ -45,7 +49,10 @@ public enum TokenStyle: Equatable, Sendable {
     case heading(Int)
     case strong
     case emphasis
+    case strikethrough
     case list
+    case quote
+    case rule
 }
 
 public enum MarkdownThemeMap {
@@ -54,10 +61,13 @@ public enum MarkdownThemeMap {
         case .heading(let level): return .heading(level)
         case .emphasis: return .emphasis
         case .strong: return .strong
+        case .strikethrough: return .strikethrough
         case .codeSpan, .fence: return .code
         case .frontmatter, .syntaxMarker: return .syntax
         case .listMarker, .taskBox: return .list
-        case .wikilink: return .link
+        case .wikilink, .link: return .link
+        case .blockquote: return .quote
+        case .thematicBreak: return .rule
         }
     }
 }
@@ -764,16 +774,63 @@ enum Scanner {
         if entering.inFence {
             return ([TokenSpan(range: line.start..<line.end, token: .fence)], exit)
         }
+        if isThematicBreak(raw) {
+            return ([TokenSpan(range: line.start..<(line.start + raw.utf16.count), token: .thematicBreak)], exit)
+        }
         var spans: [TokenSpan] = []
-        if let level = headingLevel(raw) {
-            spans.append(TokenSpan(range: line.start..<(line.start + level), token: .syntaxMarker))
-            spans.append(TokenSpan(range: line.start..<(line.start + raw.utf16.count), token: .heading(level)))
+        var content = raw
+        var contentStart = line.start
+        if let quote = blockquotePrefixUTF16(raw) {
+            spans.append(TokenSpan(range: line.start..<(line.start + quote), token: .syntaxMarker))
+            spans.append(TokenSpan(range: line.start..<(line.start + raw.utf16.count), token: .blockquote))
+            contentStart = line.start + quote
+            content = LineSplit.utf16Slice(raw, from: quote, to: raw.utf16.count)
         }
-        if let marker = listMarkerUTF16(raw) {
-            spans.append(TokenSpan(range: line.start..<(line.start + marker), token: .listMarker))
+        if let level = headingLevel(content) {
+            spans.append(TokenSpan(range: contentStart..<(contentStart + level), token: .syntaxMarker))
+            spans.append(TokenSpan(range: contentStart..<(contentStart + content.utf16.count), token: .heading(level)))
         }
-        spans.append(contentsOf: inline(raw, lineStart: line.start))
+        if let marker = listMarkerUTF16(content) {
+            spans.append(TokenSpan(range: contentStart..<(contentStart + marker), token: .listMarker))
+        }
+        spans.append(contentsOf: inline(content, lineStart: contentStart))
         return (spans, exit)
+    }
+
+    /// CommonMark thematic break: three or more `-`, `*`, or `_`, optional spaces.
+    static func isThematicBreak(_ line: String) -> Bool {
+        var marker: Character?
+        var count = 0
+        for ch in line {
+            if ch == " " || ch == "\t" { continue }
+            if ch == "-" || ch == "*" || ch == "_" {
+                if let marker, marker != ch { return false }
+                marker = ch
+                count += 1
+                continue
+            }
+            return false
+        }
+        return count >= 3
+    }
+
+    /// UTF-16 length of a CommonMark quote prefix: up to three spaces, `>`, optional space.
+    static func blockquotePrefixUTF16(_ line: String) -> Int? {
+        var index = line.startIndex
+        var utf16 = 0
+        var spaces = 0
+        while index < line.endIndex, line[index] == " ", spaces < 3 {
+            spaces += 1
+            utf16 += 1
+            index = line.index(after: index)
+        }
+        guard index < line.endIndex, line[index] == ">" else { return nil }
+        utf16 += 1
+        index = line.index(after: index)
+        if index < line.endIndex, line[index] == " " {
+            utf16 += 1
+        }
+        return utf16
     }
 
     static func headingLevel(_ line: String) -> Int? {
@@ -873,6 +930,18 @@ enum Scanner {
                 index = line.index(after: end)
                 continue
             }
+            if ch == "~", line[line.index(after: index)...].hasPrefix("~") {
+                let from = line.index(index, offsetBy: 2, limitedBy: line.endIndex) ?? line.endIndex
+                if let end = doubleTilde(line, from: from) {
+                    let close = line.utf16.distance(from: line.startIndex, to: end)
+                    spans.append(TokenSpan(range: (lineStart + utf16)..<(lineStart + utf16 + 2), token: .syntaxMarker))
+                    spans.append(TokenSpan(range: (lineStart + utf16 + 2)..<(lineStart + close), token: .strikethrough))
+                    spans.append(TokenSpan(range: (lineStart + close)..<(lineStart + close + 2), token: .syntaxMarker))
+                    utf16 = close + 2
+                    index = line.index(end, offsetBy: 2)
+                    continue
+                }
+            }
             if ch == "[", line[line.index(after: index)...].hasPrefix("[") {
                 if let end = wikiClose(line, from: line.index(index, offsetBy: 2)) {
                     let close = line.utf16.distance(from: line.startIndex, to: end) + 2
@@ -892,6 +961,18 @@ enum Scanner {
                     continue
                 }
             }
+            if ch == "[", let link = markdownLink(line, from: index) {
+                let labelEnd = line.utf16.distance(from: line.startIndex, to: link.labelEnd)
+                let close = line.utf16.distance(from: line.startIndex, to: link.close)
+                spans.append(TokenSpan(range: (lineStart + utf16)..<(lineStart + utf16 + 1), token: .syntaxMarker))
+                if labelEnd > utf16 + 1 {
+                    spans.append(TokenSpan(range: (lineStart + utf16 + 1)..<(lineStart + labelEnd), token: .link))
+                }
+                spans.append(TokenSpan(range: (lineStart + labelEnd)..<(lineStart + close), token: .syntaxMarker))
+                utf16 = close
+                index = link.close
+                continue
+            }
             utf16 += ch.utf16.count
             index = line.index(after: index)
         }
@@ -903,6 +984,42 @@ enum Scanner {
         while index < line.endIndex {
             if line[index] == "*", let next = line.index(after: index) as String.Index?, next < line.endIndex, line[next] == "*" {
                 return index
+            }
+            index = line.index(after: index)
+        }
+        return nil
+    }
+
+    static func doubleTilde(_ line: String, from: String.Index) -> String.Index? {
+        var index = from
+        while index < line.endIndex {
+            if line[index] == "~", let next = line.index(after: index) as String.Index?, next < line.endIndex, line[next] == "~" {
+                return index
+            }
+            index = line.index(after: index)
+        }
+        return nil
+    }
+
+    /// `[label](url)` starting at `from`. `labelEnd` is the `]`; `close` is past the closing `)`.
+    static func markdownLink(_ line: String, from: String.Index) -> (labelEnd: String.Index, close: String.Index)? {
+        guard from < line.endIndex, line[from] == "[" else { return nil }
+        var index = line.index(after: from)
+        while index < line.endIndex {
+            let ch = line[index]
+            if ch == "[" || ch == "\n" { return nil }
+            if ch == "]" {
+                let open = line.index(after: index)
+                guard open < line.endIndex, line[open] == "(" else { return nil }
+                var cursor = line.index(after: open)
+                while cursor < line.endIndex {
+                    if line[cursor] == "\n" { return nil }
+                    if line[cursor] == ")" {
+                        return (index, line.index(after: cursor))
+                    }
+                    cursor = line.index(after: cursor)
+                }
+                return nil
             }
             index = line.index(after: index)
         }

@@ -41,8 +41,8 @@ public enum CaretGeometry {
     public static let glyphHeightMultiple = 1.3
     /// Normal-mode fill. Low enough that the glyph underneath stays readable.
     public static let blockFillAlpha = 0.38
-    public static let lightAccent = CaretRGB(r: 0.17, g: 0.39, b: 0.76)
-    public static let darkAccent = CaretRGB(r: 0.49, g: 0.72, b: 0.98)
+    public static let lightAccent = CaretRGB(r: 0.62, g: 0.34, b: 0.22)
+    public static let darkAccent = CaretRGB(r: 0.85, g: 0.64, b: 0.42)
 
     public static func accent(darkBackground: Bool) -> CaretRGB {
         darkBackground ? darkAccent : lightAccent
