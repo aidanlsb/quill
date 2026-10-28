@@ -71,14 +71,17 @@ struct PickerPanel: View {
                 HStack(spacing: 0) {
                     Color.clear.frame(width: caret, height: 1)
                     if picker.mode == .insert {
-                        PickerCaret(color: theme.textColor)
-                            .frame(width: 1, height: line * 0.72)
+                        PickerCaret(color: theme.accentColor)
+                            .frame(width: 1.5, height: line * 0.72)
                     }
                     Spacer(minLength: 0)
                 }
                 .allowsHitTesting(false)
             }
             .frame(height: line)
+            Rectangle()
+                .fill(Color(theme.accentColor).opacity(0.22))
+                .frame(height: 1)
         }
         .padding(.horizontal, QuillMetrics.sideGutter)
         .padding(.top, QuillMetrics.verticalInset)
@@ -91,9 +94,17 @@ struct PickerPanel: View {
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(picker.items.enumerated()), id: \.element.payload) { index, item in
-                        row(item, index: index, picker: picker, kind: opened.kind, style: style, theme: theme)
-                            .id(item.payload)
+                    if picker.items.isEmpty {
+                        Text(picker.query.isEmpty ? "Type to filter" : "No matches")
+                            .font(.system(size: 13))
+                            .foregroundStyle(Color(theme.dimColor))
+                            .padding(.vertical, 10)
+                            .accessibilityIdentifier("quill.picker.empty")
+                    } else {
+                        ForEach(Array(picker.items.enumerated()), id: \.element.payload) { index, item in
+                            row(item, index: index, picker: picker, kind: opened.kind, style: style, theme: theme)
+                                .id(item.payload)
+                        }
                     }
                 }
                 .padding(.horizontal, QuillMetrics.sideGutter)
@@ -169,13 +180,21 @@ struct PickerPanel: View {
                 Spacer(minLength: 0)
             }
         }
-        .padding(.vertical, 5)
+        .padding(.vertical, 6)
+        .padding(.leading, selected ? 10 : 12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             selected
-                ? Color(NSColor.unemphasizedSelectedContentBackgroundColor)
+                ? Color(theme.accentColor).opacity(0.10)
                 : Color.clear
         )
+        .overlay(alignment: .leading) {
+            if selected {
+                Rectangle()
+                    .fill(Color(theme.accentColor).opacity(0.85))
+                    .frame(width: 2)
+            }
+        }
     }
 
     private var queryPlaceholder: String {

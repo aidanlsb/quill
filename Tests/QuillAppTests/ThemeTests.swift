@@ -22,7 +22,12 @@ extension Probe {
                 failures: failures
             )
         }
-        check(abs(theme.lineHeight - 1.5) < 0.01, "line height \(theme.lineHeight)", failures: failures)
+        check(abs(theme.lineHeight - 1.58) < 0.01, "line height \(theme.lineHeight)", failures: failures)
+        check(
+            QuillMetrics.headingWeights.count == QuillMetrics.headingScale.count,
+            "heading weight count \(QuillMetrics.headingWeights.count)",
+            failures: failures
+        )
         check(QuillConfig.default.fontSize == 16, "default body font config \(QuillConfig.default.fontSize)", failures: failures)
         check(QuillConfig.default.font.isEmpty, "default body font family set", failures: failures)
         let system = NSFont.systemFont(ofSize: CGFloat(QuillMetrics.defaultFontSize))
@@ -31,9 +36,13 @@ extension Probe {
             "default body font family \(theme.bodyFont.familyName ?? "")",
             failures: failures
         )
-        for font in theme.headingFonts {
+        for (font, expected) in zip(theme.headingFonts, QuillMetrics.headingWeights) {
             let weight = fontWeight(font)
-            check(weight >= 0.28, "heading weight \(weight)", failures: failures)
+            check(
+                abs(weight - expected.rawValue) < 0.08,
+                "heading weight \(weight) expected \(expected.rawValue)",
+                failures: failures
+            )
             check(
                 font.familyName == system.familyName,
                 "heading family \(font.familyName ?? "")",
@@ -81,6 +90,12 @@ extension Probe {
         let dark = QuillTheme.current(scheme: .dark)
         let light = QuillTheme.current(scheme: .light)
         check(brightness(dark.backgroundColor) < brightness(light.backgroundColor), "theme dark", failures: failures)
+        check(channel(light.backgroundColor, 0) > channel(light.backgroundColor, 2), "theme light warmth", failures: failures)
+        check(channel(light.textColor, 0) > channel(light.textColor, 2), "theme light ink warmth", failures: failures)
+        check(channel(dark.textColor, 0) > channel(dark.textColor, 2), "theme dark ink warmth", failures: failures)
+        check(colorDistance(light.accentColor, light.textColor) > 0.2, "theme light accent", failures: failures)
+        check(colorDistance(dark.accentColor, dark.textColor) > 0.2, "theme dark accent", failures: failures)
+        check(light.backgroundColor.alphaComponent > 0.99, "theme light opaque", failures: failures)
         do {
             let fixture = try TempDirectory()
             let url = fixture.url.appendingPathComponent("state.toml")

@@ -56,11 +56,12 @@ The `quill` script resolves `/Applications/Quill.app` (or a local `dist/Quill.ap
 
 ## Writing feel
 
-- Sans-serif body: the system font at 16pt (`fontSize` 10–32, `font` a family name; blank or missing uses the system font). Headings are semibold system at 1.5 / 1.3 / 1.15 / 1.05 / 1.0 / 1.0. Code and frontmatter are SF Mono. Line height is 1.5
+- Sans-serif body: the system font at 16pt (`fontSize` 10–32, `font` a family name; blank or missing uses the system font). Headings are system at 1.68 / 1.38 / 1.18 / 1.08 / 1.0 / 1.0, medium on H1 and H4–H6, semibold on H2/H3, with `#` markers in the body size. Code and frontmatter are SF Mono, optically a touch smaller than the body. Line height is 1.58
 - Centered ~70-character column (`columnWidth`), with at least 128pt between the text and the window edge
-- Live markdown styling in the buffer (headings, emphasis, code, lists, checkboxes, GFM tables, `[[wikilinks]]`, dimmed syntax) without rewriting the file. List items sit in a gutter with a heavier accent marker, hanging wraps, and a little space between items. Tables use a monospaced face, a quiet alignment rule, and an emphasized header. Wide rows wrap within the column, and a table too wide to line up is shown as typed. `:TableFormat` pads cells so the pipes line up
+- Live markdown styling in the buffer (headings, emphasis, strikethrough, inline code, lists, checkboxes, blockquotes, thematic breaks, GFM tables, `[links](url)`, `[[wikilinks]]`, dimmed syntax) without rewriting the file. List items sit in a gutter with a heavier accent marker, hanging wraps, and a little space between items; completed tasks recede. Tables use a monospaced face, a quiet alignment rule, and an emphasized header. Wide rows wrap within the column, and a table too wide to line up is shown as typed. `:TableFormat` pads cells so the pipes line up
 - `![alt](path)` draws a preview under that line, fitted to the column. The source stays editable text: paths are relative to the file, absolute, or `~`, and `http`/`https` loads in the background. Set `images = false` to turn it off, or toggle it from the command palette
-- Light and dark follow the system
+- Light is warm ivory paper and walnut ink; dark is obsidian with cream letters. One copper/bronze accent carries the caret, links, lists, and the mode pill
+- An empty untitled window (and an empty named file) shows a quiet column of hints. It leaves the moment you press `i`, type, or open a file with contents
 - Focus mode: **⌃⌘F** (hides the status bar, larger margins)
 - `[[` completion from filenames in the opened folder
 

@@ -6,12 +6,20 @@ import QuillVim
 enum QuillMetrics {
     static let defaultFontSize: Double = 16
     static let defaultColumn = 70
-    static let lineHeight: CGFloat = 1.5
-    static let headingScale: [CGFloat] = [1.5, 1.3, 1.15, 1.05, 1.0, 1.0]
-    static let monoScale: CGFloat = 0.85
+    /// Book-like leading for long-form prose. Tight enough to scan, open enough to rest.
+    static let lineHeight: CGFloat = 1.58
+    static let headingScale: [CGFloat] = [1.68, 1.38, 1.18, 1.08, 1.0, 1.0]
+    /// H1 and H4–H6 use medium; H2/H3 stay semibold so the outline still scans.
+    static let headingWeights: [NSFont.Weight] = [.medium, .semibold, .semibold, .medium, .medium, .medium]
+    /// Tracking on heading text, in points. Negative pulls a display line together.
+    static let headingKern: [CGFloat] = [-0.55, -0.28, -0.12, 0, 0.12, 0.28]
+    /// Mono optically matched to SF Pro's x-height at body size.
+    static let monoScale: CGFloat = 0.88
     /// Directory listings use a smaller monospaced face than the writing body.
     static let directoryFontScale: CGFloat = 0.75
     static let directoryLineHeight: CGFloat = 1.28
+    static let statusBarHeight: CGFloat = 32
+    static let modePillHeight: CGFloat = 20
     /// Left and right padding for the listing. The icon sits inside the left padding.
     static let directoryHorizontalInset: CGFloat = 44
     static let directoryHeaderHeight: CGFloat = 22
@@ -96,6 +104,12 @@ struct QuillTheme {
     var tableRowRule: NSColor
     var listMarkerColor: NSColor
     var listMarkerFont: NSFont
+    var accentColor: NSColor
+    var codeBackground: NSColor
+    var quoteBarColor: NSColor
+    var quoteColor: NSColor
+    var ruleColor: NSColor
+    var taskDoneColor: NSColor
 
     var listIndent: CGFloat { bodyFont.pointSize * QuillMetrics.listIndentEm }
     var listItemSpacing: CGFloat { bodyFont.pointSize * QuillMetrics.listItemSpacingEm }
@@ -117,10 +131,10 @@ struct QuillTheme {
         let fontsBegan = StartupProbe.begin("fontsMs")
         let body = QuillMetrics.bodyFont(family: fontFamily, size: size)
         let mono = QuillMetrics.monoFont(ofSize: size * QuillMetrics.monoScale)
-        let headings = QuillMetrics.headingScale.map { scale in
-            NSFont.systemFont(ofSize: size * scale, weight: .semibold)
+        let headings = zip(QuillMetrics.headingScale, QuillMetrics.headingWeights).map { scale, weight in
+            NSFont.systemFont(ofSize: size * scale, weight: weight)
         }
-        let text = dark ? NSColor(calibratedWhite: 0.86, alpha: 1) : NSColor(calibratedWhite: 0.22, alpha: 1)
+        let ink = QuillPalette.ink(dark: dark)
         let directorySize = QuillMetrics.directoryFontSize(body: size)
         let directoryFont = QuillMetrics.monoFont(ofSize: directorySize)
         let directoryHeaderFont = QuillMetrics.monoFont(ofSize: max(10, directorySize - 1))
@@ -133,52 +147,34 @@ struct QuillTheme {
             bodyFont: body,
             monoFont: mono,
             headingFonts: headings,
-            textColor: text,
-            backgroundColor: dark
-                ? NSColor(calibratedWhite: 0.11, alpha: 1)
-                : NSColor(calibratedWhite: 0.965, alpha: 1),
-            syntaxColor: dark ? NSColor(calibratedWhite: 0.42, alpha: 1) : NSColor(calibratedWhite: 0.58, alpha: 1),
-            codeColor: dark ? NSColor(calibratedWhite: 0.72, alpha: 1) : NSColor(calibratedWhite: 0.32, alpha: 1),
-            linkColor: dark
-                ? NSColor(calibratedRed: 0.62, green: 0.68, blue: 0.74, alpha: 1)
-                : NSColor(calibratedRed: 0.35, green: 0.42, blue: 0.48, alpha: 1),
-            dimColor: dark ? NSColor(calibratedWhite: 0.40, alpha: 1) : NSColor(calibratedWhite: 0.62, alpha: 1),
-            selectionColor: text.withAlphaComponent(0.10),
+            textColor: ink.text,
+            backgroundColor: ink.paper,
+            syntaxColor: ink.syntax,
+            codeColor: ink.code,
+            linkColor: ink.link,
+            dimColor: ink.dim,
+            selectionColor: ink.accent.withAlphaComponent(dark ? 0.22 : 0.16),
             columnWidth: average * CGFloat(max(1, columnCharacters)),
             lineHeight: QuillMetrics.lineHeight,
             directoryFont: directoryFont,
             directoryHeaderFont: directoryHeaderFont,
-            directoryBackgroundColor: dark
-                ? NSColor(calibratedRed: 0.128, green: 0.136, blue: 0.152, alpha: 1)
-                : NSColor(calibratedRed: 0.918, green: 0.929, blue: 0.945, alpha: 1),
-            directoryAccentColor: dark
-                ? NSColor(calibratedRed: 0.66, green: 0.76, blue: 0.84, alpha: 1)
-                : NSColor(calibratedRed: 0.27, green: 0.40, blue: 0.55, alpha: 1),
-            directoryHighlightColor: dark
-                ? NSColor(calibratedWhite: 1, alpha: 0.06)
-                : NSColor(calibratedWhite: 0, alpha: 0.045),
-            directoryCreatedColor: dark
-                ? NSColor(calibratedRed: 0.55, green: 0.72, blue: 0.60, alpha: 1)
-                : NSColor(calibratedRed: 0.33, green: 0.48, blue: 0.38, alpha: 1),
-            directoryRenamedColor: dark
-                ? NSColor(calibratedRed: 0.84, green: 0.70, blue: 0.45, alpha: 1)
-                : NSColor(calibratedRed: 0.62, green: 0.46, blue: 0.24, alpha: 1),
-            directoryDeletedColor: dark
-                ? NSColor(calibratedRed: 0.78, green: 0.52, blue: 0.48, alpha: 1)
-                : NSColor(calibratedRed: 0.55, green: 0.32, blue: 0.30, alpha: 1),
-            tableBackground: dark
-                ? NSColor(calibratedWhite: 1, alpha: 0.045)
-                : NSColor(calibratedWhite: 0, alpha: 0.04),
-            tableHeaderRule: dark
-                ? NSColor(calibratedWhite: 1, alpha: 0.32)
-                : NSColor(calibratedWhite: 0, alpha: 0.28),
-            tableRowRule: dark
-                ? NSColor(calibratedWhite: 1, alpha: 0.12)
-                : NSColor(calibratedWhite: 0, alpha: 0.10),
-            listMarkerColor: dark
-                ? NSColor(calibratedRed: 0.68, green: 0.80, blue: 0.94, alpha: 1)
-                : NSColor(calibratedRed: 0.22, green: 0.38, blue: 0.58, alpha: 1),
-            listMarkerFont: Self.makeListMarkerFont(from: body)
+            directoryBackgroundColor: ink.directoryPaper,
+            directoryAccentColor: ink.directoryAccent,
+            directoryHighlightColor: ink.accent.withAlphaComponent(dark ? 0.14 : 0.10),
+            directoryCreatedColor: ink.created,
+            directoryRenamedColor: ink.renamed,
+            directoryDeletedColor: ink.deleted,
+            tableBackground: ink.accent.withAlphaComponent(dark ? 0.08 : 0.05),
+            tableHeaderRule: ink.accent.withAlphaComponent(dark ? 0.42 : 0.32),
+            tableRowRule: ink.accent.withAlphaComponent(dark ? 0.16 : 0.12),
+            listMarkerColor: ink.accent,
+            listMarkerFont: Self.makeListMarkerFont(from: body),
+            accentColor: ink.accent,
+            codeBackground: ink.codeWash,
+            quoteBarColor: ink.accent.withAlphaComponent(dark ? 0.72 : 0.55),
+            quoteColor: ink.quote,
+            ruleColor: ink.syntax.withAlphaComponent(0.85),
+            taskDoneColor: ink.dim
         )
     }
 
@@ -227,6 +223,44 @@ struct QuillTheme {
             .foregroundColor: textColor,
             .paragraphStyle: para,
         ]
+    }
+
+    /// Breathing room that makes the outline scan: more space above than below,
+    /// scaled to the body so a custom font size still feels composed.
+    func headingParagraphStyle(level: Int) -> NSParagraphStyle {
+        let para = NSMutableParagraphStyle()
+        para.lineHeightMultiple = lineHeight
+        let size = bodyFont.pointSize
+        switch min(max(1, level), 6) {
+        case 1:
+            para.paragraphSpacingBefore = size * 0.28
+            para.paragraphSpacing = size * 0.42
+        case 2:
+            para.paragraphSpacingBefore = size * 0.82
+            para.paragraphSpacing = size * 0.30
+        case 3:
+            para.paragraphSpacingBefore = size * 0.62
+            para.paragraphSpacing = size * 0.22
+        default:
+            para.paragraphSpacingBefore = size * 0.42
+            para.paragraphSpacing = size * 0.16
+        }
+        return para
+    }
+
+    func quoteParagraphStyle() -> NSParagraphStyle {
+        let para = NSMutableParagraphStyle()
+        para.lineHeightMultiple = lineHeight
+        let inset = bodyFont.pointSize * 0.55
+        para.firstLineHeadIndent = inset
+        para.headIndent = inset
+        para.paragraphSpacing = bodyFont.pointSize * 0.12
+        return para
+    }
+
+    func headingKern(level: Int) -> CGFloat {
+        let index = min(max(0, level - 1), QuillMetrics.headingKern.count - 1)
+        return QuillMetrics.headingKern[index]
     }
 }
 
@@ -367,6 +401,9 @@ enum MarkdownStyler {
         if style == .list {
             storage.addAttribute(.font, value: theme.listMarkerFont, range: range)
             storage.addAttribute(.foregroundColor, value: dimmed ? theme.dimColor : theme.listMarkerColor, range: range)
+            if token == .taskBox {
+                applyCheckedTask(range: range, theme: theme, storage: storage)
+            }
             return
         }
         if dimmed {
@@ -380,22 +417,120 @@ enum MarkdownStyler {
         }
         switch style {
         case .heading(let level):
-            let font = theme.headingFonts[min(max(0, level - 1), theme.headingFonts.count - 1)]
-            storage.addAttribute(.font, value: font, range: range)
+            applyHeading(level: level, range: range, theme: theme, storage: storage)
         case .strong:
             storage.addAttribute(.font, value: NSFontManager.shared.convert(theme.bodyFont, toHaveTrait: .boldFontMask), range: range)
         case .emphasis:
             let italic = NSFontManager.shared.convert(theme.bodyFont, toHaveTrait: .italicFontMask)
             storage.addAttribute(.font, value: italic, range: range)
+        case .strikethrough:
+            storage.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: range)
+            storage.addAttribute(.strikethroughColor, value: theme.textColor, range: range)
         case .code:
             storage.addAttribute(.font, value: theme.monoFont, range: range)
             storage.addAttribute(.foregroundColor, value: theme.codeColor, range: range)
+            storage.addAttribute(.backgroundColor, value: theme.codeBackground, range: range)
         case .link:
             storage.addAttribute(.foregroundColor, value: theme.linkColor, range: range)
+            if token == .link {
+                storage.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: range)
+                storage.addAttribute(.underlineColor, value: theme.linkColor.withAlphaComponent(0.42), range: range)
+            }
+        case .quote:
+            applyQuote(range: range, theme: theme, storage: storage)
+        case .rule:
+            storage.addAttribute(.foregroundColor, value: theme.syntaxColor.withAlphaComponent(0.42), range: range)
+            storage.addAttribute(.font, value: theme.monoFont, range: range)
         case .syntax, .dim:
             storage.addAttribute(.foregroundColor, value: theme.syntaxColor, range: range)
         case .list, .body:
             break
         }
+    }
+
+    /// Heading face on the title text only, so `#` markers stay body-sized and dim.
+    /// Paragraph spacing is the outline's breathing room; the characters stay put.
+    private static func applyHeading(level: Int, range: NSRange, theme: QuillTheme, storage: NSTextStorage) {
+        let font = theme.headingFonts[min(max(0, level - 1), theme.headingFonts.count - 1)]
+        let hashes = min(max(1, level), range.length)
+        var textStart = range.location + hashes
+        if textStart < NSMaxRange(range) {
+            let ns = storage.string as NSString
+            let unit = ns.character(at: textStart)
+            if unit == 32 || unit == 9 { textStart += 1 }
+        }
+        let textLength = NSMaxRange(range) - textStart
+        if textLength > 0 {
+            let textRange = NSRange(location: textStart, length: textLength)
+            storage.addAttribute(.font, value: font, range: textRange)
+            let kern = theme.headingKern(level: level)
+            if abs(kern) > 0.01 {
+                storage.addAttribute(.kern, value: kern, range: textRange)
+            }
+        }
+        storage.addAttribute(
+            .paragraphStyle,
+            value: theme.headingParagraphStyle(level: level),
+            range: paragraphRange(range, length: storage.length, storage: storage)
+        )
+    }
+
+    private static func applyQuote(range: NSRange, theme: QuillTheme, storage: NSTextStorage) {
+        let italic = NSFontManager.shared.convert(theme.bodyFont, toHaveTrait: .italicFontMask)
+        let ns = storage.string as NSString
+        var start = range.location
+        let end = NSMaxRange(range)
+        while start < end, ns.character(at: start) == 32 { start += 1 }
+        if start < end, ns.character(at: start) == 62 {
+            start += 1
+            if start < end, ns.character(at: start) == 32 { start += 1 }
+        }
+        if start < end {
+            let text = NSRange(location: start, length: end - start)
+            storage.addAttribute(.font, value: italic, range: text)
+            storage.addAttribute(.foregroundColor, value: theme.quoteColor, range: text)
+        }
+        storage.addAttribute(
+            .paragraphStyle,
+            value: theme.quoteParagraphStyle(),
+            range: paragraphRange(range, length: storage.length, storage: storage)
+        )
+    }
+
+    /// Completed tasks recede: the item text after `[x]` is dimmed and struck.
+    /// The checkbox characters stay, so `h`/`l` still land on them.
+    private static func applyCheckedTask(range: NSRange, theme: QuillTheme, storage: NSTextStorage) {
+        guard range.length >= 3, NSMaxRange(range) <= storage.length else { return }
+        let ns = storage.string as NSString
+        let mark = ns.substring(with: NSRange(location: range.location + 1, length: 1))
+        guard mark == "x" || mark == "X" else { return }
+        let line = ns.lineRange(for: NSRange(location: range.location, length: 0))
+        var start = NSMaxRange(range)
+        let lineEnd = NSMaxRange(line)
+        if start < lineEnd {
+            let unit = ns.character(at: start)
+            if unit == 32 || unit == 9 { start += 1 }
+        }
+        var end = lineEnd
+        while end > start {
+            let unit = ns.character(at: end - 1)
+            if unit == 10 || unit == 13 {
+                end -= 1
+                continue
+            }
+            break
+        }
+        guard start < end else { return }
+        let rest = NSRange(location: start, length: end - start)
+        storage.addAttribute(.foregroundColor, value: theme.taskDoneColor, range: rest)
+        storage.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: rest)
+        storage.addAttribute(.strikethroughColor, value: theme.taskDoneColor, range: rest)
+    }
+
+    private static func paragraphRange(_ range: NSRange, length: Int, storage: NSTextStorage) -> NSRange {
+        guard NSMaxRange(range) < length else { return range }
+        let next = (storage.string as NSString).substring(with: NSRange(location: NSMaxRange(range), length: 1))
+        guard next == "\n" || next == "\r" else { return range }
+        return NSRange(location: range.location, length: range.length + 1)
     }
 }

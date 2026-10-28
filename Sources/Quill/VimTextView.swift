@@ -195,7 +195,7 @@ final class VimTextView: NSTextView {
     /// Vertical clip origin to restore after the inset change in progress.
     private var resizeAnchorY: CGFloat?
     private weak var observedClip: NSClipView?
-    private var tokenizer = MarkdownTokenizer(text: "")
+    var tokenizer = MarkdownTokenizer(text: "")
     /// UTF-16 ranges already given span attributes. A gap between two styled
     /// screens is not covered; scrolling into it styles that screen only.
     private var styledCoverage = 0..<0
@@ -216,6 +216,10 @@ final class VimTextView: NSTextView {
     fileprivate var appliedFocus = false
     private var mouseAnchor: Int?
     private let caretChrome = CaretChrome(frame: .zero)
+    let emptyCanvas = EmptyCanvasView(frame: .zero)
+    var emptyCanvasTitle = "Quill"
+    var emptyCanvasUntitled = true
+    var emptyCanvasLeader = " "
     private var placingCaret = false
     private var orderingCaret = false
     /// `revealCaret` scrolls, and that scroll restyles the new lines. Restyle
@@ -305,7 +309,7 @@ final class VimTextView: NSTextView {
         insertionPointColor = .clear
         let accent = CaretInk.accent(for: painted)
         selectedTextAttributes = [
-            .backgroundColor: accent.withAlphaComponent(0.22),
+            .backgroundColor: theme.selectionColor,
             .foregroundColor: theme.textColor,
         ]
         defaultParagraphStyle = {
@@ -332,6 +336,7 @@ final class VimTextView: NSTextView {
         queueRestyle()
         imagePreviews.applyTheme()
         placeCaret()
+        updateEmptyCanvas()
     }
 
     func updateInsets(preservingOriginY: CGFloat? = nil) {
@@ -371,6 +376,18 @@ final class VimTextView: NSTextView {
         textContainer?.size = NSSize(width: max(1, target.column), height: CGFloat.greatestFiniteMagnitude)
         updatingInsets = false
         guard hadInsets else { return }
+        // Live-resize frames keep the leftover fragment y and pin from it.
+        // A settled width change rebuilds through the caret so the delta is
+        // the real wrap, not the previous column's frame.
+        if columnChanged, !inLiveResize, let lm = textLayoutManager, engine != nil {
+            lm.invalidateLayout(for: lm.documentRange)
+            let doc = lm.documentRange.location
+            let index = caretUTF16()
+            lm.enumerateTextLayoutFragments(from: doc, options: [.ensuresLayout]) { fragment in
+                let end = lm.offset(from: doc, to: fragment.rangeInElement.endLocation)
+                return end != NSNotFound && end <= index
+            }
+        }
         let origin: CGFloat
         if let caretBefore, let caretAfter = caretDocumentMidY() {
             origin = baseline + (caretAfter - caretBefore)
@@ -430,6 +447,7 @@ final class VimTextView: NSTextView {
         let revealBegan = DispatchTime.now().uptimeNanoseconds
         revealCaret()
         QuillPerfSplit.add("syncRevealMs", since: revealBegan)
+        updateEmptyCanvas()
     }
 
     func applyResult(_ result: EngineResult) {
@@ -493,6 +511,7 @@ final class VimTextView: NSTextView {
         }
         vimDelegate?.vimTextView(self, didHandle: result)
         assertViewMatchesEngine()
+        updateEmptyCanvas()
     }
 
     func useThisLayout() {
@@ -599,6 +618,7 @@ final class VimTextView: NSTextView {
         }
         placeCaret(forcingLayout: false)
         imagePreviews.reposition()
+        updateEmptyCanvas()
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -614,11 +634,12 @@ final class VimTextView: NSTextView {
     }
 
     override func drawBackground(in rect: NSRect) {
-        guard isDirectoryBuffer else {
-            super.drawBackground(in: rect)
+        if isDirectoryBuffer {
+            drawDirectoryBackground(in: rect)
             return
         }
-        drawDirectoryBackground(in: rect)
+        super.drawBackground(in: rect)
+        drawBlockDecorations(in: rect)
     }
 
     override func setNeedsDisplay(_ invalidRect: NSRect) {
@@ -683,6 +704,10 @@ final class VimTextView: NSTextView {
             pinVerticalOrigin(anchor)
             resizeAnchorY = nil
         }
+        if revealAfterRewrap, !inLiveResize {
+            revealAfterRewrap = false
+            revealCaretIfHidden()
+        }
     }
 
     override func viewDidEndLiveResize() {
@@ -711,7 +736,10 @@ final class VimTextView: NSTextView {
             pinVerticalOrigin(anchor)
             resizeAnchorY = nil
         }
-        if revealAfterRewrap { needsLayout = true }
+        if revealAfterRewrap {
+            revealAfterRewrap = false
+            revealCaretIfHidden()
+        }
     }
 
     override func viewDidMoveToSuperview() {
@@ -1293,7 +1321,7 @@ final class VimTextView: NSTextView {
         sizing = false
     }
 
-    func revealCaret() {
+    func revealCaret(trustCaretAboveEstimate: Bool = true) {
         guard let scroll = enclosingScrollView, !revealingCaret else { return }
         revealingCaret = true
         defer { revealingCaret = false }
@@ -1301,9 +1329,17 @@ final class VimTextView: NSTextView {
         // Measure first: that lays out the caret's paragraph, and the frame
         // height below must already include it. Sizing the frame first left a
         // caret on a wrapped line past the bottom with nowhere to scroll.
-        // A fragment above the buffer row is the last piece TextKit has built,
-        // not the caret: `G` and search on a long note land in the middle.
-        // A fragment at or below that row is the real line, including wrap.
+        // `caretRect` is nil when `textLayoutFragment(for:)` hands back a
+        // fragment that does not contain the cursor. That is the `G` / search
+        // case on a long note: only the estimate can scroll, because the last
+        // built fragment sits in the middle.
+        // A real caret on a wrapped line can sit above that estimate: wrap,
+        // heading gaps, and 1.58 leading make the frame taller than
+        // `lineCount * rowHeight`, and spreading that extra linearly puts the
+        // estimate below an early wrapped line. Keystrokes trust that caret.
+        // After a rewrap the leftover fragment still has the old y, which is
+        // also above the estimate, and that one is stale: `trustCaretAboveEstimate`
+        // is false then so the estimate can catch up.
         let row = rowHeight()
         let line = engine.buffer.lineIndex(containing: clampUTF16(engine.cursor))
         let lineCount = max(1, engine.buffer.lineCount)
@@ -1327,14 +1363,17 @@ final class VimTextView: NSTextView {
         // includes `textContainerOrigin`). The last row also owns the paragraph
         // gap under it, which is where an image preview sits.
         // Scrolling restyles the lines that come on screen, and that moves the
-        // caret a few points, so measure again. A later pass that cannot see the
-        // caret keeps the scroll already made: `G` on a long note lays the end
-        // out once, and the estimate sits short of that real line.
+        // caret a few points, so measure again. A later pass that still cannot
+        // see a real caret keeps the scroll already made: `G` on a long note
+        // lays the end out once, and the estimate sits short of that real line.
         for pass in 0..<3 {
             let caret = caretRect(forcingLayout: false)
             let rect: NSRect
-            if let caret, let measured = scrollRect(around: caret), measured.midY + row * 4 >= estimated.midY {
+            if let caret, let measured = scrollRect(around: caret),
+               trustCaretAboveEstimate || measured.midY + row * 4 >= estimated.midY {
                 rect = measured
+            } else if let caret, trustCaretAboveEstimate {
+                rect = caret
             } else if pass > 0 {
                 return
             } else {
@@ -1358,7 +1397,9 @@ final class VimTextView: NSTextView {
             }
             origin.x = min(max(0, origin.x), max(0, bounds.width - visible.width))
             let nudgeY = abs(origin.y - visible.origin.y)
-            if pass > 0, nudgeY > row * 4 { return }
+            // A large jump toward a measured caret is the correction; a large
+            // jump with no caret would chase a wild estimate.
+            if pass > 0, nudgeY > row * 4, caret == nil { return }
             guard nudgeY > 0.5 || abs(origin.x - visible.origin.x) > 0.5 else { return }
             clip.setBoundsOrigin(origin)
             scroll.reflectScrolledClipView(clip)
@@ -1373,17 +1414,25 @@ final class VimTextView: NSTextView {
     /// and dropping a table's padding there rewraps it, so measure again after.
     /// This runs once per resize, not per live-resize frame.
     private func revealCaretIfHidden() {
-        guard let clip = enclosingScrollView?.contentView, engine != nil, let lm = textLayoutManager else { return }
+        guard enclosingScrollView?.contentView != nil, engine != nil, let lm = textLayoutManager else { return }
+        // Width change invalidates wrapping, but TextKit 2 keeps the old
+        // fragment frames until the viewport is laid out again. The caret
+        // often sits outside that viewport after a narrow, so those leftover
+        // frames still look on screen. Drop them and rebuild through the
+        // cursor before measuring. Once per resize, not per keystroke.
+        lm.invalidateLayout(for: lm.documentRange)
         let doc = lm.documentRange.location
+        let index = caretUTF16()
+        lm.enumerateTextLayoutFragments(from: doc, options: [.ensuresLayout]) { fragment in
+            let end = lm.offset(from: doc, to: fragment.rangeInElement.endLocation)
+            return end != NSNotFound && end <= index
+        }
+        noteContentSizeChanged()
         for _ in 0..<3 {
-            let index = caretUTF16()
-            lm.enumerateTextLayoutFragments(from: doc, options: [.ensuresLayout]) { fragment in
-                let end = lm.offset(from: doc, to: fragment.rangeInElement.endLocation)
-                return end != NSNotFound && end <= index
-            }
-            guard let caret = caretRect(forcingLayout: true),
-                  !clip.bounds.insetBy(dx: -0.5, dy: -0.5).contains(caret) else { return }
             revealCaret()
+            guard let clip = enclosingScrollView?.contentView,
+                  let caret = caretRect(forcingLayout: true),
+                  !clip.bounds.insetBy(dx: -0.5, dy: -0.5).contains(caret) else { return }
         }
     }
 
@@ -1854,6 +1903,31 @@ func syncWindowChrome(
     return true
 }
 
+extension VimTextView {
+    /// Directory listing, empty-canvas title, images, and column. `reload` and
+    /// `updateEmptyCanvas` stay with the caller so a SwiftUI tick can restyle
+    /// without replacing the buffer.
+    @discardableResult
+    func applyDocumentChrome(from model: AppModel) -> Bool {
+        let directory = model.document.isDirectory
+        let url = directory ? model.document.url : nil
+        let entries = directory ? (model.document.snapshot?.entries ?? []) : []
+        let directoryChanged = isDirectoryBuffer != directory
+            || directoryURL != url
+            || directoryEntries != entries
+        columnWidth = model.theme.columnWidth
+        setImageContext(enabled: model.showImages, filePath: directory ? nil : model.document.url?.path)
+        isDirectoryBuffer = directory
+        directoryURL = url
+        directoryEntries = entries
+        if directoryChanged { invalidateDirectoryStyle() }
+        emptyCanvasTitle = model.document.title
+        emptyCanvasUntitled = model.document.isUntitled
+        emptyCanvasLeader = model.config.leader
+        return directoryChanged
+    }
+}
+
 struct EditorView: NSViewRepresentable {
     var model: AppModel
     var diagnostics: [(NSRange, Int)]
@@ -1869,11 +1943,7 @@ struct EditorView: NSViewRepresentable {
         tv.vimDelegate = context.coordinator
         context.coordinator.textView = tv
         context.coordinator.model = model
-        tv.columnWidth = model.theme.columnWidth
-        tv.setImageContext(enabled: model.showImages, filePath: model.document.isDirectory ? nil : model.document.url?.path)
-        tv.isDirectoryBuffer = model.document.isDirectory
-        tv.directoryURL = model.document.isDirectory ? model.document.url : nil
-        tv.directoryEntries = model.document.isDirectory ? (model.document.snapshot?.entries ?? []) : []
+        _ = tv.applyDocumentChrome(from: model)
         let themeBegan = StartupProbe.begin("applyThemeMs")
         tv.applyTheme(model.theme, focus: model.focusMode)
         StartupProbe.end("applyThemeMs", themeBegan)
@@ -1888,17 +1958,8 @@ struct EditorView: NSViewRepresentable {
         if model.editor == nil || tv.window?.isKeyWindow == true {
             model.editor = tv
         }
-        tv.columnWidth = model.theme.columnWidth
-        tv.setImageContext(enabled: model.showImages, filePath: model.document.isDirectory ? nil : model.document.url?.path)
-        let entries = model.document.isDirectory ? (model.document.snapshot?.entries ?? []) : []
-        let url = model.document.isDirectory ? model.document.url : nil
-        let directoryChanged = tv.isDirectoryBuffer != model.document.isDirectory
-            || tv.directoryURL != url
-            || tv.directoryEntries != entries
-        tv.isDirectoryBuffer = model.document.isDirectory
-        tv.directoryURL = url
-        tv.directoryEntries = entries
-        if directoryChanged { tv.invalidateDirectoryStyle() }
+        let directoryChanged = tv.applyDocumentChrome(from: model)
+        tv.updateEmptyCanvas()
         let diagnosticsChanged = tv.diagnosticRanges.count != diagnostics.count
             || tv.diagnosticRanges.map(\.0) != diagnostics.map(\.0)
         if diagnosticsChanged {

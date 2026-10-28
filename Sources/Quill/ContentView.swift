@@ -26,7 +26,8 @@ struct ContentView: View {
                             names: model.completions,
                             selection: model.completionIndex,
                             text: Color(model.theme.textColor),
-                            background: Color(model.theme.backgroundColor)
+                            background: Color(model.theme.backgroundColor),
+                            accent: Color(model.theme.accentColor)
                         ) { model.applyCompletion($0) }
                         Spacer()
                     }
@@ -73,17 +74,24 @@ struct StatusBar: View {
     var model: AppModel
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 12) {
             Text(model.document.engine.mode.displayName)
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(Color(model.theme.accentColor))
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(Color(model.theme.accentColor).opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
             Text(model.document.title)
             if model.document.modified {
-                Text("•")
+                Text("·")
             }
             if !model.message.isEmpty {
                 Text(model.message)
                     .lineLimit(1)
             }
             Spacer()
+            Text(model.cursorLabel)
         }
         .font(.system(size: 11, design: .monospaced))
         .foregroundStyle(Color(model.theme.dimColor))
@@ -98,6 +106,7 @@ struct CompletionList: View {
     var selection: Int
     var text: Color
     var background: Color
+    var accent: Color = Color(red: 0.62, green: 0.34, blue: 0.22)
     var choose: (String) -> Void
 
     var body: some View {
@@ -110,12 +119,17 @@ struct CompletionList: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 4)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(index == selection ? text.opacity(0.16) : Color.clear)
+                    .background(index == selection ? accent.opacity(0.14) : Color.clear)
             }
         }
         .padding(.vertical, 4)
         .frame(minWidth: 180, alignment: .leading)
         .background(background)
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .strokeBorder(text.opacity(0.12), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
     }
 }
 

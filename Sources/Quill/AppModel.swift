@@ -18,6 +18,7 @@ final class AppModel {
     var themeIdentity = 0 { didSet { noteInterface() } }
     var focusMode = false { didSet { noteInterface() } }
     var status = "NORMAL" { didSet { noteInterface() } }
+    var cursorLabel = "1:1" { didSet { noteInterface() } }
     var message = "" { didSet { noteInterface() } }
     var completions: [String] = [] { didSet { noteInterface() } }
     /// `-1` until Ctrl-n/p or an arrow chooses a row. The first Ctrl-n selects the first match.
@@ -148,6 +149,8 @@ final class AppModel {
         let title = document.title
         document.noteEdit()
         setIfChanged(\.status, document.engine.mode.displayName)
+        let pos = document.engine.buffer.position(of: document.engine.cursor)
+        setIfChanged(\.cursorLabel, "\(pos.line + 1):\(pos.utf16Column + 1)")
         if document.engine.mode == .commandLine || document.engine.mode == .search {
             setIfChanged(\.message, document.engine.commandLine)
         }
@@ -165,7 +168,10 @@ final class AppModel {
         if !completions.isEmpty { completions = [] }
         if !diagnostics.isEmpty { diagnostics = [] }
         rebuildKeymap()
-        editor?.reload()
+        if let editor {
+            _ = editor.applyDocumentChrome(from: self)
+            editor.reload()
+        }
         refreshStatus()
         noteInterface()
         if let url = document.url, let target = document.takeJump(for: url) {

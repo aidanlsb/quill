@@ -28,10 +28,7 @@ final class EditorHarness {
         engine = model.engine
         (scroll, view, window) = Self.makeWindow(engine: model.engine, size: size)
         model.editor = view
-        view.columnWidth = model.theme.columnWidth
-        view.isDirectoryBuffer = model.isDirectory
-        view.directoryURL = model.isDirectory ? model.fileURL : nil
-        view.directoryEntries = model.isDirectory ? (model.directorySnapshot?.entries ?? []) : []
+        _ = view.applyDocumentChrome(from: model)
         view.applyTheme(model.theme, focus: model.focusMode)
         view.reload()
         finish()

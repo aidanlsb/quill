@@ -4,7 +4,7 @@ The editor can follow the macOS appearance or stay light or dark. `:theme` toggl
 
 ## Sub-features
 
-- `theme-dark` draws a darker background than the light scheme.
+- `theme-dark` draws a darker background than the light scheme. Light is warm ivory, not white; dark is warm obsidian with cream text. One copper/bronze accent is shared by the caret, links, lists, and the mode pill.
 - `theme-command` accepts `:theme dark`. `:theme` with no argument toggles. An unknown name is rejected.
 - `theme-leader` maps `<leader>tt` to the toggle. A lone `<leader>t` is only a prefix.
 - `theme-memory` writes the choice to `state.toml` and reads it back.
