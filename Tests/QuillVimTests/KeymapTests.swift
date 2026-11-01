@@ -21,7 +21,7 @@ final class KeymapTests: XCTestCase {
         XCTAssertEqual(map.lookup("gd"), .command("other"))
         XCTAssertEqual(map.lookup("g"), .prefix)
         map.bind("g", command: "just-g")
-        XCTAssertEqual(map.lookup("g"), .command("just-g"))
+        XCTAssertEqual(map.lookup("g"), .ambiguous("just-g"))
         XCTAssertEqual(map.lookup("gd"), .command("other"))
     }
 
@@ -50,5 +50,17 @@ final class KeymapTests: XCTestCase {
         XCTAssertEqual(map.lookup("k"), .prefix)
         XCTAssertEqual(map.lookup("nope"), .none)
         XCTAssertEqual(map.lookup("k200"), .none)
+    }
+
+    func testExactMatchThatIsAlsoAPrefixIsAmbiguous() {
+        var map = Keymap()
+        map.bind(" c", command: "edit.comment")
+        map.bind(" cr", command: "edit.commentResolve")
+        map.bind(" ca", command: "navigate.codeAction")
+        XCTAssertEqual(map.lookup(" "), .prefix)
+        XCTAssertEqual(map.lookup(" c"), .ambiguous("edit.comment"))
+        XCTAssertEqual(map.lookup(" cr"), .command("edit.commentResolve"))
+        XCTAssertEqual(map.lookup(" ca"), .command("navigate.codeAction"))
+        XCTAssertEqual(map.lookup(" cx"), .none)
     }
 }

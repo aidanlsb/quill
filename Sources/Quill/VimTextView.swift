@@ -183,6 +183,8 @@ final class VimTextView: NSTextView {
     var onNeedsDisplay: (@MainActor (NSRect) -> Void)?
     var onDirectoryDecorations: (@MainActor () -> Void)?
     private var restyleQueued = false
+    /// Invalidates a scheduled `<leader>c` vs `<leader>cr` map timeout.
+    private var mapFlushGeneration = 0
     /// Stops `string =` from re-entering the drift repair.
     private var repairingDocument = false
     private var sizing = false
@@ -553,6 +555,23 @@ final class VimTextView: NSTextView {
         applyResult(result)
         if result.beep {
             NSSound.beep()
+        }
+        scheduleMapFlush()
+    }
+
+    /// `<leader>c` is also a prefix of `<leader>cr` and `<leader>ca`. Wait like vim.
+    private func scheduleMapFlush() {
+        mapFlushGeneration += 1
+        guard engine.hasPendingAmbiguousMap else { return }
+        let generation = mapFlushGeneration
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            guard let self, generation == self.mapFlushGeneration, self.engine.hasPendingAmbiguousMap else { return }
+            let result = self.engine.flushPendingMap()
+            self.applyResult(result)
+            if result.beep {
+                NSSound.beep()
+            }
         }
     }
 

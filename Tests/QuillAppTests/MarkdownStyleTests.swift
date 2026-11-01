@@ -50,6 +50,30 @@ final class MarkdownStyleTests: QuillAppTestCase {
         XCTAssertTrue(Probe.sameColor(linkColor, light.linkColor), "markdown link")
     }
 
+    func testCommentWashAndHighlightUnderlineInBothThemes() {
+        let source = "{==keep==}{>>fix me<<} and `{>>code<<}`\n"
+        for scheme in [ThemeChoice.light, ThemeChoice.dark] {
+            let theme = QuillTheme.current(scheme: scheme)
+            let storage = NSTextStorage(string: source)
+            let doc = MarkdownTokenizer(text: source)
+            MarkdownStyler.restyle(storage, theme: theme, spans: doc.spans, tableColumnWidth: 480)
+            XCTAssertEqual(storage.string, source)
+            let wash = storage.attribute(.backgroundColor, at: 13, effectiveRange: nil) as? NSColor
+            XCTAssertTrue(Probe.sameColor(wash, theme.commentWash), "comment wash \(scheme)")
+            XCTAssertGreaterThan(theme.commentWash.alphaComponent, 0.05)
+            XCTAssertLessThan(theme.commentWash.alphaComponent, 0.25)
+            let underline = storage.attribute(.underlineStyle, at: 3, effectiveRange: nil) as? NSNumber
+            XCTAssertEqual(underline?.intValue, NSUnderlineStyle.single.rawValue, "highlight underline \(scheme)")
+            let underlineColor = storage.attribute(.underlineColor, at: 3, effectiveRange: nil) as? NSColor
+            XCTAssertTrue(Probe.sameColor(underlineColor, theme.commentUnderline), "highlight color \(scheme)")
+            let marker = storage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+            XCTAssertTrue(Probe.sameColor(marker, theme.syntaxColor), "comment marker \(scheme)")
+            let code = (source as NSString).range(of: "{>>code<<}")
+            let codeWash = storage.attribute(.backgroundColor, at: code.location + 3, effectiveRange: nil) as? NSColor
+            XCTAssertTrue(Probe.sameColor(codeWash, theme.codeBackground), "code span not comment \(scheme)")
+        }
+    }
+
     func testLightPaperIsWarmIvoryNotWhite() {
         let light = QuillTheme.current(scheme: .light)
         let dark = QuillTheme.current(scheme: .dark)

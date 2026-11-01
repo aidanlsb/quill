@@ -232,6 +232,56 @@ extension AppModel {
             self?.setTheme(.system)
         }
         register(
+            id: "edit.comment",
+            name: "Add Comment",
+            category: "Edit",
+            bindings: [CommandBinding(.leader("c"))],
+            showsInMenu: true,
+            enabled: { [weak self] in self?.isDirectory == false }
+        ) { [weak self] _ in
+            self?.addComment()
+        }
+        register(
+            id: "edit.commentResolve",
+            name: "Resolve Comment",
+            category: "Edit",
+            bindings: [CommandBinding(.leader("cr"))],
+            showsInMenu: true,
+            enabled: { [weak self] in self?.isDirectory == false }
+        ) { [weak self] _ in
+            self?.resolveComment()
+        }
+        register(
+            id: "navigate.nextComment",
+            name: "Next Comment",
+            category: "Navigate",
+            bindings: [CommandBinding(.keys("]c"))],
+            showsInMenu: true,
+            enabled: { [weak self] in self?.isDirectory == false }
+        ) { [weak self] _ in
+            self?.jumpComment(forward: true)
+        }
+        register(
+            id: "navigate.prevComment",
+            name: "Previous Comment",
+            category: "Navigate",
+            bindings: [CommandBinding(.keys("[c"))],
+            showsInMenu: true,
+            enabled: { [weak self] in self?.isDirectory == false }
+        ) { [weak self] _ in
+            self?.jumpComment(forward: false)
+        }
+        register(
+            id: "search.comments",
+            name: "Comments",
+            category: "Search",
+            bindings: [CommandBinding(.ex("Comments"))],
+            showsInMenu: true,
+            enabled: { [weak self] in self?.isDirectory == false }
+        ) { [weak self] _ in
+            self?.presentCommentsPicker()
+        }
+        register(
             id: "edit.formatTable",
             name: "Format Table",
             category: "Edit",

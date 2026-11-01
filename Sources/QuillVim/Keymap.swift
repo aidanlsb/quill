@@ -3,6 +3,9 @@ public struct Keymap: Equatable, Sendable {
         case none
         case prefix
         case command(String)
+        /// Exact match that is also a proper prefix of a longer binding.
+        /// The engine waits for the next key or a timeout before firing.
+        case ambiguous(String)
     }
 
     private var exact: [String: String]
@@ -21,7 +24,10 @@ public struct Keymap: Equatable, Sendable {
     }
 
     public func lookup(_ notation: String) -> Lookup {
-        if let command = exact[notation] { return .command(command) }
+        if let command = exact[notation] {
+            if prefixes.contains(notation) { return .ambiguous(command) }
+            return .command(command)
+        }
         if prefixes.contains(notation) { return .prefix }
         return .none
     }

@@ -282,4 +282,18 @@ final class CommandRegistryTests: XCTestCase {
             XCTAssertEqual(map.lookup(" sg"), .command("search.grep"))
         }
     }
+
+    func testLeaderCWaitsBecauseCRAndCAAreLonger() {
+        MainActor.assumeIsolated {
+            let registry = CommandRegistry()
+            registry.register(id: "edit.comment", name: "Add Comment", category: "Edit", bindings: [.init(.leader("c"))]) { _ in }
+            registry.register(id: "edit.commentResolve", name: "Resolve Comment", category: "Edit", bindings: [.init(.leader("cr"))]) { _ in }
+            registry.register(id: "navigate.codeAction", name: "Code Action", category: "Navigate", bindings: [.init(.leader("ca"))]) { _ in }
+            let map = registry.keymap(leader: " ") { _ in true }
+            XCTAssertEqual(map.lookup(" "), .prefix)
+            XCTAssertEqual(map.lookup(" c"), .ambiguous("edit.comment"))
+            XCTAssertEqual(map.lookup(" cr"), .command("edit.commentResolve"))
+            XCTAssertEqual(map.lookup(" ca"), .command("navigate.codeAction"))
+        }
+    }
 }

@@ -164,6 +164,8 @@ final class TokenizerTests: XCTestCase {
             "**",
             "[[",
             "[[a]",
+            "{>>note<<}",
+            "{==hi==}{>>note<<}",
         ]
         for line in lines {
             let characters = Array(line)
@@ -255,6 +257,10 @@ final class TokenizerTests: XCTestCase {
         XCTAssertEqual(MarkdownTokenizer(text: "*em").spans, [])
         XCTAssertEqual(MarkdownTokenizer(text: "~~").spans, [])
         XCTAssertEqual(MarkdownTokenizer(text: "[text](").spans, [])
+        XCTAssertEqual(MarkdownTokenizer(text: "{>>").spans, [])
+        XCTAssertEqual(MarkdownTokenizer(text: "{>><<").spans, [])
+        XCTAssertEqual(MarkdownTokenizer(text: "{==hi==}").spans, [])
+        XCTAssertEqual(MarkdownTokenizer(text: "{==hi==}{>>").spans, [])
         XCTAssertEqual(MarkdownTokenizer(text: "- [ ").spans, [
             TokenSpan(range: 0..<2, token: .listMarker),
         ])

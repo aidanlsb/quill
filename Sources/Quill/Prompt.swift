@@ -8,7 +8,7 @@ import QuillVim
 import QuillWorkspace
 
 enum PickerKind: Equatable {
-    case files, grep, references, codeAction, commands
+    case files, grep, references, codeAction, commands, comments
 }
 
 enum PendingNavigation {
@@ -112,6 +112,8 @@ extension AppModel {
         case .close:
             if opened.kind == .commands {
                 dismissCommandPalette(restore: true)
+            } else if opened.kind == .comments {
+                dismissCommentsPicker()
             } else {
                 clearPrompt()
             }
@@ -120,6 +122,14 @@ extension AppModel {
                 let id = opened.picker.selected?.payload
                 dismissCommandPalette(restore: true)
                 if let id, !runCommand(id) { message = "Unavailable" }
+                return
+            }
+            if opened.kind == .comments {
+                guard let item = opened.picker.selected else {
+                    clearPrompt()
+                    return
+                }
+                confirmCommentPicker(item)
                 return
             }
             let item = opened.picker.selected

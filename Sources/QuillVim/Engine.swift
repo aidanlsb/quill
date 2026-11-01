@@ -39,6 +39,8 @@ public final class Engine {
     var pendingMarkSet = false
     var pendingMarkJump: Character?
     var mapPrefix = ""
+    /// Exact command waiting on a longer mapping (`<leader>c` vs `<leader>cr`).
+    var pendingAmbiguousCommand: String?
     /// True while the first character of a failed mapping is fed back to the parser.
     private var mapSuppressed = false
 
@@ -158,19 +160,56 @@ public final class Engine {
     }
 
     /// Host-initiated edit (completion, snippet). Goes through the same funnel as keys.
+    /// `insertAt` leaves insert mode open in the same undo group so typed text
+    /// undoes with the replacement.
     @discardableResult
-    public func applyHostEdit(replacing range: Range<Int>, with text: String) -> EngineResult {
+    public func applyHostEdit(replacing range: Range<Int>, with text: String, insertAt: Int? = nil) -> EngineResult {
         let text = LineIndex.normalizingNewlines(text)
         strokeEdits.removeAll(keepingCapacity: true)
         let before = buffer.cursor
         let nested = groupDepth > 0
         if !nested { beginTransaction() }
         replace(range, with: text)
+        if let insertAt {
+            if mode.isVisual {
+                mode = .normal
+            }
+            buffer.cursor = min(max(0, insertAt), buffer.count)
+            resetCurswant()
+            lastRepeatable = .insert(kind: .i, text: "", count: 1)
+            insertCount = 1
+            enterInsertMode(.i)
+            return finishStroke(EngineResult(didChangeText: true, beep: false, actions: []), cursorBefore: before)
+        }
         let width = buffer.measure(text)
         buffer.cursor = buffer.clampedCursor(range.lowerBound + width, normalMode: mode != .insert)
         resetCurswant()
         if !nested { commitTransaction() }
         return finishStroke(EngineResult(didChangeText: true, beep: false, actions: []), cursorBefore: before)
+    }
+
+    public var hasPendingAmbiguousMap: Bool { pendingAmbiguousCommand != nil }
+
+    /// Fire the shorter mapping after the host's map timeout, matching vim.
+    @discardableResult
+    public func flushPendingMap() -> EngineResult {
+        strokeEdits.removeAll(keepingCapacity: true)
+        let before = buffer.cursor
+        guard let name = pendingAmbiguousCommand else {
+            return finishStroke(.noop, cursorBefore: before)
+        }
+        pendingAmbiguousCommand = nil
+        mapPrefix = ""
+        statusMessage = ""
+        resetParser()
+        return finishStroke(
+            EngineResult(didChangeText: false, beep: false, actions: [.command(name)]),
+            cursorBefore: before
+        )
+    }
+
+    public func rememberRepeatableCommand(_ id: String) {
+        lastRepeatable = .command(id)
     }
 
     /// Several host edits (a code action, `workspace/applyEdit`) as one undo group.
@@ -302,6 +341,7 @@ public final class Engine {
         pendingMarkSet = false
         pendingMarkJump = nil
         mapPrefix = ""
+        pendingAmbiguousCommand = nil
         if mode == .operatorPending {
             mode = .normal
         }
@@ -388,21 +428,42 @@ public final class Engine {
             pendingMarkJump = nil
             return jumpToMark(ch)
         }
-        if mode == .normal, !mapSuppressed, parserIsIdle {
+        if (mode == .normal || mode.isVisual), !mapSuppressed, parserIsIdle {
             let next = mapPrefix + String(ch)
             switch keymap.lookup(next) {
             case .command(let name):
                 mapPrefix = ""
+                pendingAmbiguousCommand = nil
                 statusMessage = ""
                 resetParser()
                 return EngineResult(didChangeText: false, beep: false, actions: [.command(name)])
+            case .ambiguous(let name):
+                mapPrefix = next
+                pendingAmbiguousCommand = name
+                if next.first == leaderKey {
+                    statusMessage = "<leader>" + String(next.dropFirst())
+                }
+                return .noop
             case .prefix:
                 mapPrefix = next
+                pendingAmbiguousCommand = nil
                 if next.first == leaderKey {
                     statusMessage = "<leader>" + String(next.dropFirst())
                 }
                 return .noop
             case .none:
+                if let pending = pendingAmbiguousCommand {
+                    pendingAmbiguousCommand = nil
+                    mapPrefix = ""
+                    statusMessage = ""
+                    resetParser()
+                    return EngineResult(
+                        didChangeText: false,
+                        beep: false,
+                        actions: [.command(pending)],
+                        pendingKeys: String(ch)
+                    )
+                }
                 if !mapPrefix.isEmpty {
                     let buffered = mapPrefix + String(ch)
                     mapPrefix = ""
@@ -638,7 +699,8 @@ public final class Engine {
         EngineResult(
             didChangeText: a.didChangeText || b.didChangeText,
             beep: a.beep || b.beep,
-            actions: a.actions + b.actions
+            actions: a.actions + b.actions,
+            pendingKeys: a.pendingKeys + b.pendingKeys
         )
     }
 
@@ -1534,6 +1596,8 @@ public final class Engine {
             return joinLines(count: n)
         case .put(let after, let n):
             return put(after: after, count: n)
+        case .command(let id):
+            return EngineResult(didChangeText: false, beep: false, actions: [.command(id)])
         }
     }
 

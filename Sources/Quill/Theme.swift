@@ -110,6 +110,8 @@ struct QuillTheme {
     var quoteColor: NSColor
     var ruleColor: NSColor
     var taskDoneColor: NSColor
+    var commentWash: NSColor
+    var commentUnderline: NSColor
 
     var listIndent: CGFloat { bodyFont.pointSize * QuillMetrics.listIndentEm }
     var listItemSpacing: CGFloat { bodyFont.pointSize * QuillMetrics.listItemSpacingEm }
@@ -174,7 +176,9 @@ struct QuillTheme {
             quoteBarColor: ink.accent.withAlphaComponent(dark ? 0.72 : 0.55),
             quoteColor: ink.quote,
             ruleColor: ink.syntax.withAlphaComponent(0.85),
-            taskDoneColor: ink.dim
+            taskDoneColor: ink.dim,
+            commentWash: ink.accent.withAlphaComponent(dark ? 0.16 : 0.10),
+            commentUnderline: ink.accent.withAlphaComponent(dark ? 0.50 : 0.38)
         )
     }
 
@@ -443,6 +447,11 @@ enum MarkdownStyler {
             storage.addAttribute(.font, value: theme.monoFont, range: range)
         case .syntax, .dim:
             storage.addAttribute(.foregroundColor, value: theme.syntaxColor, range: range)
+        case .comment:
+            storage.addAttribute(.backgroundColor, value: theme.commentWash, range: range)
+        case .highlight:
+            storage.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: range)
+            storage.addAttribute(.underlineColor, value: theme.commentUnderline, range: range)
         case .list, .body:
             break
         }
