@@ -125,6 +125,11 @@ extension MarkdownStyler {
             case .strikethrough:
                 storage.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: hit)
                 storage.addAttribute(.strikethroughColor, value: theme.textColor, range: hit)
+            case .comment:
+                storage.addAttribute(.backgroundColor, value: theme.commentWash, range: hit)
+            case .commentHighlight:
+                storage.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: hit)
+                storage.addAttribute(.underlineColor, value: theme.commentUnderline, range: hit)
             default:
                 break
             }

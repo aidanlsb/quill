@@ -132,6 +132,61 @@ final class CommandDispatchTests: QuillAppTestCase {
         withExtendedLifetime(fixture) {}
     }
 
+    func testCommentLeaderTimeoutResolveJumpAndPicker() {
+        let model = AppModel()
+        // Normal-mode caret sits on a character; 11 is past "hello world" and clamps to 10.
+        model.engine.load(text: "hello world", cursor: 6)
+        model.afterEdit(model.engine.type(" c"))
+        XCTAssertTrue(model.engine.hasPendingAmbiguousMap)
+        XCTAssertEqual(model.message, "<leader>c")
+        model.afterEdit(model.engine.flushPendingMap())
+        XCTAssertEqual(model.engine.text, "hello {>><<}world")
+        XCTAssertEqual(model.engine.mode, .insert)
+        XCTAssertEqual(model.engine.cursor, 9)
+        model.afterEdit(model.engine.type("note<Esc>"))
+        XCTAssertEqual(model.engine.text, "hello {>>note<<}world")
+
+        model.afterEdit(model.engine.type("0"))
+        model.afterEdit(model.engine.type("]c"))
+        XCTAssertEqual(model.engine.cursor, 6)
+        model.afterEdit(model.engine.type("[c"))
+        XCTAssertEqual(model.message, "No comment")
+
+        model.afterEdit(model.engine.type(" cr"))
+        XCTAssertEqual(model.engine.text, "hello world")
+        model.afterEdit(model.engine.type("u"))
+        XCTAssertEqual(model.engine.text, "hello {>>note<<}world")
+        model.afterEdit(model.engine.type("."))
+        XCTAssertEqual(model.engine.text, "hello world")
+    }
+
+    func testVisualCommentWrapAndCommentsPicker() {
+        let model = AppModel()
+        model.engine.load(text: "hello world", cursor: 0)
+        model.afterEdit(model.engine.type("ve"))
+        model.afterEdit(model.engine.type(" c"))
+        model.afterEdit(model.engine.flushPendingMap())
+        XCTAssertEqual(model.engine.text, "{==hello==}{>><<} world")
+        XCTAssertEqual(model.engine.mode, .insert)
+        model.afterEdit(model.engine.type("cite<Esc>"))
+        XCTAssertEqual(model.engine.text, "{==hello==}{>>cite<<} world")
+        model.afterEdit(model.engine.type(" cr"))
+        XCTAssertEqual(model.engine.text, "hello world")
+
+        model.engine.load(text: "aa {>>one<<}\nbb {==two==}{>>three<<}\n", cursor: 0)
+        model.afterEdit(model.engine.type(":Comments<CR>"))
+        XCTAssertEqual(model.pickerKind, .comments)
+        XCTAssertEqual(model.picker?.items.count, 2)
+        XCTAssertEqual(model.picker?.items.first?.title, "one")
+        XCTAssertEqual(model.picker?.items.last?.title, "two → three")
+        model.handlePicker(.enter)
+        XCTAssertNil(model.pickerKind)
+        XCTAssertEqual(model.engine.cursor, 3)
+
+        model.afterEdit(model.engine.type(" ca"))
+        XCTAssertEqual(model.message, "No language server")
+    }
+
     func testThemeExAndLegacyLeaderNames() {
         let model = AppModel()
         model.afterEdit(model.engine.type(":theme dark<CR>"))

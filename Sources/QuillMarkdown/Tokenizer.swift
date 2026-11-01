@@ -17,6 +17,8 @@ public enum MarkdownToken: Equatable, Sendable {
     case syntaxMarker
     case blockquote
     case thematicBreak
+    case comment
+    case commentHighlight
 }
 
 public struct TokenSpan: Equatable, Sendable {
@@ -53,6 +55,8 @@ public enum TokenStyle: Equatable, Sendable {
     case list
     case quote
     case rule
+    case comment
+    case highlight
 }
 
 public enum MarkdownThemeMap {
@@ -68,6 +72,8 @@ public enum MarkdownThemeMap {
         case .wikilink, .link: return .link
         case .blockquote: return .quote
         case .thematicBreak: return .rule
+        case .comment: return .comment
+        case .commentHighlight: return .highlight
         }
     }
 }
@@ -960,6 +966,12 @@ enum Scanner {
                     index = line.index(after: next)
                     continue
                 }
+            }
+            if ch == "{", let match = CriticMarkup.match(in: line, from: index, utf16: utf16, lineStart: lineStart) {
+                spans.append(contentsOf: MarkdownComments.tokenSpans(for: match.comment))
+                utf16 = match.endUTF16
+                index = match.end
+                continue
             }
             if ch == "[", let link = markdownLink(line, from: index) {
                 let labelEnd = line.utf16.distance(from: line.startIndex, to: link.labelEnd)

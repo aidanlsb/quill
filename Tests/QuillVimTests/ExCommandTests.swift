@@ -181,6 +181,7 @@ final class ExCommandTests: XCTestCase {
         let engine = Engine(text: "hello")
         engine.keymap.bind("Q", command: "format")
         XCTAssertEqual(engine.type("Q").actions, [.command("format")])
+        XCTAssertEqual(Ex.parse("Comments").name, "Comments")
         XCTAssertEqual(Ex.parse("%s/a/b/g").name, "s")
         XCTAssertEqual(Ex.parse("%s/a/b/g").rangeStart, .all)
         XCTAssertEqual(Ex.parse("1,3d").name, "d")

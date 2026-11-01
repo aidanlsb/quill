@@ -104,6 +104,10 @@ final class AppModel {
             }
         }
         for action in result.actions { perform(action) }
+        if !result.pendingKeys.isEmpty {
+            apply(document.engine.type(result.pendingKeys))
+            return
+        }
         refreshStatus()
     }
 

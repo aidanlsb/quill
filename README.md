@@ -83,7 +83,9 @@ Own engine: parse **count → operator → motion or text object**. Motions retu
 
 **Registers:** unnamed, plus `"+` / `"*` for the system clipboard.
 
-**Ex:** `:w` `:write` `:q` `:quit` `:wq` `:x` `:e` `:edit`. `:q` refuses a dirty buffer (`:q!` closes it). `:e` reloads the current file from disk (`:e!` reloads even when the buffer is dirty); `:e path` opens that path. Closing the window, or opening another file, while the buffer is dirty asks first: Return saves, ⌘D discards, and Escape cancels. `:theme` toggles light and dark; `:theme light`, `:theme dark`, and `:theme system` set it. The last runtime choice is remembered in `~/.config/quill/state.toml` and overrides `theme` in `config.toml` on the next launch. `:TableFormat` pads the GFM table under the cursor (`:%TableFormat` and `:3,5TableFormat` take a range). `:s` substitutes. `:set shiftwidth` is the only `:set` option.
+**Ex:** `:w` `:write` `:q` `:quit` `:wq` `:x` `:e` `:edit`. `:q` refuses a dirty buffer (`:q!` closes it). `:e` reloads the current file from disk (`:e!` reloads even when the buffer is dirty); `:e path` opens that path. Closing the window, or opening another file, while the buffer is dirty asks first: Return saves, ⌘D discards, and Escape cancels. `:theme` toggles light and dark; `:theme light`, `:theme dark`, and `:theme system` set it. The last runtime choice is remembered in `~/.config/quill/state.toml` and overrides `theme` in `config.toml` on the next launch. `:TableFormat` pads the GFM table under the cursor (`:%TableFormat` and `:3,5TableFormat` take a range). `:Comments` lists every CriticMarkup comment in the buffer. `:s` substitutes. `:set shiftwidth` is the only `:set` option.
+
+**Comments:** CriticMarkup, stored in the file. `{>>note<<}` is a standalone comment. `{==passage==}{>>note<<}` anchors a note to a highlight. Both stay on one line. Markers recede like other markdown syntax, the note has a light accent wash, and the passage has a soft underline. Visual `<leader>c` wraps the selection and inserts inside the note; normal `<leader>c` inserts `{>><<}`. `<leader>cr` removes the note and unwraps the highlight as one undo. `]c` / `[c` jump. A lone `<leader>c` waits for `<leader>cr` or `<leader>ca`, then fires.
 
 **Other:** `gd` (definition / wikilink), `K` (diagnostic or hover, on the status line), `gr` (references), `-` (parent directory), Enter (open a directory entry; in a file, move down), **leader** (Space by default). Those keys, the leader maps, and the ex names above are one command table: the palette label is the binding that runs.
 
@@ -116,6 +118,8 @@ Default leader is **Space**. Configurable in `~/.config/quill/config.toml`.
 |---|---|
 | `<leader>sf` | fuzzy files in the opened root (gitignore + hidden/VCS skipped) |
 | `<leader>sg` | live grep; results are `file:line` plus snippet |
+| `<leader>c` | add a comment (visual: wrap the selection) |
+| `<leader>cr` | resolve the comment under the cursor |
 | `<leader>ca` | code actions for the cursor or selection |
 | `<leader>tt` | toggle light and dark |
 
@@ -198,7 +202,7 @@ Wired: `initialize`, `initialized`, `textDocument/didOpen|didChange|didSave|didC
 
 ## What is verified vs not
 
-**Verified on Linux (`swift test`):** QuillVim (motions, operators, text objects, visual, `.` / undo, ex, leader, `-`, `gr`, `<leader>ca`), QuillLSP JSON-RPC framing and a mock-server lifecycle (initialize, document sync, completion, definition, references, code action, executeCommand, applyEdit, hover, diagnostics, missing-server), launch-argument and shell-hook parsing, QuillFS diffs (create/rename/delete/move), QuillSearch fuzzy + grep + picker insert/normal, QuillTOML (the config subset: tables, strings, numbers, bools, arrays, inline tables, arrays of tables).
+**Verified on Linux (`swift test`):** QuillVim (motions, operators, text objects, visual, `.` / undo, ex, leader, `-`, `gr`, `<leader>ca`, `<leader>c` / `<leader>cr` timeout, comment wrap/resolve undo), QuillMarkdown CriticMarkup comments (unclosed markers, code spans, fences, nested braces), QuillLSP JSON-RPC framing and a mock-server lifecycle (initialize, document sync, completion, definition, references, code action, executeCommand, applyEdit, hover, diagnostics, missing-server), launch-argument and shell-hook parsing, QuillFS diffs (create/rename/delete/move), QuillSearch fuzzy + grep + picker insert/normal, QuillTOML (the config subset: tables, strings, numbers, bools, arrays, inline tables, arrays of tables).
 
 **Verified on macOS (`QuillAppTests` plus the launch smoke):** caret shape, scrolling, the writing column, directory buffers, table styling, inline image previews, the file picker, the command palette, and that a launched window can take a keystroke. Linux `swift test` does not run these.
 

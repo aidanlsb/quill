@@ -48,4 +48,6 @@ enum Repeatable: Equatable {
     case toggleCase(count: Int)
     case join(count: Int)
     case put(after: Bool, count: Int)
+    /// Re-dispatch a host command. Used for resolve-comment so `.` repeats it.
+    case command(String)
 }

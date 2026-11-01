@@ -204,6 +204,7 @@ struct PickerPanel: View {
         case .references: "Reference"
         case .codeAction: "Action"
         case .commands: "Command"
+        case .comments: "Comment"
         case nil: "Search"
         }
     }

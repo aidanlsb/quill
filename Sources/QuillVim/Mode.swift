@@ -62,6 +62,8 @@ public struct EngineResult: Equatable, Sendable {
     public var edits: [TextEdit] = []
     public var cursorBefore: Int = 0
     public var cursorAfter: Int = 0
+    /// Keys typed after an ambiguous mapping that should run after the host command.
+    public var pendingKeys: String = ""
 
     public static let noop = EngineResult(didChangeText: false, beep: false, actions: [])
 }
