@@ -133,6 +133,7 @@ enum AppPerf {
         emit("keystrokeMs", typing / 20.0)
         QuillPerfSplit.flush()
         view.engine.mode = .normal
+        view.syncTypingSurface()
         let motion = millis {
             for _ in 0..<40 {
                 let result = view.engine.handle(KeyEvent(.character("j")))
@@ -190,6 +191,7 @@ enum AppPerf {
         }
         emit("imageKeystrokeMs", imageTyping / 20.0)
         images.view.engine.mode = .normal
+        images.view.syncTypingSurface()
         let imageMotion = millis {
             for _ in 0..<40 {
                 let result = images.view.engine.handle(KeyEvent(.character("j")))
