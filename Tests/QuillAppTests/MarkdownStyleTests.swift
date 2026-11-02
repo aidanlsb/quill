@@ -19,7 +19,9 @@ final class MarkdownStyleTests: QuillAppTestCase {
         let hashColor = storage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
         XCTAssertTrue(Probe.sameColor(hashColor, light.syntaxColor), "heading hash color")
         let style = storage.attribute(.paragraphStyle, at: 2, effectiveRange: nil) as? NSParagraphStyle
+        XCTAssertEqual(style?.lineHeightMultiple ?? 0, light.lineHeight, accuracy: 0.01, "heading height")
         XCTAssertGreaterThan(style?.paragraphSpacing ?? 0, 2, "heading spacing")
+        XCTAssertGreaterThan(style?.paragraphSpacingBefore ?? 0, 2, "heading spacing before")
     }
 
     func testQuoteItalicAndCodeWashAndRuleRecede() {
@@ -35,6 +37,9 @@ final class MarkdownStyleTests: QuillAppTestCase {
         let fence = (source as NSString).range(of: "let x = 1")
         let wash = storage.attribute(.backgroundColor, at: fence.location, effectiveRange: nil) as? NSColor
         XCTAssertTrue(Probe.sameColor(wash, light.codeBackground), "code wash")
+        let fencePara = storage.attribute(.paragraphStyle, at: fence.location, effectiveRange: nil) as? NSParagraphStyle
+        XCTAssertEqual(fencePara?.lineHeightMultiple ?? 0, light.lineHeight, accuracy: 0.01, "code height")
+        XCTAssertEqual(fencePara?.paragraphSpacing ?? -1, 0, accuracy: 0.01, "code spacing")
         let rule = (source as NSString).range(of: "---")
         XCTAssertNotEqual(rule.location, NSNotFound)
         let ruleColor = storage.attribute(.foregroundColor, at: rule.location, effectiveRange: nil) as? NSColor
@@ -72,6 +77,23 @@ final class MarkdownStyleTests: QuillAppTestCase {
             let codeWash = storage.attribute(.backgroundColor, at: code.location + 3, effectiveRange: nil) as? NSColor
             XCTAssertTrue(Probe.sameColor(codeWash, theme.codeBackground), "code span not comment \(scheme)")
         }
+    }
+
+    func testBodyParagraphsUseTightLeadingAndDeliberateSpacing() {
+        let source = "First paragraph that stays on one line.\n\nSecond paragraph after a blank line.\n"
+        let storage = paint(source)
+        let light = QuillTheme.current(scheme: .light)
+        let first = storage.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        XCTAssertEqual(first?.lineHeightMultiple ?? 0, light.lineHeight, accuracy: 0.01, "body height")
+        XCTAssertEqual(first?.paragraphSpacing ?? -1, light.paragraphSpacing, accuracy: 0.2, "body spacing")
+        XCTAssertEqual(first?.paragraphSpacingBefore ?? -1, 0, accuracy: 0.01, "body spacing before")
+        let table = light.tableParagraphStyle()
+        XCTAssertEqual(table.lineHeightMultiple, light.lineHeight, accuracy: 0.01, "table height")
+        XCTAssertEqual(table.paragraphSpacing, 0, accuracy: 0.01, "table spacing")
+        XCTAssertGreaterThan(light.listItemSpacing, light.paragraphSpacing + 2, "list looser than body")
+        let heading = light.headingParagraphStyle(level: 2)
+        XCTAssertEqual(heading.lineHeightMultiple, light.lineHeight, accuracy: 0.01, "heading two height")
+        XCTAssertGreaterThan(heading.paragraphSpacingBefore, light.paragraphSpacing, "heading two before")
     }
 
     func testLightPaperIsWarmIvoryNotWhite() {

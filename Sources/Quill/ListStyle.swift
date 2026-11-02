@@ -7,9 +7,7 @@ extension QuillTheme {
     /// gutter plus the marker width, so they line up with the item text.
     @MainActor
     func listParagraphStyle(hang: CGFloat) -> NSParagraphStyle {
-        let para = NSMutableParagraphStyle()
-        para.lineHeightMultiple = lineHeight
-        para.paragraphSpacing = listItemSpacing
+        let para = paragraphStyle(spacing: listItemSpacing)
         para.firstLineHeadIndent = listIndent
         para.headIndent = listIndent + hang
         return para
