@@ -5,7 +5,7 @@ A new untitled window, and an empty named file, show a quiet overlay in the writ
 ## Sub-features
 
 - `empty-untitled` shows the overlay on an empty untitled buffer in normal mode, with accessibility identifier `quill.emptyCanvas`. The buffer stays empty. Browse root is the last-used folder if it still exists, otherwise home, never `/`.
-- `empty-insert` hides the overlay as soon as insert mode starts, even before a character is typed. The text view is not editable until then.
+- `empty-insert` hides the overlay as soon as insert mode starts, even before a character is typed. The text view stays editable (same as a named buffer); insert/paste/IME/drop/services are ignored until then.
 - `empty-escape` brings the overlay back on an still-empty buffer after Escape.
 - `empty-type` hides the overlay once the buffer has text, and the storage matches the typed characters. In normal mode, stray keys and `insertText` / paste do not write behind the overlay.
 - `empty-file` hides the overlay for a named file with contents, and shows it again for an empty named file using that file's name as the title.
@@ -39,7 +39,7 @@ Preconditions:
 
 ## Gotchas
 
-- The overlay is a sibling view on the text view. Clicks pass through it. It must not insert characters or change `h`/`l` indexing. `isEditable` is false in normal mode so NSTextView paste/IME cannot write over the hints.
+- The overlay is a sibling view on the text view. Clicks pass through it. It must not insert characters or change `h`/`l` indexing. The view stays editable; `insertText`, paste, marked text, drops, and services return in normal mode so NSTextView cannot write over the hints. Toggling `isEditable` made `j` pay a TextKit flip.
 - Relative launch paths and `:e` resolve against the browse root. `URL(fileURLWithPath:)` on a relative name would have used cwd, which is `/` for a GUI launch.
 - Last-used is stored in `state.toml` when a real file or folder is opened, not on empty launch or a keystroke. `BrowseRoot.resolve` stats that path when `-` / the picker / `:e` need it, not on `AppModel` init.
 - Linux `swift test` covers `BrowseRoot` and `FileWalk` of `/`. It does not draw the overlay. This host cannot run the smoke if it is not macOS.

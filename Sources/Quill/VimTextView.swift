@@ -228,6 +228,9 @@ final class VimTextView: NSTextView {
     /// moves the caret, so a second pass measures again. The flag stops that
     /// pass from re-entering through the clip notification.
     private var revealingCaret = false
+    /// True while `reload` / `applyResult` write engine text into storage so
+    /// `shouldChangeText` does not block those host updates in normal mode.
+    private var applyingEngineText = false
     let imagePreviews = ImagePreviewController()
 
     override func awakeFromNib() {
@@ -289,7 +292,6 @@ final class VimTextView: NSTextView {
         isVerticallyResizable = true
         isHorizontallyResizable = false
         autoresizingMask = [.width]
-        syncTypingSurface()
     }
 
     /// TextKit 2 view. Callers use `host(engine:frame:)`.
@@ -340,7 +342,6 @@ final class VimTextView: NSTextView {
         queueRestyle()
         imagePreviews.applyTheme()
         placeCaret()
-        syncTypingSurface()
         updateEmptyCanvas()
     }
 
@@ -415,6 +416,8 @@ final class VimTextView: NSTextView {
     }
 
     func reload() {
+        applyingEngineText = true
+        defer { applyingEngineText = false }
         let reloadBegan = StartupProbe.begin("reloadMs")
         defer { StartupProbe.end("reloadMs", reloadBegan) }
         MainActor.assumeIsolated { self.onReload?() }
@@ -452,11 +455,12 @@ final class VimTextView: NSTextView {
         let revealBegan = DispatchTime.now().uptimeNanoseconds
         revealCaret()
         QuillPerfSplit.add("syncRevealMs", since: revealBegan)
-        syncTypingSurface()
         updateEmptyCanvas()
     }
 
     func applyResult(_ result: EngineResult) {
+        applyingEngineText = true
+        defer { applyingEngineText = false }
         if result.didChangeText {
             invalidateDirectoryStyle()
         }
@@ -517,7 +521,6 @@ final class VimTextView: NSTextView {
         }
         vimDelegate?.vimTextView(self, didHandle: result)
         assertViewMatchesEngine()
-        syncTypingSurface()
         updateEmptyCanvas()
     }
 
@@ -850,8 +853,54 @@ final class VimTextView: NSTextView {
         applyResult(result)
     }
 
-    /// NSTextView must not dump characters into an empty normal-mode buffer.
-    /// Vim commands still arrive through `keyDown`.
+    override func pasteAsPlainText(_ sender: Any?) { paste(sender) }
+
+    override func pasteAsRichText(_ sender: Any?) { paste(sender) }
+
+    override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        guard acceptsTypedInput else { return }
+        super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
+    }
+
+    override func shouldChangeText(in affectedCharRange: NSRange, replacementString: String?) -> Bool {
+        if applyingEngineText { return true }
+        guard acceptsTypedInput else { return false }
+        return super.shouldChangeText(in: affectedCharRange, replacementString: replacementString)
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        acceptsTypedInput ? super.draggingEntered(sender) : []
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        acceptsTypedInput ? super.draggingUpdated(sender) : []
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        acceptsTypedInput && super.performDragOperation(sender)
+    }
+
+    override func validRequestor(
+        forSendType sendType: NSPasteboard.PasteboardType?,
+        returnType: NSPasteboard.PasteboardType?
+    ) -> Any? {
+        if returnType != nil, !acceptsTypedInput { return nil }
+        return super.validRequestor(forSendType: sendType, returnType: returnType)
+    }
+
+    override func readSelection(from pboard: NSPasteboard) -> Bool {
+        guard acceptsTypedInput else { return false }
+        return super.readSelection(from: pboard)
+    }
+
+    override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        guard acceptsTypedInput else { return false }
+        return super.readSelection(from: pboard, type: type)
+    }
+
+    /// NSTextView stays editable (same as main) so `j`/`k` do not pay an
+    /// `isEditable` flip. Typed input still goes through vim; these overrides
+    /// refuse insert/paste/IME/drop/services in normal mode.
     var acceptsTypedInput: Bool {
         guard engine != nil else { return false }
         switch engine.mode {
@@ -860,11 +909,6 @@ final class VimTextView: NSTextView {
         default:
             return false
         }
-    }
-
-    func syncTypingSurface() {
-        let editable = engine != nil && (engine.mode == .insert || engine.mode == .replaceChar)
-        if isEditable != editable { isEditable = editable }
     }
 
     func queueRestyle(dirty: Int? = nil, edits: [TextEdit] = [], viewport: Range<Int>? = nil) {
@@ -2009,7 +2053,6 @@ struct EditorView: NSViewRepresentable {
             model.editor = tv
         }
         let directoryChanged = tv.applyDocumentChrome(from: model)
-        tv.syncTypingSurface()
         tv.updateEmptyCanvas()
         let diagnosticsChanged = tv.diagnosticRanges.count != diagnostics.count
             || tv.diagnosticRanges.map(\.0) != diagnostics.map(\.0)

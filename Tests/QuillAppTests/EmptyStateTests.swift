@@ -43,7 +43,7 @@ final class EmptyStateTests: QuillAppTestCase {
         let tv = harness.view
         tv.layoutSubtreeIfNeeded()
         XCTAssertTrue(tv.isEmptyCanvasVisible)
-        XCTAssertFalse(tv.isEditable)
+        XCTAssertTrue(tv.isEditable, "normal mode flipped isEditable")
         XCTAssertFalse(tv.acceptsTypedInput)
 
         _ = tv.press("hjkl")
@@ -52,10 +52,16 @@ final class EmptyStateTests: QuillAppTestCase {
         XCTAssertEqual(harness.engine.text, "", "stray keys inserted on the empty canvas")
         XCTAssertEqual(tv.string, "")
         XCTAssertTrue(tv.isEmptyCanvasVisible, "stray keys hid the canvas")
+        XCTAssertTrue(tv.isEditable)
 
         tv.insertText("typed", replacementRange: NSRange(location: 0, length: 0))
         tv.paste(nil)
+        tv.pasteAsPlainText(nil)
+        tv.setMarkedText("あ", selectedRange: NSRange(location: 0, length: 1), replacementRange: NSRange(location: 0, length: 0))
+        XCTAssertFalse(tv.shouldChangeText(in: NSRange(location: 0, length: 0), replacementString: "x"))
+        XCTAssertNil(tv.validRequestor(forSendType: nil, returnType: .string))
         XCTAssertEqual(harness.engine.text, "", "insertText wrote behind the canvas")
+        XCTAssertEqual(tv.string, "")
         XCTAssertTrue(tv.isEmptyCanvasVisible)
     }
 
