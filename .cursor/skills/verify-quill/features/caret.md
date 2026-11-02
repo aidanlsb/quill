@@ -11,7 +11,7 @@ The normal-mode cursor is one character cell: the width of the glyph under it, o
 - `caret-empty` draws the body em box on a blank line, inside that line's glyph bounds.
 - `caret-end` draws the em box at the end of the document, on the baseline, inside that line's glyph bounds.
 - `caret-beam` draws a 2-pixel rounded beam in insert mode, the same height as the block on that glyph, and blinks only in insert mode.
-- `type-scale` uses a 16pt system body, system headings at 1.68 / 1.38 / 1.18 / 1.08 / 1.0 / 1.0 times that body (medium on H1 and H4–H6, semibold on H2/H3), SF Mono for code, and a 1.58 line height. Config `font` names a family and falls back to the system font when it is blank or missing. The default config column is 70. Side and vertical insets stay at least 120pt, and a narrow window still keeps the column inside those gutters.
+- `type-scale` uses a 16pt system body, system headings at 1.68 / 1.38 / 1.18 / 1.08 / 1.0 / 1.0 times that body (medium on H1 and H4–H6, semibold on H2/H3), SF Mono for code, and a 1.45 line height. Body paragraphs add a little paragraph spacing; headings keep space above and below. Config `font` names a family and falls back to the system font when it is blank or missing. The default config column is 70. Side and vertical insets stay at least 120pt, and a narrow window still keeps the column inside those gutters.
 
 ## How to get to it (user POV)
 
@@ -28,7 +28,7 @@ Preconditions:
 - No other smoke is using that same log path. Each run overwrites `artifacts/verify-quill/smoke.log`.
 
 - **Run the tests.** `CaretTests` and `ThemeTests` in `QuillAppTests` cover the caret cell and the type scale. `Scripts/verify-quill --bin "$bin"` runs them, then the launch smoke.
-- **Read the result.** `artifacts/verify-quill/app-tests.log` shows those classes passing. `artifacts/verify-quill/smoke.log` contains `quill smoke passed`. The test log does not contain `body block`, `heading block`, `heading caret`, `empty caret`, `end caret`, `insert beam`, `insert blink`, `normal blink`, `1.3x`, `glyph bounds`, `system caret`, `baseline`, `default body font`, `heading scale`, `heading weight`, `mono font`, `font fallback`, `line height`, or `side gutter`.
+- **Read the result.** `artifacts/verify-quill/app-tests.log` shows those classes passing. `artifacts/verify-quill/smoke.log` contains `quill smoke passed`. The test log does not contain `body block`, `heading block`, `heading caret`, `empty caret`, `end caret`, `insert beam`, `insert blink`, `normal blink`, `1.3x`, `glyph bounds`, `system caret`, `baseline`, `default body font`, `heading scale`, `heading weight`, `mono font`, `font fallback`, `line height`, `paragraph spacing`, `list spacing`, or `side gutter`.
 - **Proof.** The log file is still at `artifacts/verify-quill/smoke.log` after the process exits.
 
 ## Gotchas

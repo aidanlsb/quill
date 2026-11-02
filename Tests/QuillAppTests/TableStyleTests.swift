@@ -52,6 +52,12 @@ extension Probe {
         check(bodyUnderline?.intValue == NSUnderlineStyle.single.rawValue, "table rule row", failures: failures)
         let para = storage.attribute(.paragraphStyle, at: body.text.lowerBound, effectiveRange: nil) as? NSParagraphStyle
         check(para?.lineBreakMode == .byWordWrapping, "table rows wrap", failures: failures)
+        check(
+            abs((para?.lineHeightMultiple ?? 0) - light.lineHeight) < 0.01,
+            "table line height \(para?.lineHeightMultiple ?? -1)",
+            failures: failures
+        )
+        check(abs(para?.paragraphSpacing ?? -1) < 0.01, "table spacing \(para?.paragraphSpacing ?? -1)", failures: failures)
         if let pipeIndex = short?.precedingPipe {
             let kern = (storage.attribute(.kern, at: pipeIndex, effectiveRange: nil) as? NSNumber)?.doubleValue ?? 0
             check(kern > 0.5, "table align kern \(kern)", failures: failures)

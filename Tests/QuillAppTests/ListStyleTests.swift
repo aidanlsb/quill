@@ -115,7 +115,23 @@ final class ListStyleTests: QuillAppTestCase {
                     1,
                     "list hang \(label) hang"
                 )
-                XCTAssertGreaterThan(style?.paragraphSpacing ?? 0, 2, "list hang \(label) spacing")
+                XCTAssertEqual(
+                    style?.lineHeightMultiple ?? 0,
+                    theme.lineHeight,
+                    accuracy: 0.01,
+                    "list hang \(label) height"
+                )
+                XCTAssertEqual(
+                    style?.paragraphSpacing ?? 0,
+                    theme.listItemSpacing,
+                    accuracy: 0.2,
+                    "list hang \(label) spacing"
+                )
+                XCTAssertGreaterThan(
+                    style?.paragraphSpacing ?? 0,
+                    theme.paragraphSpacing + 2,
+                    "list hang \(label) looser than body"
+                )
                 guard let markerX = minX(start),
                       let textX = minX(start + prefix),
                       let wrapX = minX(wrapped[1].lowerBound)
@@ -138,7 +154,18 @@ final class ListStyleTests: QuillAppTestCase {
             } else {
                 XCTAssertEqual(style?.firstLineHeadIndent ?? -1, 0, accuracy: 0.01, "list hang prose first line")
                 XCTAssertEqual(style?.headIndent ?? -1, 0, accuracy: 0.01, "list hang prose indent")
-                XCTAssertEqual(style?.paragraphSpacing ?? -1, 0, accuracy: 0.01, "list hang prose spacing")
+                XCTAssertEqual(
+                    style?.lineHeightMultiple ?? 0,
+                    theme.lineHeight,
+                    accuracy: 0.01,
+                    "list hang prose height"
+                )
+                XCTAssertEqual(
+                    style?.paragraphSpacing ?? -1,
+                    theme.paragraphSpacing,
+                    accuracy: 0.01,
+                    "list hang prose spacing"
+                )
                 guard let firstX = minX(start), let wrapX = minX(wrapped[1].lowerBound) else {
                     XCTFail("list hang prose position")
                     continue
@@ -177,6 +204,12 @@ final class ListStyleTests: QuillAppTestCase {
         let fenceStyle = storage.attribute(.paragraphStyle, at: fenceStart, effectiveRange: nil) as? NSParagraphStyle
         XCTAssertEqual(fenceStyle?.firstLineHeadIndent ?? -1, 0, accuracy: 0.01, "list hang fence first line")
         XCTAssertEqual(fenceStyle?.headIndent ?? -1, 0, accuracy: 0.01, "list hang fence indent")
+        XCTAssertEqual(
+            fenceStyle?.lineHeightMultiple ?? 0,
+            theme.lineHeight,
+            accuracy: 0.01,
+            "list hang fence height"
+        )
         XCTAssertEqual(fenceStyle?.paragraphSpacing ?? -1, 0, accuracy: 0.01, "list hang fence spacing")
         guard let bulletX = minX(fenceStart),
               let textX = minX(fenceStart + fencePrefix),
@@ -223,7 +256,9 @@ final class ListStyleTests: QuillAppTestCase {
         }
         XCTAssertGreaterThan(style.headIndent, tv.theme.listIndent + 1, "list motion indent")
         XCTAssertEqual(style.firstLineHeadIndent, tv.theme.listIndent, accuracy: 0.01, "list motion first line")
-        XCTAssertGreaterThan(style.paragraphSpacing, 2, "list motion spacing")
+        XCTAssertEqual(style.lineHeightMultiple, tv.theme.lineHeight, accuracy: 0.01, "list motion height")
+        XCTAssertEqual(style.paragraphSpacing, tv.theme.listItemSpacing, accuracy: 0.2, "list motion spacing")
+        XCTAssertGreaterThan(style.paragraphSpacing, tv.theme.paragraphSpacing + 2, "list motion looser than body")
         XCTAssertEqual(wrapX, textX, accuracy: 1.5, "list motion wrap \(wrapX) text \(textX)")
 
         _ = tv.press("j")
@@ -285,7 +320,18 @@ final class ListStyleTests: QuillAppTestCase {
         XCTAssertGreaterThan(Probe.fontWeight(light.listMarkerFont), Probe.fontWeight(light.bodyFont) + 0.04, "list marker weight")
         XCTAssertGreaterThan(light.listIndent, 12, "list indent \(light.listIndent)")
         XCTAssertGreaterThan(light.listItemSpacing, 3, "list spacing \(light.listItemSpacing)")
+        XCTAssertGreaterThan(
+            light.listItemSpacing,
+            light.paragraphSpacing + 2,
+            "list spacing \(light.listItemSpacing) body \(light.paragraphSpacing)"
+        )
         XCTAssertEqual(light.listIndent, CGFloat(QuillMetrics.defaultFontSize) * QuillMetrics.listIndentEm, accuracy: 0.01, "list indent em")
+        XCTAssertEqual(
+            light.listItemSpacing,
+            CGFloat(QuillMetrics.defaultFontSize) * QuillMetrics.listItemSpacingEm,
+            accuracy: 0.01,
+            "list spacing em"
+        )
 
         let width: CGFloat = 280
         let tv = NSTextView(usingTextLayoutManager: true)
@@ -361,13 +407,30 @@ final class ListStyleTests: QuillAppTestCase {
             if text.hasPrefix("plain") {
                 XCTAssertEqual(style?.firstLineHeadIndent ?? -1, 0, accuracy: 0.01, "list style prose first line")
                 XCTAssertEqual(style?.headIndent ?? -1, 0, accuracy: 0.01, "list style prose indent")
-                XCTAssertEqual(style?.paragraphSpacing ?? -1, 0, accuracy: 0.01, "list style prose spacing")
+                XCTAssertEqual(
+                    style?.lineHeightMultiple ?? 0,
+                    light.lineHeight,
+                    accuracy: 0.01,
+                    "list style prose height"
+                )
+                XCTAssertEqual(
+                    style?.paragraphSpacing ?? -1,
+                    light.paragraphSpacing,
+                    accuracy: 0.01,
+                    "list style prose spacing"
+                )
                 proseX = minX(start)
                 let color = storage.attribute(.foregroundColor, at: start, effectiveRange: nil) as? NSColor
                 XCTAssertTrue(Probe.sameColor(color, light.textColor), "list style prose color")
             } else if isList {
                 XCTAssertEqual(style?.firstLineHeadIndent ?? -1, light.listIndent, accuracy: 0.01, "list style \(text) first line")
                 XCTAssertGreaterThan(style?.headIndent ?? 0, light.listIndent + 1, "list style \(text) hang")
+                XCTAssertEqual(
+                    style?.lineHeightMultiple ?? 0,
+                    light.lineHeight,
+                    accuracy: 0.01,
+                    "list style \(text) height"
+                )
                 XCTAssertEqual(style?.paragraphSpacing ?? 0, light.listItemSpacing, accuracy: 0.2, "list style \(text) spacing")
                 let glyph = markerIndex(text, at: start)
                 let color = storage.attribute(.foregroundColor, at: glyph, effectiveRange: nil) as? NSColor
@@ -404,6 +467,7 @@ final class ListStyleTests: QuillAppTestCase {
             } else if text.hasPrefix("- fenced") {
                 XCTAssertEqual(style?.firstLineHeadIndent ?? -1, 0, accuracy: 0.01, "list style fence first line")
                 XCTAssertEqual(style?.headIndent ?? -1, 0, accuracy: 0.01, "list style fence indent")
+                XCTAssertEqual(style?.paragraphSpacing ?? -1, 0, accuracy: 0.01, "list style fence spacing")
                 let color = storage.attribute(.foregroundColor, at: start, effectiveRange: nil) as? NSColor
                 XCTAssertFalse(Probe.sameColor(color, light.listMarkerColor), "list style fence marker")
             }
@@ -427,6 +491,81 @@ final class ListStyleTests: QuillAppTestCase {
         XCTAssertTrue(Probe.sameColor(darkColor, dark.listMarkerColor), "list style dark marker")
         let darkStyle = storage.attribute(.paragraphStyle, at: dash.location, effectiveRange: nil) as? NSParagraphStyle
         XCTAssertEqual(darkStyle?.firstLineHeadIndent ?? -1, dark.listIndent, accuracy: 0.01, "list style dark first line")
+        XCTAssertEqual(darkStyle?.lineHeightMultiple ?? 0, dark.lineHeight, accuracy: 0.01, "list style dark height")
         XCTAssertGreaterThan(darkStyle?.paragraphSpacing ?? 0, 2, "list style dark spacing")
+    }
+
+    /// Wrapped continuation rows of one item use body leading. The next item
+    /// sits further away by list paragraph spacing, so bullets stay distinct.
+    func testListItemGapExceedsWrappedLineSpacing() {
+        let words = Array(repeating: "alpha", count: 28).joined(separator: " ")
+        let source = "- \(words)\n- \(words)"
+        let width: CGFloat = 220
+        let tv = NSTextView(usingTextLayoutManager: true)
+        tv.isHorizontallyResizable = false
+        tv.isVerticallyResizable = true
+        tv.textContainerInset = .zero
+        tv.textContainer?.lineFragmentPadding = 0
+        tv.textContainer?.widthTracksTextView = false
+        tv.textContainer?.heightTracksTextView = false
+        tv.textContainer?.size = NSSize(width: width, height: 20_000)
+        tv.frame = NSRect(x: 0, y: 0, width: width, height: 4_000)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: width, height: 4_000),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
+        window.contentView = tv
+        tv.frame = window.contentView?.bounds ?? tv.frame
+        tv.textContainer?.size = NSSize(width: width, height: 20_000)
+        window.orderFrontRegardless()
+        defer { window.orderOut(nil) }
+
+        let theme = QuillTheme.current()
+        tv.string = source
+        let doc = MarkdownTokenizer(text: source)
+        guard let storage = tv.textStorage else {
+            XCTFail("list rhythm storage")
+            return
+        }
+        MarkdownStyler.restyle(storage, theme: theme, spans: doc.spans, tableColumnWidth: width)
+        tv.layoutSubtreeIfNeeded()
+        guard let lm = tv.textLayoutManager else {
+            XCTFail("list rhythm layout")
+            return
+        }
+        lm.ensureLayout(for: lm.documentRange)
+        let drawn = Probe.drawnRows(tv)
+        let breakAt = (source as NSString).range(of: "\n").location
+        let first = drawn.filter { $0.lowerBound < breakAt }
+        let second = drawn.filter { $0.lowerBound > breakAt }
+        guard first.count > 1, let itemTwo = second.first else {
+            XCTFail("list rhythm wrap first \(first.count) second \(second.count)")
+            return
+        }
+        guard let wrap0 = Probe.segmentUnion(lm, range: NSRange(location: first[0].lowerBound, length: 1)),
+              let wrap1 = Probe.segmentUnion(lm, range: NSRange(location: first[1].lowerBound, length: 1)),
+              let nextItem = Probe.segmentUnion(lm, range: NSRange(location: itemTwo.lowerBound, length: 1))
+        else {
+            XCTFail("list rhythm position")
+            return
+        }
+        let wrapGap = wrap1.minY - wrap0.minY
+        let itemGap = nextItem.minY - wrap1.minY
+        let expectedWrap = CGFloat(CaretGeometry.lineFragmentHeight(
+            ascender: Double(theme.bodyFont.ascender),
+            descender: Double(theme.bodyFont.descender),
+            leading: Double(theme.bodyFont.leading),
+            lineHeightMultiple: Double(theme.lineHeight)
+        ))
+        XCTAssertGreaterThan(wrapGap, 8, "list rhythm wrap \(wrapGap)")
+        XCTAssertEqual(wrapGap, expectedWrap, accuracy: 4, "list rhythm wrap uses body leading \(wrapGap)")
+        XCTAssertGreaterThan(
+            itemGap,
+            wrapGap + theme.listItemSpacing * 0.5,
+            "list rhythm item \(itemGap) wrap \(wrapGap) spacing \(theme.listItemSpacing)"
+        )
     }
 }

@@ -6,8 +6,9 @@ import QuillVim
 enum QuillMetrics {
     static let defaultFontSize: Double = 16
     static let defaultColumn = 70
-    /// Book-like leading for long-form prose. Tight enough to scan, open enough to rest.
-    static let lineHeight: CGFloat = 1.58
+    /// Tight leading for long-form prose. Wrapped rows stay close; paragraph
+    /// and list gaps come from paragraphSpacing, not extra line height.
+    static let lineHeight: CGFloat = 1.45
     static let headingScale: [CGFloat] = [1.68, 1.38, 1.18, 1.08, 1.0, 1.0]
     /// H1 and H4–H6 use medium; H2/H3 stay semibold so the outline still scans.
     static let headingWeights: [NSFont.Weight] = [.medium, .semibold, .semibold, .medium, .medium, .medium]
@@ -32,8 +33,12 @@ enum QuillMetrics {
     static let focusVerticalInset: CGFloat = 192
     /// Extra first-line inset for list items, in ems of the body size.
     static let listIndentEm: CGFloat = 1.25
-    /// Space after each list item, in ems of the body size.
-    static let listItemSpacingEm: CGFloat = 0.28
+    /// Space after a body paragraph, in ems of the body size. Blank lines still
+    /// separate paragraphs; this keeps that gap after line height tightened.
+    static let paragraphSpacingEm: CGFloat = 0.22
+    /// Space after each list item, in ems of the body size. Larger than the
+    /// wrap leading inside one item so bullets read as distinct items.
+    static let listItemSpacingEm: CGFloat = 0.48
 
     /// Width of the text column and the inset that keeps it off both edges.
     static func columnSpan(width: CGFloat, column: CGFloat) -> (inset: CGFloat, column: CGFloat) {
@@ -114,7 +119,21 @@ struct QuillTheme {
     var commentUnderline: NSColor
 
     var listIndent: CGFloat { bodyFont.pointSize * QuillMetrics.listIndentEm }
+    var paragraphSpacing: CGFloat { bodyFont.pointSize * QuillMetrics.paragraphSpacingEm }
     var listItemSpacing: CGFloat { bodyFont.pointSize * QuillMetrics.listItemSpacingEm }
+
+    /// Shared paragraph style. `lineHeightMultiple` is the wrap rhythm;
+    /// `paragraphSpacing` / `paragraphSpacingBefore` are the gaps around a block.
+    func paragraphStyle(
+        spacing: CGFloat = 0,
+        spacingBefore: CGFloat = 0
+    ) -> NSMutableParagraphStyle {
+        let para = NSMutableParagraphStyle()
+        para.lineHeightMultiple = lineHeight
+        para.paragraphSpacing = spacing
+        para.paragraphSpacingBefore = spacingBefore
+        return para
+    }
 
     @MainActor
     static func current(
@@ -210,55 +229,41 @@ struct QuillTheme {
     /// end of the row and let the caret walk off the right edge of the column.
     @MainActor
     func tableParagraphStyle() -> NSParagraphStyle {
-        let para = NSMutableParagraphStyle()
-        para.lineHeightMultiple = lineHeight
-        para.paragraphSpacing = 0
+        let para = paragraphStyle()
         para.lineBreakMode = .byWordWrapping
         para.allowsDefaultTighteningForTruncation = false
         return para
     }
 
     var bodyAttributes: [NSAttributedString.Key: Any] {
-        let para = NSMutableParagraphStyle()
-        para.lineHeightMultiple = lineHeight
-        para.paragraphSpacing = 0
-        return [
+        [
             .font: bodyFont,
             .foregroundColor: textColor,
-            .paragraphStyle: para,
+            .paragraphStyle: paragraphStyle(spacing: paragraphSpacing),
         ]
     }
 
     /// Breathing room that makes the outline scan: more space above than below,
     /// scaled to the body so a custom font size still feels composed.
     func headingParagraphStyle(level: Int) -> NSParagraphStyle {
-        let para = NSMutableParagraphStyle()
-        para.lineHeightMultiple = lineHeight
         let size = bodyFont.pointSize
         switch min(max(1, level), 6) {
         case 1:
-            para.paragraphSpacingBefore = size * 0.28
-            para.paragraphSpacing = size * 0.42
+            return paragraphStyle(spacing: size * 0.42, spacingBefore: size * 0.28)
         case 2:
-            para.paragraphSpacingBefore = size * 0.82
-            para.paragraphSpacing = size * 0.30
+            return paragraphStyle(spacing: size * 0.30, spacingBefore: size * 0.82)
         case 3:
-            para.paragraphSpacingBefore = size * 0.62
-            para.paragraphSpacing = size * 0.22
+            return paragraphStyle(spacing: size * 0.22, spacingBefore: size * 0.62)
         default:
-            para.paragraphSpacingBefore = size * 0.42
-            para.paragraphSpacing = size * 0.16
+            return paragraphStyle(spacing: size * 0.16, spacingBefore: size * 0.42)
         }
-        return para
     }
 
     func quoteParagraphStyle() -> NSParagraphStyle {
-        let para = NSMutableParagraphStyle()
-        para.lineHeightMultiple = lineHeight
+        let para = paragraphStyle(spacing: bodyFont.pointSize * 0.12)
         let inset = bodyFont.pointSize * 0.55
         para.firstLineHeadIndent = inset
         para.headIndent = inset
-        para.paragraphSpacing = bodyFont.pointSize * 0.12
         return para
     }
 
@@ -402,6 +407,13 @@ enum MarkdownStyler {
 
     private static func apply(_ token: MarkdownToken, range: NSRange, theme: QuillTheme, storage: NSTextStorage, dimmed: Bool) {
         let style = MarkdownThemeMap.style(for: token)
+        if token == .frontmatter || token == .fence {
+            storage.addAttribute(
+                .paragraphStyle,
+                value: theme.paragraphStyle(),
+                range: paragraphRange(range, length: storage.length, storage: storage)
+            )
+        }
         if style == .list {
             storage.addAttribute(.font, value: theme.listMarkerFont, range: range)
             storage.addAttribute(.foregroundColor, value: dimmed ? theme.dimColor : theme.listMarkerColor, range: range)

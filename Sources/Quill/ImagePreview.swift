@@ -441,18 +441,20 @@ final class ImagePreviewController {
         let range = tv.nsRange(span)
         guard range.length > 0, NSMaxRange(range) <= storage.length else { return }
         let current = storage.attribute(.paragraphStyle, at: range.location, effectiveRange: nil) as? NSParagraphStyle
-        if let current, abs(current.paragraphSpacing - extra) < 0.5, abs(current.lineHeightMultiple - tv.theme.lineHeight) < 0.01 {
+        let restored: CGFloat
+        if extra > 0.5 {
+            restored = extra
+        } else if let current, current.firstLineHeadIndent > 0.5 {
+            restored = tv.theme.listItemSpacing
+        } else {
+            restored = tv.theme.paragraphSpacing
+        }
+        if let current, abs(current.paragraphSpacing - restored) < 0.5, abs(current.lineHeightMultiple - tv.theme.lineHeight) < 0.01 {
             return
         }
         let style = (current?.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
         style.lineHeightMultiple = tv.theme.lineHeight
-        if extra > 0.5 {
-            style.paragraphSpacing = extra
-        } else if let current, current.firstLineHeadIndent > 0.5 {
-            style.paragraphSpacing = tv.theme.listItemSpacing
-        } else {
-            style.paragraphSpacing = extra
-        }
+        style.paragraphSpacing = restored
         storage.addAttribute(.paragraphStyle, value: style, range: range)
     }
 

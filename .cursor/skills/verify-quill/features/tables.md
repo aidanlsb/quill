@@ -30,7 +30,7 @@ Preconditions:
 - No other smoke is using that same log path. Each run overwrites `artifacts/verify-quill/smoke.log`.
 
 - **Run the tests.** `TableStyleTests` covers styling, wrapping, overflow, the viewport, inline cells, and restyle after a table breaks. Detection, padding, gutters, display-width `:TableFormat`, and multi-line recognition run on Linux in `TableTests` and `ExCommandTests.testTableFormatCommand`. `Scripts/verify-quill --bin "$bin"` runs `TableStyleTests`, then the launch smoke.
-- **Read the table result.** `artifacts/verify-quill/app-tests.log` shows `TableStyleTests` passing. `artifacts/verify-quill/smoke.log` contains `quill smoke passed`. The test log does not contain `table pipe`, `table header`, `table body`, `table background`, `table rule`, `table rows wrap`, `table row ink`, `overflow`, `table format config`, `table viewport`, `table edit`, `table inline`, `table break`, or `table gutter`.
+- **Read the table result.** `artifacts/verify-quill/app-tests.log` shows `TableStyleTests` passing. `artifacts/verify-quill/smoke.log` contains `quill smoke passed`. The test log does not contain `table pipe`, `table header`, `table body`, `table background`, `table rule`, `table rows wrap`, `table row ink`, `table line height`, `table spacing`, `overflow`, `table format config`, `table viewport`, `table edit`, `table inline`, `table break`, or `table gutter`.
 - **Proof.** The log file is still at `artifacts/verify-quill/smoke.log` after the process exits.
 
 ## Gotchas
