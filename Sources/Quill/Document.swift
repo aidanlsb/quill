@@ -61,7 +61,12 @@ final class Document {
 
     init(engine: Engine, root: URL) {
         self.engine = engine
-        self.rootURL = root
+        let standardized = root.standardizedFileURL
+        if BrowseRoot.isFilesystemRoot(standardized) {
+            self.rootURL = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL
+        } else {
+            self.rootURL = standardized
+        }
     }
 
     var title: String {
@@ -127,8 +132,7 @@ final class Document {
     }
 
     func resolve(_ text: String) -> URL {
-        if text.hasPrefix("/") { return URL(fileURLWithPath: text) }
-        return rootURL.appendingPathComponent(text)
+        BrowseRoot.absolute(text, relativeTo: rootURL)
     }
 
     /// Directories and missing files install before this returns.
@@ -223,7 +227,7 @@ final class Document {
 
     func claimUntitled(_ url: URL) {
         kind = .file(url: url, ending: .lf, loadedAt: nil)
-        rootURL = url.deletingLastPathComponent()
+        adoptRoot(url.deletingLastPathComponent())
     }
 
     /// Snapshot taken before `save()` returns, so keystrokes after `:w` stay out of the write.
@@ -333,7 +337,7 @@ final class Document {
     private func installFile(_ decoded: TextCodec.Decoded, url: URL) {
         engine.load(text: decoded.text)
         kind = .file(url: url, ending: decoded.ending, loadedAt: modificationDate(url))
-        rootURL = url.deletingLastPathComponent()
+        adoptRoot(url.deletingLastPathComponent())
         confirmOverwrite = false
         installed()
     }
@@ -349,8 +353,14 @@ final class Document {
             )
         }
         kind = .directory(url: url, snapshot: snap)
-        rootURL = url
+        adoptRoot(url)
         installed()
+    }
+
+    private func adoptRoot(_ url: URL) {
+        let standardized = url.standardizedFileURL
+        if BrowseRoot.isFilesystemRoot(standardized) { return }
+        rootURL = standardized
     }
 
     private func installed() {

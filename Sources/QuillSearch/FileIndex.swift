@@ -189,6 +189,8 @@ public enum FileWalk {
         ignore: IgnoreRules = IgnoreRules(),
         fileManager: FileManager = .default
     ) -> [URL] {
+        let path = root.path
+        if path.isEmpty || path == "/" { return [] }
         var results: [URL] = []
         let options: FileManager.DirectoryEnumerationOptions = ignore.includeHidden ? [] : [.skipsHiddenFiles]
         guard let enumerator = fileManager.enumerator(
@@ -261,6 +263,8 @@ public enum ContentSearch {
         process: CancellableProcess? = nil
     ) -> [GrepHit] {
         if query.isEmpty { return [] }
+        let path = root.path
+        if path.isEmpty || path == "/" { return [] }
         if ripgrepAvailable(), let rg = ripgrep(
             root: root,
             query: query,
@@ -471,6 +475,12 @@ public actor FileIndex {
     public init() {}
 
     public func rebuild(root: URL, ignore: IgnoreRules = IgnoreRules()) {
+        let path = root.path
+        if path.isEmpty || path == "/" {
+            self.root = nil
+            files = []
+            return
+        }
         self.root = root
         files = FileWalk.files(in: root, ignore: ignore)
     }

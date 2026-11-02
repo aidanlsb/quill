@@ -1,9 +1,12 @@
 import AppKit
 import XCTest
 @testable import Quill
+import QuillSearch
+import QuillWorkspace
 
 /// An empty buffer shows a quiet overlay that is not in the file. Insert, typing,
-/// and opening a non-empty file all take it down.
+/// and opening a non-empty file all take it down. Hinted actions work from a
+/// fresh untitled window even when cwd would have been `/`.
 @MainActor
 final class EmptyStateTests: QuillAppTestCase {
     func testEmptyUntitledShowsCanvasAndInsertHidesIt() {
@@ -34,11 +37,61 @@ final class EmptyStateTests: QuillAppTestCase {
         XCTAssertEqual(tv.string, "hello", "canvas overlay changed the storage")
     }
 
+    func testNormalModeDoesNotInsertOverTheOverlay() {
+        let harness = EditorHarness(text: "")
+        defer { harness.close() }
+        let tv = harness.view
+        tv.layoutSubtreeIfNeeded()
+        XCTAssertTrue(tv.isEmptyCanvasVisible)
+        XCTAssertTrue(tv.isEditable, "normal mode flipped isEditable")
+        XCTAssertFalse(tv.acceptsTypedInput)
+
+        _ = tv.press("hjkl")
+        tv.layoutSubtreeIfNeeded()
+        XCTAssertEqual(harness.engine.mode, .normal)
+        XCTAssertEqual(harness.engine.text, "", "stray keys inserted on the empty canvas")
+        XCTAssertEqual(tv.string, "")
+        XCTAssertTrue(tv.isEmptyCanvasVisible, "stray keys hid the canvas")
+        XCTAssertTrue(tv.isEditable)
+
+        tv.insertText("typed", replacementRange: NSRange(location: 0, length: 0))
+        tv.paste(nil)
+        tv.pasteAsPlainText(nil)
+        tv.setMarkedText("あ", selectedRange: NSRange(location: 0, length: 1), replacementRange: NSRange(location: 0, length: 0))
+        XCTAssertFalse(tv.shouldChangeText(in: NSRange(location: 0, length: 0), replacementString: "x"))
+        XCTAssertNil(tv.validRequestor(forSendType: nil, returnType: .string))
+        XCTAssertEqual(harness.engine.text, "", "insertText wrote behind the canvas")
+        XCTAssertEqual(tv.string, "")
+        XCTAssertTrue(tv.isEmptyCanvasVisible)
+    }
+
+    func testInsertFromEmptyUntitledStartsARealBuffer() {
+        let model = AppModel(config: .default, home: isolatedHome(), isDark: { false })
+        let harness = EditorHarness(model: model)
+        defer { harness.close() }
+        XCTAssertEqual(model.document.kind, .untitled)
+        XCTAssertTrue(harness.view.isEmptyCanvasVisible)
+        XCTAssertNotEqual(model.browseRoot.path, "/")
+
+        _ = harness.view.press("i") { model.afterEdit($0) }
+        harness.view.layoutSubtreeIfNeeded()
+        XCTAssertEqual(model.engine.mode, .insert)
+        XCTAssertEqual(model.document.kind, .untitled)
+        XCTAssertFalse(harness.view.isEmptyCanvasVisible, "i left the canvas up")
+        XCTAssertTrue(harness.view.isEditable)
+        XCTAssertEqual(model.engine.text, "")
+
+        _ = harness.view.press("hi") { model.afterEdit($0) }
+        XCTAssertEqual(model.engine.text, "hi")
+        XCTAssertEqual(harness.view.string, "hi")
+        XCTAssertFalse(harness.view.isEmptyCanvasVisible)
+    }
+
     func testNonEmptyFileHidesCanvasAndEmptyNamedFileShowsIt() throws {
         let fixture = try TempDirectory()
         try fixture.write("note.md", "body\n")
         try fixture.write("blank.md", "")
-        let model = AppModel()
+        let model = AppModel(config: .default, home: fixture.url, isDark: { false })
         let harness = EditorHarness(model: model)
         defer { harness.close() }
 
@@ -63,7 +116,7 @@ final class EmptyStateTests: QuillAppTestCase {
     func testDirectoryHidesEmptyCanvas() throws {
         let fixture = try TempDirectory()
         try fixture.write("notes.md", "hi\n")
-        let model = AppModel()
+        let model = AppModel(config: .default, home: fixture.url, isDark: { false })
         let harness = EditorHarness(model: model)
         defer { harness.close() }
         model.open(url: fixture.url, immediate: true)
@@ -72,5 +125,251 @@ final class EmptyStateTests: QuillAppTestCase {
         XCTAssertTrue(model.document.isDirectory)
         XCTAssertFalse(harness.view.isEmptyCanvasVisible, "directory showed the writing canvas")
         withExtendedLifetime(fixture) {}
+    }
+
+    func testMinusFromUntitledOpensHomeNotFilesystemRoot() throws {
+        let fixture = try TempDirectory()
+        try fixture.write("notes.md", "from home\n")
+        let model = AppModel(
+            config: .default,
+            home: fixture.url,
+            lastDirectory: URL(fileURLWithPath: "/"),
+            isDark: { false }
+        )
+        XCTAssertEqual(model.document.kind, .untitled)
+        XCTAssertEqual(model.browseRoot.standardizedFileURL.path, fixture.url.standardizedFileURL.path)
+        XCTAssertNotEqual(model.browseRoot.path, "/")
+
+        model.openParent()
+        XCTAssertTrue(model.document.isDirectory, "minus from untitled did not open a folder (\(model.message))")
+        XCTAssertEqual(model.document.url?.standardizedFileURL.path, fixture.url.standardizedFileURL.path)
+        XCTAssertTrue(model.engine.text.contains("notes.md"), "home listing missing notes.md")
+        withExtendedLifetime(fixture) {}
+    }
+
+    func testMinusFromUntitledOpensLastUsedDirectory() throws {
+        let home = try TempDirectory()
+        let last = try TempDirectory()
+        try last.write("kept.md", "from last\n")
+        let model = AppModel(config: .default, home: home.url, lastDirectory: last.url, isDark: { false })
+        XCTAssertEqual(model.document.kind, .untitled)
+        XCTAssertEqual(model.browseRoot.standardizedFileURL.path, last.url.standardizedFileURL.path)
+
+        model.afterEdit(model.engine.type("-"))
+        XCTAssertTrue(model.isDirectory)
+        XCTAssertEqual(model.document.url?.standardizedFileURL.path, last.url.standardizedFileURL.path)
+        XCTAssertTrue(model.engine.text.contains("kept.md"))
+        withExtendedLifetime(home) {}
+        withExtendedLifetime(last) {}
+    }
+
+    func testEmptyStateFilePickerUsesHomeWhenCwdWouldBeRoot() async throws {
+        let fixture = try TempDirectory()
+        try fixture.write("notes.md", "alpha notes\n")
+        let model = AppModel(
+            config: .default,
+            home: fixture.url,
+            lastDirectory: URL(fileURLWithPath: "/"),
+            isDark: { false }
+        )
+        XCTAssertEqual(model.document.kind, .untitled)
+        model.afterEdit(model.engine.type(" sf"))
+        await waitUntil("find files") {
+            model.pickerKind == .files && model.picker?.items.contains { $0.title.contains("notes.md") } == true
+        }
+        XCTAssertNotEqual(model.browseRoot.path, "/")
+        withExtendedLifetime(fixture) {}
+    }
+
+    func testEmptyStateGrepUsesLastUsedDirectory() async throws {
+        let home = try TempDirectory()
+        let last = try TempDirectory()
+        try last.write("notes.md", "alpha notes\n")
+        try last.write("ideas.md", "beta ideas\n")
+        let model = AppModel(config: .default, home: home.url, lastDirectory: last.url, isDark: { false })
+        XCTAssertEqual(model.document.kind, .untitled)
+        model.afterEdit(model.engine.type(" sg"))
+        XCTAssertEqual(model.pickerKind, .grep)
+        for character in "alpha" {
+            model.handlePicker(.character(character))
+        }
+        await waitUntil("live grep") {
+            model.picker?.items.contains { $0.title.contains("notes.md") } == true
+                && model.picker?.items.contains { $0.title.contains("ideas.md") } != true
+        }
+        withExtendedLifetime(home) {}
+        withExtendedLifetime(last) {}
+    }
+
+    func testEmptyLaunchAndKeystrokeDoNotWriteStateToml() {
+        let home = isolatedHome()
+        let last = FileManager.default.homeDirectoryForCurrentUser
+        let state = SessionState.url(home: home)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: state.path))
+        let model = AppModel(
+            config: .default,
+            home: home,
+            lastDirectory: last,
+            isDark: { false }
+        )
+        XCTAssertEqual(model.document.kind, .untitled)
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: state.path),
+            "empty launch wrote state.toml"
+        )
+        model.afterEdit(model.engine.type("i"))
+        model.afterEdit(model.engine.type("a"))
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: state.path),
+            "keystroke wrote state.toml"
+        )
+    }
+
+    func testMissingLastUsedFallsBackAtBrowseTime() throws {
+        let home = try TempDirectory()
+        let missing = home.url.appendingPathComponent("gone-\(UUID().uuidString)", isDirectory: true)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: missing.path))
+        let model = AppModel(
+            config: .default,
+            home: home.url,
+            lastDirectory: missing,
+            isDark: { false }
+        )
+        XCTAssertEqual(model.document.kind, .untitled)
+        XCTAssertEqual(
+            model.session.lastDirectory?.standardizedFileURL.path,
+            missing.standardizedFileURL.path
+        )
+        XCTAssertEqual(
+            model.document.rootURL.standardizedFileURL.path,
+            home.url.standardizedFileURL.path
+        )
+        XCTAssertEqual(
+            model.browseRoot.standardizedFileURL.path,
+            home.url.standardizedFileURL.path
+        )
+        XCTAssertEqual(
+            model.unstatedBrowseRoot.standardizedFileURL.path,
+            missing.standardizedFileURL.path
+        )
+        withExtendedLifetime(home) {}
+    }
+
+    func testEmptyStateEditOpensARelativePathAgainstLastUsed() async throws {
+        let home = try TempDirectory()
+        let last = try TempDirectory()
+        try last.write("notes.md", "opened by edit from last-used\n")
+        let model = AppModel(config: .default, home: home.url, lastDirectory: last.url, isDark: { false })
+        XCTAssertEqual(model.document.kind, .untitled)
+        model.edit(CommandArgs(text: "notes.md"))
+        await waitUntil("edit last-used") { model.engine.text == "opened by edit from last-used\n" }
+        XCTAssertEqual(
+            model.document.url?.standardizedFileURL.path,
+            last.url.appendingPathComponent("notes.md").standardizedFileURL.path
+        )
+        withExtendedLifetime(home) {}
+        withExtendedLifetime(last) {}
+    }
+
+    func testEmptyStateEditOpensARelativePathAgainstHome() async throws {
+        let fixture = try TempDirectory()
+        try fixture.write("notes.md", "opened by edit\n")
+        let model = AppModel(
+            config: .default,
+            home: fixture.url,
+            lastDirectory: URL(fileURLWithPath: "/"),
+            isDark: { false }
+        )
+        XCTAssertEqual(model.document.kind, .untitled)
+        model.edit(CommandArgs(text: "notes.md"))
+        await waitUntil("edit") { model.engine.text == "opened by edit\n" }
+        XCTAssertEqual(
+            model.document.url?.standardizedFileURL.path,
+            fixture.url.appendingPathComponent("notes.md").standardizedFileURL.path
+        )
+        withExtendedLifetime(fixture) {}
+    }
+
+    func testEmptyStateCommandPaletteOpens() {
+        let model = AppModel(config: .default, home: isolatedHome(), isDark: { false })
+        XCTAssertEqual(model.document.kind, .untitled)
+        model.afterEdit(model.engine.type("i"))
+        XCTAssertEqual(model.engine.mode, .insert)
+        XCTAssertTrue(model.runCommand("search.commands"))
+        XCTAssertEqual(model.pickerKind, .commands)
+        XCTAssertFalse(model.picker?.items.isEmpty ?? true)
+        model.dismissCommandPalette(restore: true)
+        XCTAssertNil(model.pickerKind)
+        XCTAssertEqual(model.engine.mode, .insert)
+    }
+
+    func testSessionStateLoadKeepsAMissingLastDirectoryUntilBrowse() throws {
+        let fixture = try TempDirectory()
+        let missing = fixture.url.appendingPathComponent("gone-\(UUID().uuidString)", isDirectory: true)
+        let url = SessionState.url(home: fixture.url)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let encoded = "theme = \"dark\"\nlastDirectory = \"\(missing.standardizedFileURL.path)\"\n"
+        try Data(encoded.utf8).write(to: url)
+        let loaded = SessionState.load(from: url)
+        XCTAssertEqual(loaded.theme, .dark)
+        XCTAssertEqual(loaded.lastDirectory?.standardizedFileURL.path, missing.standardizedFileURL.path)
+        XCTAssertFalse(BrowseRoot.isUsable(missing))
+        let model = AppModel(
+            config: .default,
+            home: fixture.url,
+            lastDirectory: loaded.lastDirectory,
+            isDark: { false }
+        )
+        XCTAssertEqual(model.browseRoot.standardizedFileURL.path, fixture.url.standardizedFileURL.path)
+        withExtendedLifetime(fixture) {}
+    }
+
+    func testSessionStateRemembersLastDirectoryWithoutDroppingTheme() throws {
+        let fixture = try TempDirectory()
+        let notes = fixture.url.appendingPathComponent("notes", isDirectory: true)
+        try FileManager.default.createDirectory(at: notes, withIntermediateDirectories: true)
+        let url = SessionState.url(home: fixture.url)
+        try SessionState.save(SessionState(theme: .dark, lastDirectory: notes), to: url)
+        let loaded = SessionState.load(from: url)
+        XCTAssertEqual(loaded.theme, .dark)
+        XCTAssertEqual(loaded.lastDirectory?.standardizedFileURL.path, notes.standardizedFileURL.path)
+        try ThemeMemory.save(.light, to: url)
+        let afterTheme = SessionState.load(from: url)
+        XCTAssertEqual(afterTheme.theme, .light)
+        XCTAssertEqual(afterTheme.lastDirectory?.standardizedFileURL.path, notes.standardizedFileURL.path)
+        withExtendedLifetime(fixture) {}
+    }
+
+    func testNoArgLaunchBrowseRootIsNeverFilesystemRoot() {
+        let delegate = AppDelegate()
+        defer { delegate.closeLaunchWindow() }
+        delegate.openAtLaunch(arguments: [])
+        XCTAssertEqual(delegate.model.document.kind, .untitled)
+        XCTAssertNotEqual(delegate.model.browseRoot.path, "/")
+        XCTAssertTrue(BrowseRoot.isUsable(delegate.model.browseRoot))
+    }
+
+    private func isolatedHome() -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("quill-empty-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    private func waitUntil(
+        _ description: String,
+        file: StaticString = #filePath,
+        line: UInt = #line,
+        _ predicate: @MainActor @escaping () -> Bool
+    ) async {
+        let clock = ContinuousClock()
+        let start = clock.now
+        while !predicate() {
+            if clock.now - start > .seconds(3) {
+                XCTFail(description, file: file, line: line)
+                return
+            }
+            await Task.yield()
+        }
     }
 }

@@ -286,7 +286,7 @@ extension AppModel {
 
     /// Marker root for the open file (`.git` when the server did not name one).
     func lspWorkspaceRoot() -> URL {
-        guard let url = document.url else { return document.rootURL }
+        guard let url = document.url else { return browseRoot }
         let markers = config.lsp.servers(for: url).flatMap(\.rootMarkers)
         return WorkspaceRoot.find(from: url, markers: markers.isEmpty ? [".git"] : markers)
     }

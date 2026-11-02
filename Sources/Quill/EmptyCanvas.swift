@@ -143,7 +143,7 @@ extension VimTextView {
     func shouldShowEmptyCanvas() -> Bool {
         guard engine != nil else { return false }
         guard !isDirectoryBuffer else { return false }
-        guard engine.text.isEmpty else { return false }
+        guard engine.buffer.count == 0, string.isEmpty else { return false }
         switch engine.mode {
         case .normal, .operatorPending, .findChar:
             return true

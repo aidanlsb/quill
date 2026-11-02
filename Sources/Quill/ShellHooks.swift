@@ -5,7 +5,7 @@ import QuillWorkspace
 extension AppModel {
     func runShell(_ command: String) {
         let generation = document.generation
-        let root = document.rootURL
+        let root = browseRoot
         Task {
             let result = await Task.detached(priority: .userInitiated) {
                 Self.runHookProcess(command: command, root: root)

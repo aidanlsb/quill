@@ -8,6 +8,7 @@ import QuillWorkspace
 @MainActor
 final class AppSession {
     let home: URL
+    var lastDirectory: URL?
     let isDark: @MainActor () -> Bool
     var appearanceObserver: NSKeyValueObservation?
     var closeRequests = 0
@@ -23,8 +24,9 @@ final class AppSession {
     // quill-concurrency: JSON-RPC callbacks hop to the main actor before they touch the model.
     let hop = ModelHop()
 
-    init(home: URL, isDark: @escaping @MainActor () -> Bool) {
+    init(home: URL, lastDirectory: URL? = nil, isDark: @escaping @MainActor () -> Bool) {
         self.home = home
+        self.lastDirectory = BrowseRoot.stored(lastDirectory)
         self.isDark = isDark
     }
 }

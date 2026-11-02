@@ -4,6 +4,7 @@ import Observation
 import QuillLSP
 import QuillSearch
 import QuillVim
+import QuillWorkspace
 
 @MainActor
 @Observable
@@ -52,10 +53,11 @@ final class AppModel {
         home: URL,
         notice: String? = nil,
         themeChoice: ThemeChoice = .system,
+        lastDirectory: URL? = nil,
         isDark: @escaping @MainActor () -> Bool
     ) {
         self.config = config
-        self.session = AppSession(home: home, isDark: isDark)
+        self.session = AppSession(home: home, lastDirectory: lastDirectory, isDark: isDark)
         self.document = Document(engine: Engine(clipboard: PasteboardClipboard()), root: home)
         self.themeChoice = themeChoice
         self.theme = QuillTheme.current(
@@ -164,7 +166,54 @@ final class AppModel {
         }
     }
 
+    /// Folder for the file picker, live grep, `-`, and relative `:e`. Never `/`.
+    var browseRoot: URL {
+        BrowseRoot.resolve(
+            openFile: document.url,
+            isDirectory: document.isDirectory,
+            lastUsed: session.lastDirectory,
+            home: session.home
+        )
+    }
+
+    /// Open file's folder, else last-used, else home, without stating. Insert
+    /// completions use this so a keystroke does not pay `BrowseRoot.resolve`.
+    var unstatedBrowseRoot: URL {
+        if let url = document.url {
+            let dir = BrowseRoot.directory(containing: url, isDirectory: document.isDirectory)
+            if !BrowseRoot.isFilesystemRoot(dir) { return dir }
+        }
+        if let last = session.lastDirectory { return last }
+        let home = session.home.standardizedFileURL
+        if !BrowseRoot.isFilesystemRoot(home) { return home }
+        return FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL
+    }
+
+    func rememberOpenLocation() {
+        guard let url = document.url else { return }
+        let dir = BrowseRoot.directory(containing: url, isDirectory: document.isDirectory)
+        guard BrowseRoot.isUsable(dir) else { return }
+        if session.lastDirectory?.standardizedFileURL.path == dir.path { return }
+        session.lastDirectory = dir
+        persistLastDirectory(dir)
+    }
+
+    func persistLastDirectory(_ directory: URL) {
+        let tmp = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().standardizedFileURL.path
+        let path = directory.resolvingSymlinksInPath().standardizedFileURL.path
+        if path.hasPrefix(tmp) { return }
+        let url = SessionState.url(home: session.home)
+        var state = SessionState.load(from: url)
+        state.lastDirectory = directory
+        do {
+            try SessionState.save(state, to: url)
+        } catch {
+            // The next launch falls back to home. Do not overwrite the status line.
+        }
+    }
+
     func documentReplaced() {
+        rememberOpenLocation()
         session.completionGeneration += 1
         session.hoverGeneration += 1
         session.completionQuery = nil

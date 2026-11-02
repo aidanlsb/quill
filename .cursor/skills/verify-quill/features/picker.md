@@ -35,6 +35,6 @@ Preconditions:
 ## Gotchas
 
 - The smoke calls `handlePicker` with the same key values the picker key view builds. It does not post OS keyboard events.
-- The fixture is a temporary directory with `notes.md` (`alpha notes`) and `ideas.md` (`beta ideas`). It does not index the home folder.
+- The fixture is a temporary directory with `notes.md` (`alpha notes`) and `ideas.md` (`beta ideas`). It does not index the home folder. An untitled window indexes the last-used folder or home, never `/`.
 - Grep is debounced. The check waits until `picker.items` changes and the query field reads `alpha`.
 - Linux `swift test` covers picker key handling and highlight ranges. It does not draw the field. This host cannot run the smoke if it is not macOS.

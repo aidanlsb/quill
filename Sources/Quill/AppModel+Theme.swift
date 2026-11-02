@@ -7,9 +7,10 @@ extension AppModel {
         let loaded = QuillConfig.loadReporting()
         StartupProbe.end("configMs", configBegan)
         let memoryBegan = StartupProbe.begin("themeMemoryMs")
+        let state = SessionState.load(from: SessionState.url(home: home))
         let choice = ThemeChoice.resolved(
             config: loaded.config.theme,
-            remembered: ThemeMemory.load(from: ThemeMemory.url(home: home))
+            remembered: state.theme
         )
         StartupProbe.end("themeMemoryMs", memoryBegan)
         self.init(
@@ -17,6 +18,7 @@ extension AppModel {
             home: home,
             notice: loaded.error,
             themeChoice: choice,
+            lastDirectory: state.lastDirectory,
             isDark: {
                 let appearance = NSApp?.effectiveAppearance ?? NSAppearance.currentDrawing()
                 return appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
