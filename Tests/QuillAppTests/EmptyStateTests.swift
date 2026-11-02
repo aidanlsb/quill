@@ -46,7 +46,7 @@ final class EmptyStateTests: QuillAppTestCase {
         XCTAssertFalse(tv.isEditable)
         XCTAssertFalse(tv.acceptsTypedInput)
 
-        _ = tv.press("xyz")
+        _ = tv.press("hjkl")
         tv.layoutSubtreeIfNeeded()
         XCTAssertEqual(harness.engine.mode, .normal)
         XCTAssertEqual(harness.engine.text, "", "stray keys inserted on the empty canvas")
