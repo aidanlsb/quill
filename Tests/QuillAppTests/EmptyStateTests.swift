@@ -195,6 +195,76 @@ final class EmptyStateTests: QuillAppTestCase {
         withExtendedLifetime(last) {}
     }
 
+    func testEmptyLaunchAndKeystrokeDoNotWriteStateToml() {
+        let home = isolatedHome()
+        let last = FileManager.default.homeDirectoryForCurrentUser
+        let state = SessionState.url(home: home)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: state.path))
+        let model = AppModel(
+            config: .default,
+            home: home,
+            lastDirectory: last,
+            isDark: { false }
+        )
+        XCTAssertEqual(model.document.kind, .untitled)
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: state.path),
+            "empty launch wrote state.toml"
+        )
+        model.afterEdit(model.engine.type("i"))
+        model.afterEdit(model.engine.type("a"))
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: state.path),
+            "keystroke wrote state.toml"
+        )
+    }
+
+    func testMissingLastUsedFallsBackAtBrowseTime() throws {
+        let home = try TempDirectory()
+        let missing = home.url.appendingPathComponent("gone-\(UUID().uuidString)", isDirectory: true)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: missing.path))
+        let model = AppModel(
+            config: .default,
+            home: home.url,
+            lastDirectory: missing,
+            isDark: { false }
+        )
+        XCTAssertEqual(model.document.kind, .untitled)
+        XCTAssertEqual(
+            model.session.lastDirectory?.standardizedFileURL.path,
+            missing.standardizedFileURL.path
+        )
+        XCTAssertEqual(
+            model.document.rootURL.standardizedFileURL.path,
+            home.url.standardizedFileURL.path
+        )
+        XCTAssertEqual(
+            model.browseRoot.standardizedFileURL.path,
+            home.url.standardizedFileURL.path
+        )
+        XCTAssertEqual(
+            model.unstatedBrowseRoot.standardizedFileURL.path,
+            missing.standardizedFileURL.path
+        )
+        withExtendedLifetime(home) {}
+    }
+
+    func testEmptyStateEditOpensARelativePathAgainstLastUsed() async throws {
+        let home = try TempDirectory()
+        let last = try TempDirectory()
+        try last.write("notes.md", "opened by edit from last-used\n")
+        let model = AppModel(config: .default, home: home.url, lastDirectory: last.url, isDark: { false })
+        XCTAssertEqual(model.document.kind, .untitled)
+        model.edit(CommandArgs(text: "notes.md"))
+        await waitUntil("edit last-used") { model.engine.text == "opened by edit from last-used\n" }
+        XCTAssertEqual(
+            model.document.url?.standardizedFileURL.path,
+            last.url.appendingPathComponent("notes.md").standardizedFileURL.path
+        )
+        withExtendedLifetime(home) {}
+        withExtendedLifetime(last) {}
+    }
+
     func testEmptyStateEditOpensARelativePathAgainstHome() async throws {
         let fixture = try TempDirectory()
         try fixture.write("notes.md", "opened by edit\n")
@@ -225,6 +295,27 @@ final class EmptyStateTests: QuillAppTestCase {
         model.dismissCommandPalette(restore: true)
         XCTAssertNil(model.pickerKind)
         XCTAssertEqual(model.engine.mode, .insert)
+    }
+
+    func testSessionStateLoadKeepsAMissingLastDirectoryUntilBrowse() throws {
+        let fixture = try TempDirectory()
+        let missing = fixture.url.appendingPathComponent("gone-\(UUID().uuidString)", isDirectory: true)
+        let url = SessionState.url(home: fixture.url)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let encoded = "theme = \"dark\"\nlastDirectory = \"\(missing.standardizedFileURL.path)\"\n"
+        try Data(encoded.utf8).write(to: url)
+        let loaded = SessionState.load(from: url)
+        XCTAssertEqual(loaded.theme, .dark)
+        XCTAssertEqual(loaded.lastDirectory?.standardizedFileURL.path, missing.standardizedFileURL.path)
+        XCTAssertFalse(BrowseRoot.isUsable(missing))
+        let model = AppModel(
+            config: .default,
+            home: fixture.url,
+            lastDirectory: loaded.lastDirectory,
+            isDark: { false }
+        )
+        XCTAssertEqual(model.browseRoot.standardizedFileURL.path, fixture.url.standardizedFileURL.path)
+        withExtendedLifetime(fixture) {}
     }
 
     func testSessionStateRemembersLastDirectoryWithoutDroppingTheme() throws {

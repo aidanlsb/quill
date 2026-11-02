@@ -123,6 +123,7 @@ enum AppPerf {
         }
         emit("textSyncMs", sync)
         view.engine.mode = .insert
+        view.syncTypingSurface()
         let typing = millis {
             for _ in 0..<20 {
                 let result = view.engine.handle(KeyEvent(.character("a")))
@@ -153,6 +154,7 @@ enum AppPerf {
         typical.view.engine.moveCursor(to: at)
         typical.view.reload()
         typical.view.engine.mode = .insert
+        typical.view.syncTypingSurface()
         let typicalTyping = millis {
             for _ in 0..<20 {
                 let result = typical.view.engine.handle(KeyEvent(.character("a")))
@@ -179,6 +181,7 @@ enum AppPerf {
         }
         emit("imageRefreshMs", refreshed)
         images.view.engine.mode = .insert
+        images.view.syncTypingSurface()
         let imageTyping = millis {
             for _ in 0..<20 {
                 let result = images.view.engine.handle(KeyEvent(.character("a")))

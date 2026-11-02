@@ -141,7 +141,7 @@ extension AppModel {
                 NSSound.beep()
                 return
             }
-            open(url: document.resolve(args.text))
+            openTarget(LaunchTarget(path: args.text))
             return
         }
         guard document.url != nil else {
@@ -167,7 +167,7 @@ extension AppModel {
     }
 
     func save(toPath path: String) {
-        let url = document.resolve(path)
+        let url = BrowseRoot.absolute(path, relativeTo: browseRoot)
         if document.url == nil {
             document.claimUntitled(url)
             save()

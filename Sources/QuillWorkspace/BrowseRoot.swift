@@ -4,10 +4,25 @@ import Foundation
 /// there is no open file. Finder and Dock launches have cwd `/`; that is never
 /// a project root.
 public enum BrowseRoot {
+    /// Path-only. Empty paths and `/` are never a project root. Does not stat.
+    public static func isFilesystemRoot(_ url: URL) -> Bool {
+        let path = url.standardizedFileURL.path
+        return path.isEmpty || path == "/"
+    }
+
+    /// Remembered folder without stating it. `/` is dropped; missing directories
+    /// stay until `resolve` runs (picker, `-`, `:e`), not launch or a keystroke.
+    public static func stored(_ url: URL?) -> URL? {
+        guard let url else { return nil }
+        let standardized = url.standardizedFileURL
+        if isFilesystemRoot(standardized) { return nil }
+        return standardized
+    }
+
     /// A real directory that is not the filesystem root.
     public static func isUsable(_ url: URL) -> Bool {
+        if isFilesystemRoot(url) { return false }
         let path = url.standardizedFileURL.path
-        if path.isEmpty || path == "/" { return false }
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir) else { return false }
         return isDir.boolValue

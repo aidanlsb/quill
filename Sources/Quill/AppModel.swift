@@ -58,13 +58,7 @@ final class AppModel {
     ) {
         self.config = config
         self.session = AppSession(home: home, lastDirectory: lastDirectory, isDark: isDark)
-        let root = BrowseRoot.resolve(
-            openFile: nil,
-            isDirectory: false,
-            lastUsed: session.lastDirectory,
-            home: home
-        )
-        self.document = Document(engine: Engine(clipboard: PasteboardClipboard()), root: root)
+        self.document = Document(engine: Engine(clipboard: PasteboardClipboard()), root: home)
         self.themeChoice = themeChoice
         self.theme = QuillTheme.current(
             fontFamily: config.font,
@@ -180,6 +174,19 @@ final class AppModel {
             lastUsed: session.lastDirectory,
             home: session.home
         )
+    }
+
+    /// Open file's folder, else last-used, else home, without stating. Insert
+    /// completions use this so a keystroke does not pay `BrowseRoot.resolve`.
+    var unstatedBrowseRoot: URL {
+        if let url = document.url {
+            let dir = BrowseRoot.directory(containing: url, isDirectory: document.isDirectory)
+            if !BrowseRoot.isFilesystemRoot(dir) { return dir }
+        }
+        if let last = session.lastDirectory { return last }
+        let home = session.home.standardizedFileURL
+        if !BrowseRoot.isFilesystemRoot(home) { return home }
+        return FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL
     }
 
     func rememberOpenLocation() {

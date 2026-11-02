@@ -380,7 +380,7 @@ extension AppModel {
         session.completionGeneration += 1
         let token = session.completionGeneration
         let generation = document.generation
-        let root = browseRoot
+        let root = unstatedBrowseRoot
         Task {
             if await self.session.search.index.root?.path != root.path {
                 await self.session.search.index.rebuild(root: root, ignore: IgnoreRules())

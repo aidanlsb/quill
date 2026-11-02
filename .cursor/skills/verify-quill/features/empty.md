@@ -41,4 +41,5 @@ Preconditions:
 
 - The overlay is a sibling view on the text view. Clicks pass through it. It must not insert characters or change `h`/`l` indexing. `isEditable` is false in normal mode so NSTextView paste/IME cannot write over the hints.
 - Relative launch paths and `:e` resolve against the browse root. `URL(fileURLWithPath:)` on a relative name would have used cwd, which is `/` for a GUI launch.
+- Last-used is stored in `state.toml` when a real file or folder is opened, not on empty launch or a keystroke. `BrowseRoot.resolve` stats that path when `-` / the picker / `:e` need it, not on `AppModel` init.
 - Linux `swift test` covers `BrowseRoot` and `FileWalk` of `/`. It does not draw the overlay. This host cannot run the smoke if it is not macOS.

@@ -35,6 +35,19 @@ final class WorkspaceTests: XCTestCase {
 }
 
 final class BrowseRootTests: XCTestCase {
+    func testStoredDropsFilesystemRootWithoutStating() {
+        XCTAssertTrue(BrowseRoot.isFilesystemRoot(URL(fileURLWithPath: "/")))
+        XCTAssertNil(BrowseRoot.stored(URL(fileURLWithPath: "/")))
+        XCTAssertNil(BrowseRoot.stored(nil))
+        let missing = URL(fileURLWithPath: "/tmp/quill-browse-missing-\(UUID().uuidString)")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: missing.path))
+        XCTAssertEqual(
+            BrowseRoot.stored(missing)?.standardizedFileURL.path,
+            missing.standardizedFileURL.path
+        )
+        XCTAssertFalse(BrowseRoot.isUsable(missing))
+    }
+
     func testNeverReturnsFilesystemRoot() throws {
         let home = FileManager.default.temporaryDirectory.appendingPathComponent("quill-browse-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)

@@ -26,7 +26,7 @@ final class AppSession {
 
     init(home: URL, lastDirectory: URL? = nil, isDark: @escaping @MainActor () -> Bool) {
         self.home = home
-        self.lastDirectory = lastDirectory.flatMap { BrowseRoot.isUsable($0) ? $0.standardizedFileURL : nil }
+        self.lastDirectory = BrowseRoot.stored(lastDirectory)
         self.isDark = isDark
     }
 }

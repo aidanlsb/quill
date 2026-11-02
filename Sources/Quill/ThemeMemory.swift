@@ -25,8 +25,7 @@ struct SessionState: Equatable {
         }
         let lastDirectory: URL?
         if case .string(let path) = table["lastDirectory"], !path.isEmpty {
-            let url = URL(fileURLWithPath: path)
-            lastDirectory = BrowseRoot.isUsable(url) ? url.standardizedFileURL : nil
+            lastDirectory = BrowseRoot.stored(URL(fileURLWithPath: path))
         } else {
             lastDirectory = nil
         }

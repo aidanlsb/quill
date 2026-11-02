@@ -61,11 +61,11 @@ final class Document {
 
     init(engine: Engine, root: URL) {
         self.engine = engine
-        if BrowseRoot.isUsable(root) {
-            self.rootURL = root.standardizedFileURL
+        let standardized = root.standardizedFileURL
+        if BrowseRoot.isFilesystemRoot(standardized) {
+            self.rootURL = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL
         } else {
-            let home = FileManager.default.homeDirectoryForCurrentUser
-            self.rootURL = BrowseRoot.isUsable(home) ? home : root
+            self.rootURL = standardized
         }
     }
 
@@ -358,15 +358,9 @@ final class Document {
     }
 
     private func adoptRoot(_ url: URL) {
-        if BrowseRoot.isUsable(url) {
-            rootURL = url.standardizedFileURL
-            return
-        }
-        if BrowseRoot.isUsable(rootURL) { return }
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        if BrowseRoot.isUsable(home) {
-            rootURL = home
-        }
+        let standardized = url.standardizedFileURL
+        if BrowseRoot.isFilesystemRoot(standardized) { return }
+        rootURL = standardized
     }
 
     private func installed() {
