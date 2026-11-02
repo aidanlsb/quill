@@ -75,6 +75,17 @@ final class IgnoreAndGrepTests: XCTestCase {
         XCTAssertFalse(hits.contains { $0.path.contains(".git") })
     }
 
+    func testWalkSkipsFilesystemRoot() async {
+        XCTAssertTrue(FileWalk.files(in: URL(fileURLWithPath: "/")).isEmpty)
+        XCTAssertTrue(ContentSearch.search(root: URL(fileURLWithPath: "/"), query: "quill").isEmpty)
+        let index = FileIndex()
+        await index.rebuild(root: URL(fileURLWithPath: "/"))
+        let root = await index.root
+        let files = await index.files
+        XCTAssertNil(root)
+        XCTAssertTrue(files.isEmpty)
+    }
+
     func testDashQueryIsPassedWithE() {
         let args = ContentSearch.arguments(query: "-foo", root: "/notes", limit: 50, includeHidden: false)
         XCTAssertTrue(args.contains("-e"))

@@ -61,7 +61,7 @@ The `quill` script resolves `/Applications/Quill.app` (or a local `dist/Quill.ap
 - Live markdown styling in the buffer (headings, emphasis, strikethrough, inline code, lists, checkboxes, blockquotes, thematic breaks, GFM tables, `[links](url)`, `[[wikilinks]]`, dimmed syntax) without rewriting the file. List items sit in a gutter with a heavier accent marker, hanging wraps, and a little space between items; completed tasks recede. Tables use a monospaced face, a quiet alignment rule, and an emphasized header. Wide rows wrap within the column, and a table too wide to line up is shown as typed. `:TableFormat` pads cells so the pipes line up
 - `![alt](path)` draws a preview under that line, fitted to the column. The source stays editable text: paths are relative to the file, absolute, or `~`, and `http`/`https` loads in the background. Set `images = false` to turn it off, or toggle it from the command palette
 - Light is warm ivory paper and walnut ink; dark is obsidian with cream letters. One copper/bronze accent carries the caret, links, lists, and the mode pill
-- An empty untitled window (and an empty named file) shows a quiet column of hints. It leaves the moment you press `i`, type, or open a file with contents
+- An empty untitled window (and an empty named file) shows a quiet column of hints. Press `i` to write. `-`, find-file, and grep use the last folder you opened, or home — never `/`, and never the process cwd
 - Focus mode: **⌃⌘F** (hides the status bar, larger margins)
 - `[[` completion from filenames in the opened folder
 

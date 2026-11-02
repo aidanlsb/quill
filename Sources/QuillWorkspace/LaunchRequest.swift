@@ -65,6 +65,11 @@ public enum LaunchRequest {
         URL(fileURLWithPath: path).standardizedFileURL.path
     }
 
+    /// Resolve a launch path against `base`. Relative names never use the process cwd.
+    public static func resolve(_ path: String, relativeTo base: URL) -> URL {
+        BrowseRoot.absolute(path, relativeTo: base)
+    }
+
     /// True when `target` is the buffer already on screen, including a directory listing.
     public static func sameFile(open path: String?, isDirectory: Bool, target: String) -> Bool {
         guard let path, !path.isEmpty, !target.isEmpty else { return false }

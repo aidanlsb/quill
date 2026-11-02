@@ -44,4 +44,4 @@ Each feature file has an H1, one paragraph, then four H2 sections: `Sub-features
 - [Picker](picker.md) covers the `<leader>sf` and `<leader>sg` prompt, caret, placeholder, and live filtering.
 - [Command palette](palette.md) covers ⌘K, the visible query, right-aligned shortcuts, running a command, and Escape restoring the previous mode.
 - [Comments](comments.md) covers CriticMarkup `{>>note<<}` / `{==passage==}{>>note<<}`, `<leader>c`, `<leader>cr`, `]c` / `[c`, and `:Comments`.
-- [Empty canvas](empty.md) covers the overlay on an empty untitled buffer, an empty named file, and that it is gone in insert mode, after typing, and in a directory.
+- [Empty canvas](empty.md) covers the overlay on an empty untitled buffer, an empty named file, that it is gone in insert mode, after typing, and in a directory, and that `-` / find-file / grep / `:e` work from a no-cwd launch.

@@ -289,6 +289,7 @@ final class VimTextView: NSTextView {
         isVerticallyResizable = true
         isHorizontallyResizable = false
         autoresizingMask = [.width]
+        syncTypingSurface()
     }
 
     /// TextKit 2 view. Callers use `host(engine:frame:)`.
@@ -338,6 +339,7 @@ final class VimTextView: NSTextView {
         queueRestyle()
         imagePreviews.applyTheme()
         placeCaret()
+        syncTypingSurface()
         updateEmptyCanvas()
     }
 
@@ -449,6 +451,7 @@ final class VimTextView: NSTextView {
         let revealBegan = DispatchTime.now().uptimeNanoseconds
         revealCaret()
         QuillPerfSplit.add("syncRevealMs", since: revealBegan)
+        syncTypingSurface()
         updateEmptyCanvas()
     }
 
@@ -513,6 +516,7 @@ final class VimTextView: NSTextView {
         }
         vimDelegate?.vimTextView(self, didHandle: result)
         assertViewMatchesEngine()
+        syncTypingSurface()
         updateEmptyCanvas()
     }
 
@@ -823,6 +827,7 @@ final class VimTextView: NSTextView {
     }
 
     override func insertText(_ insertString: Any, replacementRange: NSRange) {
+        guard engine != nil, acceptsTypedInput else { return }
         let raw: String
         if let text = insertString as? String {
             raw = text
@@ -834,6 +839,31 @@ final class VimTextView: NSTextView {
         guard !raw.isEmpty else { return }
         let result = engine.handle(KeyEvent(.text(raw)))
         applyResult(result)
+    }
+
+    override func paste(_ sender: Any?) {
+        guard engine != nil, acceptsTypedInput else { return }
+        let text = NSPasteboard.general.string(forType: .string) ?? ""
+        guard !text.isEmpty else { return }
+        let result = engine.handle(KeyEvent(.text(text)))
+        applyResult(result)
+    }
+
+    /// NSTextView must not dump characters into an empty normal-mode buffer.
+    /// Vim commands still arrive through `keyDown`.
+    var acceptsTypedInput: Bool {
+        guard engine != nil else { return false }
+        switch engine.mode {
+        case .insert, .replaceChar, .commandLine, .search:
+            return true
+        default:
+            return false
+        }
+    }
+
+    func syncTypingSurface() {
+        let editable = engine != nil && (engine.mode == .insert || engine.mode == .replaceChar)
+        if isEditable != editable { isEditable = editable }
     }
 
     func queueRestyle(dirty: Int? = nil, edits: [TextEdit] = [], viewport: Range<Int>? = nil) {
@@ -1978,6 +2008,7 @@ struct EditorView: NSViewRepresentable {
             model.editor = tv
         }
         let directoryChanged = tv.applyDocumentChrome(from: model)
+        tv.syncTypingSurface()
         tv.updateEmptyCanvas()
         let diagnosticsChanged = tv.diagnosticRanges.count != diagnostics.count
             || tv.diagnosticRanges.map(\.0) != diagnostics.map(\.0)

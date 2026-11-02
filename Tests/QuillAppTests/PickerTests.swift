@@ -21,10 +21,12 @@ extension Probe {
         let model = AppModel()
         model.open(url: root)
         model.presentFilePicker()
-        // The index finishes on a task. NSHostingView does not redraw when that
-        // task assigns `picker`, so the panel is hosted only after it is open
-        // and replaced again after each edit.
-        let indexed = waitUntil(seconds: 2) { model.picker != nil }
+        // The picker panel is hosted immediately; the index fills it on a task.
+        // NSHostingView does not redraw when that task assigns items, so the
+        // panel is replaced again after each edit.
+        let indexed = waitUntil(seconds: 2) {
+            model.picker != nil && !(model.picker?.items.isEmpty ?? true)
+        }
         guard indexed else {
             failures.append("picker did not open (\(model.message))")
             return

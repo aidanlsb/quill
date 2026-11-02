@@ -22,12 +22,12 @@ extension AppModel {
     }
 
     func openTarget(_ target: LaunchTarget, immediate: Bool = false) {
-        let path = LaunchRequest.standardized(target.path)
+        let url = BrowseRoot.absolute(target.path, relativeTo: browseRoot)
+        let path = url.path
         if LaunchRequest.sameFile(open: document.url?.path, isDirectory: document.isDirectory, target: path) {
             jump(to: target)
             return
         }
-        let url = URL(fileURLWithPath: path)
         document.noteJump(target, forPath: path)
         switch NavigationGuard.decide(isModified: document.engine.isModified, force: false) {
         case .prompt(let text):
@@ -300,10 +300,25 @@ extension AppModel {
     }
 
     func openParent() {
-        let base = document.url ?? document.rootURL
+        if document.isUntitled {
+            let root = browseRoot
+            openDirectory(root)
+            if document.isDirectory {
+                message = DirectoryStyleBuilder.abbreviatedDirectory(
+                    path: root.path,
+                    home: session.home.path
+                )
+            }
+            return
+        }
+        let base = document.url ?? browseRoot
         if document.isDirectory {
             let parent = base.deletingLastPathComponent()
-            if parent.path != base.path { openDirectory(parent) }
+            if parent.path == base.path || parent.path == "/" {
+                message = "Already at \(base.path)"
+                return
+            }
+            openDirectory(parent)
             return
         }
         openDirectory(base.deletingLastPathComponent())

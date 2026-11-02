@@ -92,6 +92,7 @@ final class EditorShell: NSViewController, VimTextViewDelegate {
             model.editor = tv
         }
         let directoryChanged = tv.applyDocumentChrome(from: model)
+        tv.syncTypingSurface()
         tv.updateEmptyCanvas()
         let diagnostics = model.diagnosticRanges
         let diagnosticsChanged = tv.diagnosticRanges.count != diagnostics.count

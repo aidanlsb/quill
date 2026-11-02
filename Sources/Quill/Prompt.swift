@@ -52,9 +52,17 @@ extension AppModel {
     }
 
     /// Escape while nothing is showing invalidates a picker that has not appeared yet.
+    /// A files or grep picker that is still indexing also closes.
     func noteEscape() {
-        guard case .none = prompt else { return }
-        session.promptEpoch += 1
+        switch prompt {
+        case .none:
+            session.promptEpoch += 1
+        case .picker(let opened) where opened.kind == .files || opened.kind == .grep:
+            session.promptEpoch += 1
+            prompt = .none
+        default:
+            break
+        }
     }
 
     func clearPrompt() {
@@ -70,23 +78,29 @@ extension AppModel {
     func presentFilePicker() {
         let token = beginPromptWork()
         let generation = document.generation
-        let root = document.rootURL
+        let root = browseRoot
+        let picker = PickerEngine()
+        prompt = .picker(PickerSession(id: token, kind: .files, picker: picker, restore: nil))
+        message = "Indexing \(shortBrowsePath(root))…"
         Task {
             await self.session.search.beforeIndex()
             guard self.promptIsCurrent(token, generation: generation) else { return }
-            let ignore = await IgnoreCache.shared.rules(for: root)
-            await self.session.search.index.rebuild(root: root, ignore: ignore)
-            guard self.promptIsCurrent(token, generation: generation) else { return }
-            let paths = await self.session.search.index.relativePaths()
-            guard self.promptIsCurrent(token, generation: generation) else { return }
-            let items = paths.map { path in
-                PickerItem(title: path, payload: root.appendingPathComponent(path).path, preview: "")
+            var items: [PickerItem] = []
+            if BrowseRoot.isUsable(root) {
+                let ignore = await IgnoreCache.shared.rules(for: root)
+                guard self.promptIsCurrent(token, generation: generation) else { return }
+                await self.session.search.index.rebuild(root: root, ignore: ignore)
+                guard self.promptIsCurrent(token, generation: generation) else { return }
+                let paths = await self.session.search.index.relativePaths()
+                items = paths.map { path in
+                    PickerItem(title: path, payload: root.appendingPathComponent(path).path, preview: "")
+                }
             }
-            let picker = PickerEngine(source: items)
-            let opened = PickerSession(id: token, kind: .files, picker: picker, restore: nil)
-            self.prompt = .picker(opened)
-            self.message = "<leader>sf"
-            self.loadPreview(opened)
+            guard self.promptIsCurrent(token, generation: generation) else { return }
+            guard case .picker(let current) = self.prompt, current.id == token else { return }
+            current.picker.source = items
+            self.message = BrowseRoot.isUsable(root) ? "<leader>sf" : "No folder to search"
+            self.loadPreview(current)
         }
     }
 
@@ -327,7 +341,7 @@ extension AppModel {
     func jumpToFilename(_ name: String) {
         let generation = document.generation
         let cursor = document.engine.cursor
-        let root = document.rootURL
+        let root = browseRoot
         Task {
             if await self.session.search.index.root?.path != root.path {
                 let ignore = await IgnoreCache.shared.rules(for: root)
@@ -366,7 +380,7 @@ extension AppModel {
         session.completionGeneration += 1
         let token = session.completionGeneration
         let generation = document.generation
-        let root = document.rootURL
+        let root = browseRoot
         Task {
             if await self.session.search.index.root?.path != root.path {
                 await self.session.search.index.rebuild(root: root, ignore: IgnoreRules())
@@ -393,15 +407,17 @@ extension AppModel {
         let token = opened.id
         let generation = document.generation
         session.search.grepTask?.cancel()
-        let root = document.rootURL
+        let root = browseRoot
         session.search.grepTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 40_000_000)
             if Task.isCancelled { return }
             guard self.promptIsCurrent(token, generation: generation) else { return }
-            let ignore = await IgnoreCache.shared.rules(for: root)
+            let ignore = BrowseRoot.isUsable(root) ? await IgnoreCache.shared.rules(for: root) : IgnoreRules()
             if Task.isCancelled { return }
             guard self.promptIsCurrent(token, generation: generation) else { return }
-            let hits = await self.session.search.session.search(root: root, query: query, ignore: ignore)
+            let hits = BrowseRoot.isUsable(root)
+                ? await self.session.search.session.search(root: root, query: query, ignore: ignore)
+                : []
             guard self.promptIsCurrent(token, generation: generation) else { return }
             let items = hits.map { hit -> PickerItem in
                 let absolute = hit.path.hasPrefix("/") ? hit.path : root.appendingPathComponent(hit.path).path
@@ -475,5 +491,10 @@ extension AppModel {
         let lower = units.index(units.startIndex, offsetBy: content.lowerBound)
         let upper = units.index(lower, offsetBy: content.count)
         return String(units[lower..<upper]) ?? ""
+    }
+
+    func shortBrowsePath(_ url: URL) -> String {
+        let shown = DirectoryStyleBuilder.abbreviatedDirectory(path: url.path, home: session.home.path)
+        return shown.hasSuffix("/") ? String(shown.dropLast()) : shown
     }
 }

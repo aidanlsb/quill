@@ -34,6 +34,77 @@ final class WorkspaceTests: XCTestCase {
     }
 }
 
+final class BrowseRootTests: XCTestCase {
+    func testNeverReturnsFilesystemRoot() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("quill-browse-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        XCTAssertFalse(BrowseRoot.isUsable(URL(fileURLWithPath: "/")))
+        let resolved = BrowseRoot.resolve(
+            openFile: nil,
+            isDirectory: false,
+            lastUsed: URL(fileURLWithPath: "/"),
+            home: home
+        )
+        XCTAssertEqual(resolved.standardizedFileURL.path, home.standardizedFileURL.path)
+        XCTAssertNotEqual(resolved.path, "/")
+    }
+
+    func testPrefersLastUsedOverHome() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("quill-browse-home-\(UUID().uuidString)")
+        let last = FileManager.default.temporaryDirectory.appendingPathComponent("quill-browse-last-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: last, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: home)
+            try? FileManager.default.removeItem(at: last)
+        }
+        let resolved = BrowseRoot.resolve(
+            openFile: nil,
+            isDirectory: false,
+            lastUsed: last,
+            home: home
+        )
+        XCTAssertEqual(resolved.standardizedFileURL.path, last.standardizedFileURL.path)
+    }
+
+    func testRelativePathsDoNotUseProcessCwd() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("quill-browse-base-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let url = BrowseRoot.absolute("note.md", relativeTo: base)
+        XCTAssertEqual(url.deletingLastPathComponent().standardizedFileURL.path, base.standardizedFileURL.path)
+        XCTAssertNotEqual(url.path, "/note.md")
+        XCTAssertEqual(
+            LaunchRequest.resolve("note.md", relativeTo: base).path,
+            url.path
+        )
+    }
+
+    func testOpenFileWinsOverLastUsed() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("quill-browse-h-\(UUID().uuidString)")
+        let last = FileManager.default.temporaryDirectory.appendingPathComponent("quill-browse-l-\(UUID().uuidString)")
+        let notes = FileManager.default.temporaryDirectory.appendingPathComponent("quill-browse-n-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: last, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: notes, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: home)
+            try? FileManager.default.removeItem(at: last)
+            try? FileManager.default.removeItem(at: notes)
+        }
+        let file = notes.appendingPathComponent("a.md")
+        try Data("hi\n".utf8).write(to: file)
+        let resolved = BrowseRoot.resolve(
+            openFile: file,
+            isDirectory: false,
+            lastUsed: last,
+            home: home
+        )
+        XCTAssertEqual(resolved.standardizedFileURL.path, notes.standardizedFileURL.path)
+    }
+}
+
 final class LaunchRequestTests: XCTestCase {
     func testPathLineColumnAndPlus() {
         XCTAssertEqual(LaunchRequest.parse([]), [])
