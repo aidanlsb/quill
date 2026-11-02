@@ -1,6 +1,7 @@
 import AppKit
 import XCTest
 @testable import Quill
+import QuillSearch
 import QuillWorkspace
 
 /// An empty buffer shows a quiet overlay that is not in the file. Insert, typing,
