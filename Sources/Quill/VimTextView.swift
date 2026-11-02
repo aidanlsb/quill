@@ -321,6 +321,7 @@ final class VimTextView: NSTextView {
                 p.lineHeightMultiple = QuillMetrics.directoryLineHeight
             } else {
                 p.lineHeightMultiple = theme.lineHeight
+                p.paragraphSpacing = theme.paragraphSpacing
             }
             return p
         }()
@@ -1353,7 +1354,7 @@ final class VimTextView: NSTextView {
         // case on a long note: only the estimate can scroll, because the last
         // built fragment sits in the middle.
         // A real caret on a wrapped line can sit above that estimate: wrap,
-        // heading gaps, and 1.58 leading make the frame taller than
+        // heading gaps, and body leading make the frame taller than
         // `lineCount * rowHeight`, and spreading that extra linearly puts the
         // estimate below an early wrapped line. Keystrokes trust that caret.
         // After a rewrap the leftover fragment still has the old y, which is

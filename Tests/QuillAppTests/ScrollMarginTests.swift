@@ -146,8 +146,8 @@ extension Probe {
     }
 
     /// Full screen line around the caret, in text-view coordinates. The em box
-    /// hangs from the bottom of the line. Paragraph spacing on a single-row
-    /// line is the image preview under it.
+    /// hangs from the bottom of the line. Paragraph spacing belongs to the last
+    /// screen row of the block (body gap, list item gap, or an image preview).
     private static func scrollLineBox(_ tv: VimTextView) -> NSRect? {
         let caret = tv.renderedCaretRect()
         guard caret.height > 0.5 else { return nil }
@@ -179,14 +179,37 @@ extension Probe {
         let height = max(lineHeight, caret.height)
         var top = min(caret.minY, caret.maxY - height)
         var bottom = max(caret.maxY, top + height)
-        if style.paragraphSpacing > 0.5 {
+        let ends = screenRowEnds(tv, utf16: index)
+        if ends.last, style.paragraphSpacing > 0.5 {
             bottom += style.paragraphSpacing
         }
-        if style.paragraphSpacingBefore > 0.5 {
+        if ends.first, style.paragraphSpacingBefore > 0.5 {
             top -= style.paragraphSpacingBefore
         }
         guard bottom > top + 0.5 else { return nil }
         return NSRect(x: caret.minX, y: top, width: max(caret.width, 1), height: bottom - top)
+    }
+
+    /// Same first/last-row rule `VimTextView` uses when revealing the caret.
+    private static func screenRowEnds(_ tv: VimTextView, utf16: Int) -> (first: Bool, last: Bool) {
+        guard let lm = tv.textLayoutManager else { return (true, true) }
+        let length = (tv.string as NSString).length
+        if length == 0 { return (true, true) }
+        let clamped = min(max(0, utf16), length)
+        let doc = lm.documentRange.location
+        let probe = clamped < length ? clamped : max(0, length - 1)
+        guard let location = lm.location(doc, offsetBy: probe),
+              let fragment = lm.textLayoutFragment(for: location) else { return (true, true) }
+        let start = lm.offset(from: doc, to: fragment.rangeInElement.location)
+        let content = fragment.textLineFragments.filter { $0.characterRange.length > 0 }
+        guard !content.isEmpty else { return (true, true) }
+        if clamped >= length { return (false, true) }
+        let local = clamped - start
+        guard let hit = content.firstIndex(where: { line in
+            let span = line.characterRange
+            return local >= span.location && local < span.location + span.length
+        }) else { return (true, true) }
+        return (hit == 0, hit == content.count - 1)
     }
 
     private static func paragraphSpacing(_ tv: VimTextView, utf16: Int) -> CGFloat {

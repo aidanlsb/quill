@@ -22,7 +22,19 @@ extension Probe {
                 failures: failures
             )
         }
-        check(abs(theme.lineHeight - 1.58) < 0.01, "line height \(theme.lineHeight)", failures: failures)
+        check(abs(theme.lineHeight - 1.45) < 0.01, "line height \(theme.lineHeight)", failures: failures)
+        check(
+            abs(theme.paragraphSpacing - CGFloat(QuillMetrics.defaultFontSize) * QuillMetrics.paragraphSpacingEm) < 0.2,
+            "paragraph spacing \(theme.paragraphSpacing)",
+            failures: failures
+        )
+        check(
+            theme.listItemSpacing > theme.paragraphSpacing + 2,
+            "list spacing \(theme.listItemSpacing) body \(theme.paragraphSpacing)",
+            failures: failures
+        )
+        check(theme.lineHeight < 1.5, "line height still open \(theme.lineHeight)", failures: failures)
+        check(theme.lineHeight > 1.39, "line height still tight \(theme.lineHeight)", failures: failures)
         check(
             QuillMetrics.headingWeights.count == QuillMetrics.headingScale.count,
             "heading weight count \(QuillMetrics.headingWeights.count)",

@@ -9,7 +9,7 @@ Trackpad scrolling moves the document. `j` walks display lines and the viewport 
 - `scroll-wrap` moves `j` to the next screen row of a wrapped paragraph, and `k` back to the start. `$` stays on the first screen row. `g$` reaches the end of the paragraph.
 - `scroll-ends` puts `G` near the bottom and `gg` back at the top.
 - `scroll-half-page` moves Ctrl-d by the recorded half-page count and Ctrl-u back.
-- `scroll-margin` keeps the caret's whole screen line, plus one more line, inside the window. `j` from the last line that fit scrolls before the caret crosses the edge. A wrapped row uses that row's height. The gap under an image preview counts as part of the source line.
+- `scroll-margin` keeps the caret's whole screen line, plus one more line, inside the window. `j` from the last line that fit scrolls before the caret crosses the edge. A wrapped row uses that row's height. Paragraph spacing (body, list item, or the gap under an image preview) counts on the last screen row of that block.
 
 ## How to get to it (user POV)
 

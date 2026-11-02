@@ -5,6 +5,7 @@ The editor can follow the macOS appearance or stay light or dark. `:theme` toggl
 ## Sub-features
 
 - `theme-dark` draws a darker background than the light scheme. Light is warm ivory, not white; dark is warm obsidian with cream text. One copper/bronze accent is shared by the caret, links, lists, and the mode pill.
+- `type-scale` uses a 1.45 body line height. Wrapped rows of a paragraph stay tight; blank-line paragraphs and headings use paragraph spacing for the gap. List items add more paragraph spacing than that wrap. Code fences and tables keep the tight leading with no extra item gap.
 - `theme-command` accepts `:theme dark`. `:theme` with no argument toggles. An unknown name is rejected.
 - `theme-leader` maps `<leader>tt` to the toggle. A lone `<leader>t` is only a prefix.
 - `theme-memory` writes the choice to `state.toml` and reads it back.
@@ -26,7 +27,7 @@ Preconditions:
 - Doctor printed the release binary you are about to run.
 - No other smoke is using that same log path. Each run overwrites `artifacts/verify-quill/smoke.log`.
 
-- **Run the tests.** `ThemeTests` checks colors, theme memory, and config decoding. `:theme` and `<leader>tt` run on Linux in `ExCommandTests.testThemeCommandAndLeaderToggle`. `Scripts/verify-quill --bin "$bin"` runs `ThemeTests`, then the launch smoke.
+- **Run the tests.** `ThemeTests` checks colors, the 1.45 type scale, paragraph spacing, theme memory, and config decoding. `:theme` and `<leader>tt` run on Linux in `ExCommandTests.testThemeCommandAndLeaderToggle`. `Scripts/verify-quill --bin "$bin"` runs `ThemeTests`, then the launch smoke.
 - **Read the theme result.** `artifacts/verify-quill/app-tests.log` shows `ThemeTests` passing. `artifacts/verify-quill/smoke.log` contains `quill smoke passed`. The test log does not contain `theme dark`, `theme memory`, or `theme config`.
 - **Proof.** The log file is still at `artifacts/verify-quill/smoke.log` after the process exits.
 
